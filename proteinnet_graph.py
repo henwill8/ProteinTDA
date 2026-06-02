@@ -16,7 +16,6 @@ Source = Union[str, Path, TextIO, BinaryIO]
 
 _CA_ATOM_INDEX = 1  # N=0, C_alpha=1, C_prime=2 within each residue triple
 
-
 def proteinnet_record_to_graph(
     source: Source,
     *,
@@ -32,6 +31,9 @@ def proteinnet_record_to_graph(
     contact_cutoff
         If set, only add edges with distance <= this value.
     """
+    # If the protein is missing positions in the residues, skip it and throw a ValueError
+    check_protein_completeness_from_mask(source, raise_on_incomplete=True)
+
     positions = read_ca_positions(source)
     distances = pairwise_distances(positions)
 
@@ -62,7 +64,7 @@ def read_ca_positions(source: Source) -> np.ndarray:
     n_res = len(x) // 3
     if len(x) != 3 * n_res:
         raise ValueError(
-            f"TERTIARY line length {len(x)} is not divisible by 3 (N, CA, C' per residue)."
+            f"TERTIARY line length {len(x)} is not divisible by 3 (N, C_alpha, C_prime per residue)."
         )
 
     ca = np.column_stack(
@@ -98,6 +100,34 @@ def pairwise_distances(positions: np.ndarray) -> np.ndarray:
     return np.linalg.norm(diff, axis=2)
 
 
+def check_protein_completeness_from_mask(
+    source: Source,
+    *,
+    raise_on_incomplete: bool = True,
+) -> bool:
+    """
+    Check the [MASK] section and validate that all residues are known.
+
+    Returns
+    -------
+    bool
+        True if the protein is complete (mask has no '-').
+        False if incomplete and ``raise_on_incomplete`` is False.
+
+    Raises
+    ------
+    ValueError
+        If the protein is incomplete and ``raise_on_incomplete`` is True.
+    """
+    mask = _read_mask(source)
+    incomplete = "-" in mask
+    if incomplete:
+        if raise_on_incomplete:
+            raise ValueError("Protein is incomplete: mask contains unknown amino acid positions.")
+        return False
+    return True
+
+
 def _read_tertiary_axes(source: Source) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     handle, close = _open_text(source)
     try:
@@ -115,6 +145,20 @@ def _read_tertiary_axes(source: Source) -> tuple[np.ndarray, np.ndarray, np.ndar
             handle.close()
 
     raise ValueError("No [TERTIARY] section found.")
+
+
+def _read_mask(source: Source) -> str:
+    handle, close = _open_text(source)
+    try:
+        for line in handle:
+            if _decode_line(line) != "[MASK]":
+                continue
+            return _decode_line(handle.readline()).strip()
+    finally:
+        if close:
+            handle.close()
+
+    raise ValueError("No [MASK] section found.")
 
 
 def _open_text(source: Source) -> tuple[TextIO, bool]:
