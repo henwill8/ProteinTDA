@@ -1,3 +1,12 @@
 numpy>=1.24
 networkx>=3.0
-certifi
+torch>=1.7
+
+# SidechainNet (https://github.com/jonathanking/sidechainnet)
+sidechainnet>=1.0.0
+ProDy>=2.0
+biopython
+scipy
+tqdm
+py3Dmol
+pandas
