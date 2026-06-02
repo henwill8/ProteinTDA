@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import networkx as nx
 import gudhi as gd
+import gudhi.wasserstein
  
 '''
 Input takes tensors but we can easily turn a graph into a pytorch tensor by 
@@ -9,7 +10,7 @@ matrix = nx.to_numpy_array(G,weight'weight',noedge=float('inf'))
 tensor = torch.tenspr(matrix, dtype=torch.float32)
 with better variable names
 '''
-def PDFromGraph(adj_tensor,max_dimension,hom_dims=2): 
+def PDFromGraph(adj_tensor,max_dimension,hom_dim=2): 
     diagrams = []
 
     # Stop tracking adjacency matrix
@@ -23,7 +24,7 @@ def PDFromGraph(adj_tensor,max_dimension,hom_dims=2):
     # Isolate the vertices that caused the birth or death of our persistence
     generators = st.flag_persistence_generators()
 
-    for i in range(hom_dims):
+    for i in range(hom_dim):
         # Gudhi is weird
         if i == 0:
            generators_i = generators[i]
@@ -45,3 +46,18 @@ def PDFromGraph(adj_tensor,max_dimension,hom_dims=2):
         diagram = torch.stack([birth_values,death_values], dim=-1)
         diagrams.append(diagram)
     return diagrams
+
+def WassersteinDistance(pred_diags, exp_diags, hom_dim=2):
+    losses=[]
+    for i in range(hom_dim):
+        pred_diag = pred_diags[i]
+        exp_diag = exp_diags[i]
+        loss_wd = gudhi.wasserstein.wasserstein_distance(
+                pred_diag,
+                exp_diag,
+                matching=False,
+                enable_autodiff=True,
+                keep_essential_parts=False
+                )
+        losses.append(loss_wd)
+    return losses
