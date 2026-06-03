@@ -1,19 +1,40 @@
 """Entry point for ESMFold fine-tuning with TDA Wasserstein loss."""
 
 import sys
+import argparse
+from pathlib import Path
 
 import torch
 from transformers import AutoTokenizer, EsmForProteinFolding
 
 from esmfold_finetune import (
     freeze_except_last_esm_layers,
-    parse_args,
     train_one_epoch,
     trainable_parameter_count,
 )
 from load_dataset import SidechainNetSplitDataset, load_sidechainnet, make_dataloader
-from persistence import pd_from_graph as PDFromGraph
-from persistence import wasserstein_distance as WassersteinDistance
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Fine-tune ESMFold with Wasserstein TDA loss.")
+    parser.add_argument("--model", default="facebook/esmfold_v1")
+    parser.add_argument("--casp-version", default="debug")
+    parser.add_argument("--casp-thinning", type=int, default=30)
+    parser.add_argument("--scn-dir", type=Path, default=Path("sidechainnet_data"))
+    parser.add_argument("--split", default="train")
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--unfreeze-esm-layers", type=int, default=2)
+    parser.add_argument("--wasserstein-h0-weight", type=float, default=1.0)
+    parser.add_argument("--wasserstein-h1-weight", type=float, default=1.0)
+    parser.add_argument("--max-rips-dimension", type=int, default=2)
+    parser.add_argument("--hom-dim", type=int, default=2)
+    parser.add_argument("--max-length", type=int, default=128, help="Skip longer proteins (Rips cost).")
+    parser.add_argument("--allow-incomplete", action="store_true")
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--output-dir", type=Path, default=Path("checkpoints/esmfold_finetune"))
+    return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:

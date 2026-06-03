@@ -1,21 +1,15 @@
 """
 Fine-tune facebook/esmfold_v1 with frozen weights except the last ESM encoder layers,
-adding a topological (Wasserstein) loss on Cβ/Cα distance matrices (TDA).
+adding a topological (Wasserstein) loss on C_beta/C_alpha distance matrices (TDA).
 
 Model: https://huggingface.co/facebook/esmfold_v1
 """
-
-from __future__ import annotations
-
-import argparse
-from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 from transformers import EsmForProteinFolding
 
-from load_dataset import SidechainNetSplitDataset, load_sidechainnet, make_dataloader
 from persistence import distance_matrix, wasserstein_loss
 from sidechainnet_graph import read_cb_positions
 
@@ -47,7 +41,7 @@ def cb_positions_from_atom37(
     atom_exists: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
-    Compact Cβ/Cα coordinates from ESMFold atom37 output, shape (m, 3).
+    Compact C_beta/C_alpha coordinates from ESMFold atom37 output, shape (m, 3).
 
     ``positions`` is (L, 37, 3); ``mask`` is the SidechainNet mask string.
     """
@@ -65,18 +59,18 @@ def cb_positions_from_atom37(
             continue
         coords.append(cb)
     if not coords:
-        raise ValueError("No valid Cβ/Cα coordinates in model output.")
+        raise ValueError("No valid C_beta/C_alpha coordinates in model output.")
     return torch.stack(coords)
 
 
 def target_cb_positions(protein, device: torch.device) -> torch.Tensor:
-    """Ground-truth compact Cβ/Cα positions from SidechainNet."""
+    """Ground-truth compact C_beta/C_alpha positions from SidechainNet."""
     positions = read_cb_positions(protein)
     return torch.tensor(positions, dtype=torch.float32, device=device)
 
 
 def structure_loss(pred_cb: torch.Tensor, target_cb: torch.Tensor) -> torch.Tensor:
-    """MSE on matched compact Cβ/Cα coordinates."""
+    """MSE on matched compact C_beta/C_alpha coordinates."""
     n = min(pred_cb.shape[0], target_cb.shape[0])
     if n == 0:
         return torch.zeros((), device=pred_cb.device)
@@ -179,25 +173,3 @@ def train_one_epoch(
     if n == 0:
         return totals
     return {key: value / n for key, value in totals.items()}
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fine-tune ESMFold with Wasserstein TDA loss.")
-    parser.add_argument("--model", default="facebook/esmfold_v1")
-    parser.add_argument("--casp-version", default="debug")
-    parser.add_argument("--casp-thinning", type=int, default=30)
-    parser.add_argument("--scn-dir", type=Path, default=Path("sidechainnet_data"))
-    parser.add_argument("--split", default="train")
-    parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--unfreeze-esm-layers", type=int, default=2)
-    parser.add_argument("--wasserstein-h0-weight", type=float, default=1.0)
-    parser.add_argument("--wasserstein-h1-weight", type=float, default=1.0)
-    parser.add_argument("--max-rips-dimension", type=int, default=2)
-    parser.add_argument("--hom-dim", type=int, default=2)
-    parser.add_argument("--max-length", type=int, default=128, help="Skip longer proteins (Rips cost).")
-    parser.add_argument("--allow-incomplete", action="store_true")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--output-dir", type=Path, default=Path("checkpoints/esmfold_finetune"))
-    return parser.parse_args(argv)
