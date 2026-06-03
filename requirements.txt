@@ -2,7 +2,9 @@ numpy
 networkx
 torch
 transformers
+accelerate
 gudhi
+pot
 
 # SidechainNet (https://github.com/jonathanking/sidechainnet)
 sidechainnet
