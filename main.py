@@ -43,10 +43,16 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Loading {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    model = EsmForProteinFolding.from_pretrained(args.model).to(device)
+    model = EsmForProteinFolding.from_pretrained(args.model, low_cpu_mem_usage=True).to(device)
+    model.esm = model.esm.half()
+
     freeze_except_last_esm_layers(model, n_layers=args.unfreeze_esm_layers)
+
     trainable, total = trainable_parameter_count(model)
     print(f"Trainable parameters: {trainable:,} / {total:,}")
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+    model.trunk.set_chunk_size(64)
 
     print("Loading SidechainNet...")
     dataset = load_sidechainnet(
