@@ -5,6 +5,7 @@ adding a topological (Wasserstein) loss on C_beta/C_alpha distance matrices (TDA
 Model: https://huggingface.co/facebook/esmfold_v1
 """
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -174,3 +175,36 @@ def train_one_epoch(
     if n == 0:
         return totals
     return {key: value / n for key, value in totals.items()}
+
+def test_model(
+            model,
+            tokenizer,
+            loader,
+            device,
+            max_length: int | None
+            ):
+    model.eval()
+    with torch.no_grad():
+        plddt_list = []
+        for batch in tqdm(loader, desc="test", leave=False):
+            for protein in batch["protein"]:
+                if max_length is not None and len(str(protein.seq)) > max_length:
+                    continue
+                sequence = str(protein.seq)
+                inputs = tokenizer(
+                    sequence,
+                    return_tensors="pt",
+                    add_special_tokens=False,
+                )
+                inputs = {key: value.to(device) for key, value in inputs.items()}
+
+                outputs = model(**inputs)
+                if outputs.positions is None:
+                    raise RuntimeError("ESMFold did not return positions.")
+                
+                plddt = outputs.plddt.tolist()
+                protein_mean_plddt = np.mean(plddt)
+                plddt_list.append(protein_mean_plddt)
+
+        mean_plddt = np.mean(plddt_list) 
+        return mean_plddt
