@@ -72,7 +72,7 @@ def target_cb_positions(protein, device: torch.device) -> torch.Tensor:
 
 
 def esmfold_loss(pred_cb: torch.Tensor, target_cb: torch.Tensor) -> torch.Tensor:
-    pass
+    return torch.zeros((), device=pred_cb.device)
 
 
 def compute_losses(

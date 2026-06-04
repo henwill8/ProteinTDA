@@ -18,7 +18,7 @@ from esmfold_finetune import (
     test_model,
     trainable_parameter_count,
 )
-from load_dataset import load_sidechainnet
+from load_dataset import collate_scn_proteins, load_sidechainnet
 
 def set_seed(seed=42):
     torch.manual_seed(42)
@@ -84,16 +84,18 @@ def main(argv: list[str] | None = None) -> int:
         test_dataset = [dataset[i] for i in test_idx]
         
         train_loader = DataLoader(
-                    dataset=train_dataset,
-                    batch_size=32,
-                    shuffle=True
-                )
+            dataset=train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            collate_fn=collate_scn_proteins,
+        )
 
         test_loader = DataLoader(
-                    dataset=test_dataset,
-                    batch_size=32,
-                    shuffle=True
-                )
+            dataset=test_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=collate_scn_proteins,
+        )
 
         optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
 
@@ -123,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
                     tokenizer,
                     test_loader,
                     device,
-                    max_legnth=args.max_length
+                    max_length=args.max_length,
                     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(args.output_dir)
