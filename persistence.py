@@ -82,7 +82,3 @@ def wasserstein_loss(
         losses["h1"] = terms[1] if len(terms) > 1 else zero
     return losses
 
-
-def distance_matrix(positions: torch.Tensor) -> torch.Tensor:
-    """Full pairwise distance matrix, shape (n, n)."""
-    return torch.cdist(positions, positions)
