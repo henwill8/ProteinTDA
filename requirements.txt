@@ -8,6 +8,7 @@ pot
 openmm
 jax
 scikit-learn
+tmtools
 
 # SidechainNet (https://github.com/jonathanking/sidechainnet)
 sidechainnet

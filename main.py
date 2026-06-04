@@ -120,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"wass_h1={metrics['wasserstein_h1']:.4f}"
             )
 
-            plddt_score = test_model(
+            plddt_score,tm_score = test_model(
                     model,
                     tokenizer,
                     test_loader,

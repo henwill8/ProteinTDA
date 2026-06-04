@@ -75,6 +75,30 @@ def read_cb_positions(protein: SCNProtein) -> np.ndarray:
         raise ValueError("No C_beta/C_alpha coordinates found (mask or coordinates all missing).")
     return np.asarray(positions, dtype=float)
 
+def read_ca_positions(protein: SCNProtein) -> np.ndarray:
+    """
+    Compact C_alpha coordinates for graph nodes, shape (m, 3).
+
+    Only residues with mask ``+`` and a finite chosen position are included.
+    """
+    coords = protein.coords
+    if hasattr(coords, "detach"):
+        coords = coords.detach().cpu().numpy()
+    coords = np.asarray(coords, dtype=float)
+
+    mask = str(protein.mask)
+    positions: list[np.ndarray] = []
+    for i, char in enumerate(mask):
+        if char != "+":
+            continue
+        pos = coords[i, _CA_ATOM_INDEX]
+        if np.isnan(pos).any():
+            continue
+        positions.append(pos)
+
+    if not positions:
+        raise ValueError("No C_beta/C_alpha coordinates found (mask or coordinates all missing).")
+    return np.asarray(positions, dtype=float)
 
 def pairwise_distances(positions: np.ndarray) -> np.ndarray:
     """Euclidean distances between all pairs of 3D points, shape (m, m)."""

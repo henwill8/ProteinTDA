@@ -8,12 +8,13 @@ Model: https://huggingface.co/facebook/esmfold_v1
 import numpy as np
 import torch
 import torch.nn.functional as F
+from tmtools import tm_align
 from tqdm import tqdm
 from transformers import EsmForProteinFolding
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
 
 from persistence import wasserstein_loss
-from sidechainnet_graph import read_cb_positions, distance_matrix
+from sidechainnet_graph import read_ca_positions, read_cb_positions, distance_matrix
 
 # OpenFold atom37 indices
 _ATOM37_CA = 1
@@ -186,6 +187,7 @@ def test_model(
     model.eval()
     with torch.no_grad():
         plddt_list = []
+        tm_score_list = []
         for batch in tqdm(loader, desc="test", leave=False):
             for protein in batch["protein"]:
                 if max_length is not None and len(str(protein.seq)) > max_length:
@@ -198,13 +200,22 @@ def test_model(
                 )
                 inputs = {key: value.to(device) for key, value in inputs.items()}
 
-                outputs = model(**inputs)
-                if outputs.positions is None:
+                output = model(**inputs)
+                if output.positions is None:
                     raise RuntimeError("ESMFold did not return positions.")
                 
-                plddt = outputs.plddt.tolist()
+                plddt = output.plddt.tolist()
                 protein_mean_plddt = np.mean(plddt)
                 plddt_list.append(protein_mean_plddt)
+               
+                # We are using c-alpha atoms to extract
+                pred_c_alpha = output["positions"][0,:,1,:]
+                exp_c_alpha = read_ca_positions(protein)
 
+                res = tm_align(pred_c_alpha,exp_c_alpha,sequence,sequence)
+                tm_score = res.tm_norm_chain2
+
+                tm_score_list.append(tm_score)
         mean_plddt = np.mean(plddt_list) 
-        return mean_plddt
+        mean_tm = np.mean(tm_score_list)
+        return mean_plddt, mean_tm
