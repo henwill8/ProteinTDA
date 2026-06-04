@@ -41,12 +41,7 @@ def load_sidechainnet(
 
 
 def collate_scn_proteins(batch: list[SCNProtein]) -> dict[str, Any]:
-    """Collate a batch of ``SCNProtein`` objects (variable length; no coordinate padding)."""
-    return {
-        "protein": batch,
-        "protein_id": [protein.id for protein in batch],
-        "sequence": [str(protein.seq) for protein in batch],
-        "mask": [str(protein.mask) for protein in batch],
-    }
+    """Collate a batch of ``SCNProtein`` objects."""
+    return batch
 
 

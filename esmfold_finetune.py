@@ -11,14 +11,15 @@ import torch.nn.functional as F
 from tmtools import tm_align
 from tqdm import tqdm
 from transformers import EsmForProteinFolding
-from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
+from enum import Enum
 
 from persistence import wasserstein_loss
-from sidechainnet_graph import read_ca_positions, read_cb_positions, distance_matrix
+from sidechainnet_graph import read_atom_positions, distance_matrix, SideChainAtom
 
 # OpenFold atom37 indices
-_ATOM37_CA = 1
-_ATOM37_CB = 3
+class Atom14(Enum):
+    CA = 1
+    CB = 4
 
 
 def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2) -> None:
@@ -38,37 +39,31 @@ def trainable_parameter_count(model: torch.nn.Module) -> tuple[int, int]:
     return trainable, total
 
 
-def cb_positions_from_atom37(
+def atom_positions_from_atom14(
     positions: torch.Tensor,
-    mask: str,
+    atom: Atom14,
     atom_exists: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
-    Compact C_beta/C_alpha coordinates from ESMFold atom37 output, shape (m, 3).
+    Compact C_beta/C_alpha coordinates from ESMFold atom14 output, shape (m, 3).
 
     ``positions`` is (L, 37, 3); ``mask`` is the SidechainNet mask string.
     """
     coords: list[torch.Tensor] = []
-    length = min(len(mask), positions.shape[0])
+    length = positions.shape[0]
     for i in range(length):
-        if mask[i] != "+":
-            continue
-        cb = positions[i, _ATOM37_CB]
-        if atom_exists is not None and atom_exists[i, _ATOM37_CB] < 0.5:
-            cb = positions[i, _ATOM37_CA]
-        elif torch.isnan(cb).any():
-            cb = positions[i, _ATOM37_CA]
-        if torch.isnan(cb).any():
-            continue
-        coords.append(cb)
+        atom_pos = positions[i, atom.value]
+        if atom_exists is not None and atom_exists[i, atom.value] < 0.5:
+            atom_pos = positions[i, Atom14.CA.value]
+        coords.append(atom_pos)
     if not coords:
         raise ValueError("No valid C_beta/C_alpha coordinates in model output.")
     return torch.stack(coords)
 
 
-def target_cb_positions(protein, device: torch.device) -> torch.Tensor:
+def target_atom_positions(protein, atom: SideChainAtom, device: torch.device) -> torch.Tensor:
     """Ground-truth compact C_beta/C_alpha positions from SidechainNet."""
-    positions = read_cb_positions(protein)
+    positions = read_atom_positions(protein, atom)
     return torch.tensor(positions, dtype=torch.float32, device=device)
 
 
@@ -100,10 +95,9 @@ def compute_losses(
         raise RuntimeError("ESMFold did not return positions.")
 
     
-    pred_positions = atom14_to_atom37(outputs["positions", -1], outputs) 
-    atom_exists = outputs.atom37_atom_exists[0] if outputs.atom37_atom_exists is not None else None
-    pred_cb = cb_positions_from_atom37(pred_positions, str(protein.mask), atom_exists)
-    target_cb = target_cb_positions(protein, device)
+    atom_exists = outputs.atom14_atom_exists[0] if outputs.atom14_atom_exists is not None else None
+    pred_cb = atom_positions_from_atom14(outputs["positions"][-1][0], Atom14.CB, atom_exists)
+    target_cb = target_atom_positions(protein, SideChainAtom.CB, device)
 
     esmfold_loss_value = esmfold_loss(pred_cb, target_cb)
 
@@ -119,11 +113,14 @@ def compute_losses(
         hom_dim=hom_dim,
     )
 
+    print(topo)
+
     wass_h0 = topo["h0"]
     wass_h1 = topo["h1"]
     total = esmfold_loss_value + wasserstein_h0_weight * wass_h0 + wasserstein_h1_weight * wass_h1
     return {
         "total": total,
+        "esmfold_loss": esmfold_loss_value,
         "wasserstein_h0": wass_h0,
         "wasserstein_h1": wass_h1,
     }
@@ -140,17 +137,13 @@ def train_one_epoch(
     wasserstein_h1_weight: float,
     max_rips_dimension: int,
     hom_dim: int,
-    max_length: int | None,
 ) -> dict[str, float]:
     model.train()
-    totals = {"total": 0.0, "structure": 0.0, "wasserstein_h0": 0.0, "wasserstein_h1": 0.0}
+    totals = {"total": 0.0, "esmfold_loss": 0.0, "wasserstein_h0": 0.0, "wasserstein_h1": 0.0}
     n = 0
 
     for batch in tqdm(loader, desc="train", leave=False):
-        for protein in batch["protein"]:
-            if max_length is not None and len(str(protein.seq)) > max_length:
-                continue
-
+        for protein in batch:
             optimizer.zero_grad(set_to_none=True)
             try:
                 losses = compute_losses(
@@ -178,20 +171,17 @@ def train_one_epoch(
     return {key: value / n for key, value in totals.items()}
 
 def test_model(
-            model,
-            tokenizer,
-            loader,
-            device,
-            max_length: int | None
-            ):
+    model,
+    tokenizer,
+    loader,
+    device,
+):
     model.eval()
     with torch.no_grad():
         plddt_list = []
         tm_score_list = []
         for batch in tqdm(loader, desc="test", leave=False):
-            for protein in batch["protein"]:
-                if max_length is not None and len(str(protein.seq)) > max_length:
-                    continue
+            for protein in batch:
                 sequence = str(protein.seq)
                 inputs = tokenizer(
                     sequence,
@@ -209,13 +199,16 @@ def test_model(
                 plddt_list.append(protein_mean_plddt)
                
                 # We are using c-alpha atoms to extract
-                pred_c_alpha = output["positions"][0,:,1,:]
-                exp_c_alpha = read_ca_positions(protein)
+                atom_exists = output.atom14_atom_exists[0] if output.atom14_atom_exists is not None else None
+                pred_c_alpha = atom_positions_from_atom14(output["positions"][-1][0], Atom14.CA, atom_exists)
 
-                res = tm_align(pred_c_alpha,exp_c_alpha,sequence,sequence)
+                exp_c_alpha = read_atom_positions(protein, SideChainAtom.CA)
+
+                res = tm_align(pred_c_alpha, exp_c_alpha, sequence, sequence)
                 tm_score = res.tm_norm_chain2
 
                 tm_score_list.append(tm_score)
+
         mean_plddt = np.mean(plddt_list) 
         mean_tm = np.mean(tm_score_list)
         return mean_plddt, mean_tm

@@ -13,9 +13,11 @@ import numpy as np
 
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
+from enum import Enum
 
-_CA_ATOM_INDEX = 1
-_CB_ATOM_INDEX = 5
+class SideChainAtom(Enum):
+    CA = 1
+    CB = 5
 
 # TODO: dont need to use networkx, just compute distance matrix directly from positions
 
@@ -40,7 +42,7 @@ def scn_protein_to_graph(
     if not allow_incomplete and "-" in str(protein.mask):
         raise ValueError("Protein is incomplete: mask contains unknown amino acid positions.")
 
-    positions = read_cb_positions(protein)
+    positions = read_atom_positions(protein, SideChainAtom.CB)
     return positions_to_graph(
         positions,
         protein_id=getattr(protein, "id", None),
@@ -48,7 +50,7 @@ def scn_protein_to_graph(
     )
 
 
-def read_cb_positions(protein: SCNProtein) -> np.ndarray:
+def read_atom_positions(protein: SCNProtein, atom: SideChainAtom) -> np.ndarray:
     """
     Compact C_beta/C_alpha coordinates for graph nodes, shape (m, 3).
 
@@ -64,40 +66,15 @@ def read_cb_positions(protein: SCNProtein) -> np.ndarray:
     for i, char in enumerate(mask):
         if char != "+":
             continue
-        pos = coords[i, _CB_ATOM_INDEX]
+        pos = coords[i, atom.value]
         if np.isnan(pos).any():
-            pos = coords[i, _CA_ATOM_INDEX]
-        if np.isnan(pos).any():
-            continue
-        positions.append(pos)
-
-    if not positions:
-        raise ValueError("No C_beta/C_alpha coordinates found (mask or coordinates all missing).")
-    return np.asarray(positions, dtype=float)
-
-def read_ca_positions(protein: SCNProtein) -> np.ndarray:
-    """
-    Compact C_alpha coordinates for graph nodes, shape (m, 3).
-
-    Only residues with mask ``+`` and a finite chosen position are included.
-    """
-    coords = protein.coords
-    if hasattr(coords, "detach"):
-        coords = coords.detach().cpu().numpy()
-    coords = np.asarray(coords, dtype=float)
-
-    mask = str(protein.mask)
-    positions: list[np.ndarray] = []
-    for i, char in enumerate(mask):
-        if char != "+":
-            continue
-        pos = coords[i, _CA_ATOM_INDEX]
+            pos = coords[i, atom.value]
         if np.isnan(pos).any():
             continue
         positions.append(pos)
 
     if not positions:
-        raise ValueError("No C_beta/C_alpha coordinates found (mask or coordinates all missing).")
+        raise ValueError(f"No {atom.name} coordinates found (mask or coordinates all missing).")
     return np.asarray(positions, dtype=float)
 
 def pairwise_distances(positions: np.ndarray) -> np.ndarray:
