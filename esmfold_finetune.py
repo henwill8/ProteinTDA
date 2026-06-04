@@ -9,10 +9,11 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 from transformers import EsmForProteinFolding
+from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
 
 from load_dataset import SidechainNetSplitDataset, load_sidechainnet, make_dataloader
-from persistence import distance_matrix, wasserstein_loss
-from sidechainnet_graph import read_cb_positions
+from persistence import wasserstein_loss
+from sidechainnet_graph import read_cb_positions, distance_matrix
 
 # OpenFold atom37 indices
 _ATOM37_CA = 1
@@ -101,7 +102,8 @@ def compute_losses(
     if outputs.positions is None:
         raise RuntimeError("ESMFold did not return positions.")
 
-    pred_positions = outputs.positions[0]
+    
+    pred_positions = atom14_to_atom37(outputs["positions", -1], outputs) 
     atom_exists = outputs.atom37_atom_exists[0] if outputs.atom37_atom_exists is not None else None
     pred_cb = cb_positions_from_atom37(pred_positions, str(protein.mask), atom_exists)
     target_cb = target_cb_positions(protein, device)
@@ -109,6 +111,9 @@ def compute_losses(
     struct = structure_loss(pred_cb, target_cb)
     pred_adj = distance_matrix(pred_cb)
     target_adj = distance_matrix(target_cb)
+    pred_adj.requires_grad = True
+    target_adj.requires_grad = False
+
     topo = wasserstein_loss(
         pred_adj,
         target_adj,

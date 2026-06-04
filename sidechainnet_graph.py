@@ -5,10 +5,14 @@ Residues without a finite C_beta (e.g. glycine) use C_alpha instead.
 Graph nodes are one per included residue; edge weights are Euclidean distances (angstroms).
 """
 
+from typing import Dict
+
+import torch
 import networkx as nx
 import numpy as np
 
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
+from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
 
 _CA_ATOM_INDEX = 1
 _CB_ATOM_INDEX = 5
@@ -120,3 +124,8 @@ def positions_to_graph(
                 graph.add_edge(i, j, weight=dist)
 
     return graph
+
+def distance_matrix(positions: torch.Tensor) -> torch.Tensor:
+    """Full pairwise distance matrix, shape (n, n)."""
+    return torch.cdist(positions, positions)
+
