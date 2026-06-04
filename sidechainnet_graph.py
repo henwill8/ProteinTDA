@@ -17,6 +17,7 @@ from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
 _CA_ATOM_INDEX = 1
 _CB_ATOM_INDEX = 5
 
+# TODO: dont need to use networkx, just compute distance matrix directly from positions
 
 def scn_protein_to_graph(
     protein: SCNProtein,

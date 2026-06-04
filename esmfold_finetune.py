@@ -71,12 +71,8 @@ def target_cb_positions(protein, device: torch.device) -> torch.Tensor:
     return torch.tensor(positions, dtype=torch.float32, device=device)
 
 
-def structure_loss(pred_cb: torch.Tensor, target_cb: torch.Tensor) -> torch.Tensor:
-    """MSE on matched compact C_beta/C_alpha coordinates."""
-    n = min(pred_cb.shape[0], target_cb.shape[0])
-    if n == 0:
-        return torch.zeros((), device=pred_cb.device)
-    return F.mse_loss(pred_cb[:n], target_cb[:n])
+def esmfold_loss(pred_cb: torch.Tensor, target_cb: torch.Tensor) -> torch.Tensor:
+    pass
 
 
 def compute_losses(
@@ -108,7 +104,8 @@ def compute_losses(
     pred_cb = cb_positions_from_atom37(pred_positions, str(protein.mask), atom_exists)
     target_cb = target_cb_positions(protein, device)
 
-    struct = structure_loss(pred_cb, target_cb)
+    esmfold_loss_value = esmfold_loss(pred_cb, target_cb)
+
     pred_adj = distance_matrix(pred_cb)
     target_adj = distance_matrix(target_cb)
     pred_adj.requires_grad = True
@@ -123,10 +120,9 @@ def compute_losses(
 
     wass_h0 = topo["h0"]
     wass_h1 = topo["h1"]
-    total = struct + wasserstein_h0_weight * wass_h0 + wasserstein_h1_weight * wass_h1
+    total = esmfold_loss_value + wasserstein_h0_weight * wass_h0 + wasserstein_h1_weight * wass_h1
     return {
         "total": total,
-        "structure": struct,
         "wasserstein_h0": wass_h0,
         "wasserstein_h1": wass_h1,
     }

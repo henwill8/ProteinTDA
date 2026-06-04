@@ -43,11 +43,14 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Loading {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
+    print(f"Sending model to device ({device})...")
     model = EsmForProteinFolding.from_pretrained(args.model, low_cpu_mem_usage=True).to(device)
     model.esm = model.esm.half()
 
+    print(f"Freezing all parameters except the last {args.unfreeze_esm_layers} ESM encoder layers...")
     freeze_except_last_esm_layers(model, n_layers=args.unfreeze_esm_layers)
 
+    print("Counting trainable parameters...")
     trainable, total = trainable_parameter_count(model)
     print(f"Trainable parameters: {trainable:,} / {total:,}")
 
