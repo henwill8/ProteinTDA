@@ -11,7 +11,6 @@ from tqdm import tqdm
 from transformers import EsmForProteinFolding
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
 
-from load_dataset import SidechainNetSplitDataset, load_sidechainnet, make_dataloader
 from persistence import wasserstein_loss
 from sidechainnet_graph import read_cb_positions, distance_matrix
 
