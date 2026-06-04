@@ -15,6 +15,7 @@ from transformers import AutoTokenizer, EsmForProteinFolding
 from esmfold_finetune import (
     freeze_except_last_esm_layers,
     train_one_epoch,
+    test_model,
     trainable_parameter_count,
 )
 from load_dataset import load_sidechainnet
@@ -117,6 +118,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"wass_h1={metrics['wasserstein_h1']:.4f}"
             )
 
+            plddt_score = test_model(
+                    model,
+                    tokenizer,
+                    device,
+                    max_legnth=args.max_length
+                    )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
