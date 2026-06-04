@@ -5,6 +5,8 @@ transformers
 accelerate
 gudhi
 pot
+openmm
+jax
 
 # SidechainNet (https://github.com/jonathanking/sidechainnet)
 sidechainnet
