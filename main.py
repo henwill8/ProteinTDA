@@ -89,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
                     shuffle=True
                 )
 
-        test_laoder = DataLoader(
+        test_loader = DataLoader(
                     dataset=test_dataset,
                     batch_size=32,
                     shuffle=True
@@ -121,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
             plddt_score = test_model(
                     model,
                     tokenizer,
+                    test_loader,
                     device,
                     max_legnth=args.max_length
                     )
