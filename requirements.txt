@@ -9,6 +9,7 @@ openmm
 jax
 scikit-learn
 tmtools
+git+https://github.com/aqlaboratory/openfold.git
 
 # SidechainNet (https://github.com/jonathanking/sidechainnet)
 sidechainnet
