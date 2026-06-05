@@ -1,6 +1,5 @@
 eagerpy
 numpy
-networkx
 torch
 transformers
 accelerate

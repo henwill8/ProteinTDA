@@ -7,14 +7,13 @@ Model: https://huggingface.co/facebook/esmfold_v1
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from tmtools import tm_align
 from tqdm import tqdm
 from transformers import EsmForProteinFolding
 from enum import Enum
 
 from persistence import wasserstein_loss
-from sidechainnet_graph import read_atom_positions, distance_matrix, SideChainAtom
+from sidechainnet_graph import atom_positions_from_sidechainnet, distance_matrix, SideChainAtom
 
 # OpenFold atom37 indices
 class Atom14(Enum):
@@ -23,7 +22,6 @@ class Atom14(Enum):
 
 
 def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2) -> None:
-    """Freeze all parameters, then unfreeze the last ``n_layers`` ESM encoder blocks."""
     for param in model.parameters():
         param.requires_grad = False
 
@@ -45,9 +43,7 @@ def atom_positions_from_atom14(
     atom_exists: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
-    Compact C_beta/C_alpha coordinates from ESMFold atom14 output, shape (m, 3).
-
-    ``positions`` is (L, 37, 3); ``mask`` is the SidechainNet mask string.
+    Extracts the positions of the given atom from the ESMFold atom14 output.
     """
     coords: list[torch.Tensor] = []
     length = positions.shape[0]
@@ -57,14 +53,8 @@ def atom_positions_from_atom14(
             atom_pos = positions[i, Atom14.CA.value]
         coords.append(atom_pos)
     if not coords:
-        raise ValueError("No valid C_beta/C_alpha coordinates in model output.")
+        raise ValueError("No valid atom coordinates in model output.")
     return torch.stack(coords)
-
-
-def target_atom_positions(protein, atom: SideChainAtom, device: torch.device) -> torch.Tensor:
-    """Ground-truth compact C_beta/C_alpha positions from SidechainNet."""
-    positions = read_atom_positions(protein, atom)
-    return torch.tensor(positions, dtype=torch.float32, device=device)
 
 
 def esmfold_loss(pred_cb: torch.Tensor, target_cb: torch.Tensor) -> torch.Tensor:
@@ -97,7 +87,7 @@ def compute_losses(
     
     atom_exists = outputs.atom14_atom_exists[0] if outputs.atom14_atom_exists is not None else None
     pred_cb = atom_positions_from_atom14(outputs["positions"][-1][0], Atom14.CB, atom_exists)
-    target_cb = target_atom_positions(protein, SideChainAtom.CB, device)
+    target_cb = atom_positions_from_sidechainnet(protein, SideChainAtom.CB, device=device)
 
     esmfold_loss_value = esmfold_loss(pred_cb, target_cb)
 
@@ -199,7 +189,7 @@ def test_model(
                 atom_exists = output.atom14_atom_exists[0] if output.atom14_atom_exists is not None else None
                 pred_c_alpha = atom_positions_from_atom14(output["positions"][-1][0], Atom14.CA, atom_exists)
 
-                exp_c_alpha = read_atom_positions(protein, SideChainAtom.CA)
+                exp_c_alpha = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).cpu().numpy()
 
                 res = tm_align(pred_c_alpha.cpu().numpy(), exp_c_alpha, sequence, sequence)
                 tm_score = res.tm_norm_chain2

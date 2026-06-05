@@ -1,133 +1,54 @@
 """
-Build distance-weighted graphs from SidechainNet protein (SCNProtein).
+Build distance matrices from SidechainNet protein residues (SCNProtein).
 
-Residues without a finite C_beta (e.g. glycine) use C_alpha instead.
-Graph nodes are one per included residue; edge weights are Euclidean distances (angstroms).
+Residues without a valid CB (e.g. glycine) use CA instead.
+Matrix entries are Euclidean distances (angstroms) between included residues.
 """
 
-from typing import Dict
-
 import torch
-import networkx as nx
-import numpy as np
-
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
-from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
+
 from enum import Enum
+
 
 class SideChainAtom(Enum):
     CA = 1
     CB = 5
 
-# TODO: dont need to use networkx, just compute distance matrix directly from positions
 
-def scn_protein_to_graph(
+def atom_positions_from_sidechainnet(
     protein: SCNProtein,
+    atom: SideChainAtom,
     *,
-    contact_cutoff: float | None = None,
-    allow_incomplete: bool = False,
-) -> nx.Graph:
-    """
-    Build an undirected distance graph from an ``SCNProtein``.
-
-    Parameters
-    ----------
-    protein
-        An ``SCNProtein`` from ``load_sidechainnet()``.
-    contact_cutoff
-        If set, only add edges with distance <= this value (angstroms).
-    allow_incomplete
-        If False (default), raise when the mask contains any ``-`` residues.
-    """
-    if not allow_incomplete and "-" in str(protein.mask):
-        raise ValueError("Protein is incomplete: mask contains unknown amino acid positions.")
-
-    positions = read_atom_positions(protein, SideChainAtom.CB)
-    return positions_to_graph(
-        positions,
-        protein_id=getattr(protein, "id", None),
-        contact_cutoff=contact_cutoff,
-    )
-
-
-def read_atom_positions(protein: SCNProtein, atom: SideChainAtom) -> np.ndarray:
-    """
-    Compact C_beta/C_alpha coordinates for graph nodes, shape (m, 3).
-
-    Only residues with mask ``+`` and a finite chosen position are included.
-    """
+    device: torch.device | None = None,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """Extracts the positions of the given atom from SidechainNet coordinates."""
     coords = protein.coords
-    if hasattr(coords, "detach"):
-        coords = coords.detach().cpu().numpy()
-    coords = np.asarray(coords, dtype=float)
+    if isinstance(coords, torch.Tensor):
+        coords = coords.detach()
+    else:
+        coords = torch.as_tensor(coords, dtype=dtype)
 
     mask = str(protein.mask)
-    positions: list[np.ndarray] = []
+    positions: list[torch.Tensor] = []
     for i, char in enumerate(mask):
         if char != "+":
             continue
-        pos = coords[i, atom.value]
-        if np.isnan(pos).any():
-            pos = coords[i, atom.value]
-        if np.isnan(pos).any():
-            continue
-        positions.append(pos)
+        atom_pos = coords[i, atom.value]
+        # TODO: ensure this actually gets CA if CB is missing
+        if torch.isnan(atom_pos).any():
+            atom_pos = coords[i, SideChainAtom.CA.value]
+        positions.append(atom_pos)
 
     if not positions:
-        raise ValueError(f"No {atom.name} coordinates found (mask or coordinates all missing).")
-    return np.asarray(positions, dtype=float)
+        raise ValueError("No valid atom coordinates in SidechainNet protein.")
+    out = torch.stack(positions).to(dtype=dtype)
+    if device is not None:
+        out = out.to(device)
+    return out
 
-def pairwise_distances(positions: np.ndarray) -> np.ndarray:
-    """Euclidean distances between all pairs of 3D points, shape (m, m)."""
-    positions = np.asarray(positions, dtype=float)
-    if positions.ndim != 2 or positions.shape[1] != 3:
-        raise ValueError(f"positions must have shape (m, 3), got {positions.shape}.")
-    diff = positions[:, np.newaxis, :] - positions[np.newaxis, :, :]
-    return np.linalg.norm(diff, axis=2)
-
-
-def positions_to_graph(
-    positions: np.ndarray,
-    *,
-    protein_id: str | None = None,
-    contact_cutoff: float | None = None,
-) -> nx.Graph:
-    """
-    Build an undirected graph from residue positions.
-
-    Parameters
-    ----------
-    positions
-        Shape (m, 3) coordinates in angstroms.
-    protein_id
-        Optional identifier stored in ``graph.graph["protein_id"]``.
-    contact_cutoff
-        If set, only add edges with distance <= this value.
-    """
-    positions = np.asarray(positions, dtype=float)
-    if positions.size == 0:
-        raise ValueError("positions must contain at least one residue.")
-
-    distances = pairwise_distances(positions)
-
-    graph = nx.Graph()
-    if protein_id is not None:
-        graph.graph["protein_id"] = protein_id
-    graph.graph["distance_unit"] = "angstrom"
-
-    for i, pos in enumerate(positions):
-        graph.add_node(i, position=pos)
-
-    n = len(positions)
-    for i in range(n):
-        for j in range(i + 1, n):
-            dist = distances[i, j]
-            if contact_cutoff is None or dist <= contact_cutoff:
-                graph.add_edge(i, j, weight=dist)
-
-    return graph
 
 def distance_matrix(positions: torch.Tensor) -> torch.Tensor:
     """Full pairwise distance matrix, shape (n, n)."""
     return torch.cdist(positions, positions).requires_grad_()
-
