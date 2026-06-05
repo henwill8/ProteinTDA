@@ -6,10 +6,11 @@ from pathlib import Path
 import numpy as np
 from sklearn.model_selection import KFold
 
-from sidechainnet.dataloaders.SCNDataset import SCNDataset
+import sidechainnet as scn
+from sidechainnet.dataloaders.SCNProtein import SCNProtein
 
 import torch
-from torch.utils.data import DataLoader, dataloader
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, EsmForProteinFolding
 
 from esmfold_finetune import (
@@ -18,7 +19,6 @@ from esmfold_finetune import (
     test_model,
     trainable_parameter_count,
 )
-from load_dataset import collate_scn_proteins, load_sidechainnet
 
 def set_seed(seed=42):
     torch.manual_seed(42)
@@ -66,36 +66,38 @@ def main(argv: list[str] | None = None) -> int:
     model.trunk.set_chunk_size(64)
 
     print("Loading SidechainNet...")
-    dataset = load_sidechainnet(
-        casp_version=args.casp_version,
-        casp_thinning=args.casp_thinning,
-        scn_dir=args.scn_dir,
-        complete_structures_only=not args.allow_incomplete,
+    dataset = scn.load(
+        casp_version = args.casp_version,
+        casp_thinning = args.casp_thinning,
+        scn_dataset = True,
+        scn_dir = str(args.scn_dir),
+        force_download = False,
+        complete_structures_only = not args.allow_incomplete,
     )
     
     # if len(dataset) > 1000:
-    #     dataset=dataset[-1000:]
+    #     dataset = dataset[-1000:]
 
-    dataset=dataset[:5]
+    dataset = dataset[:5]
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
 
     for fold, (train_idx, test_idx) in enumerate(kf.split(dataset)):
         train_dataset = [dataset[i] for i in train_idx]
         test_dataset = [dataset[i] for i in test_idx]
-        
+
         train_loader = DataLoader(
-            dataset=train_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            collate_fn=collate_scn_proteins,
+            dataset = train_dataset,
+            batch_size = args.batch_size,
+            shuffle = True,
+            collate_fn = lambda x: x,
         )
 
         test_loader = DataLoader(
-            dataset=test_dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            collate_fn=collate_scn_proteins,
+            dataset = test_dataset,
+            batch_size = args.batch_size,
+            shuffle = False,
+            collate_fn = lambda x: x,
         )
 
         optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
