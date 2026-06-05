@@ -20,14 +20,12 @@ def pd_from_graph(adj_tensor: torch.Tensor, max_dimension: int, hom_dim: int = 2
     generators = st.flag_persistence_generators()
 
     for i in range(hom_dim):
-        if i == 0:
-            generators_i = generators[i]
-        elif len(generators[1]) > 0:
-            generators_i = generators[1][i - 1]
+        if i < len(generators) and len(generators[i]) > 0:
+            if i == 0:
+                generators_i = generators[i]
+            elif i >= 1:
+                generators_i = generators[i][i - 1]
         else:
-            diagrams.append(torch.empty((0, 2), device=adj_tensor.device, dtype=adj_tensor.dtype))
-            continue
-        if len(generators_i) == 0:
             diagrams.append(torch.empty((0, 2), device=adj_tensor.device, dtype=adj_tensor.dtype))
             continue
 
