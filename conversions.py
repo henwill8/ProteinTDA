@@ -1,5 +1,8 @@
 from transformers.models.esm.modeling_esmfold import EsmForProteinFoldingOutput
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
+from sidechainnet_utils import sidechainnet_to_atom37 
+import openfold.data.data_transforms as data_transforms
+from openfold.utils.loss import AlphaFoldLoss 
 
 def out_conversion(
             esm_out: EsmForProteinFoldingOutput,
@@ -23,6 +26,8 @@ def out_conversion(
     # ? masked_msa_logits
 
     batch = {}
-    
     # batch from sc_protein
+
+
+     
     return out, batch
