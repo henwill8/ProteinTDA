@@ -7,6 +7,7 @@ Matrix entries are Euclidean distances (angstroms) between included residues.
 
 import torch
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
+from openfold.np import residue_constants as rc
 
 from enum import Enum
 

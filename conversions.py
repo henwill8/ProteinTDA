@@ -1,5 +1,5 @@
 from transformers.models.esm.modeling_esmfold import EsmForProteinFoldingOutput
-from sidechainnet_graph import SCNProtein
+from sidechainnet.dataloaders.SCNProtein import SCNProtein
 
 def out_conversion(
             esm_out: EsmForProteinFoldingOutput,
