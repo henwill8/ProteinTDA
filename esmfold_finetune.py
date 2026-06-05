@@ -103,7 +103,6 @@ def compute_losses(
 
     pred_adj = distance_matrix(pred_cb)
     target_adj = distance_matrix(target_cb)
-    pred_adj.requires_grad = True
     target_adj.requires_grad = False
 
     topo = wasserstein_loss(
@@ -112,8 +111,6 @@ def compute_losses(
         max_dimension=max_rips_dimension,
         hom_dim=hom_dim,
     )
-
-    print(topo)
 
     wass_h0 = topo["h0"]
     wass_h1 = topo["h1"]
@@ -204,7 +201,7 @@ def test_model(
 
                 exp_c_alpha = read_atom_positions(protein, SideChainAtom.CA)
 
-                res = tm_align(pred_c_alpha, exp_c_alpha, sequence, sequence)
+                res = tm_align(pred_c_alpha.cpu().numpy(), exp_c_alpha, sequence, sequence)
                 tm_score = res.tm_norm_chain2
 
                 tm_score_list.append(tm_score)

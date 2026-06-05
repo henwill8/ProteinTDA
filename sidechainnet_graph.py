@@ -129,5 +129,5 @@ def positions_to_graph(
 
 def distance_matrix(positions: torch.Tensor) -> torch.Tensor:
     """Full pairwise distance matrix, shape (n, n)."""
-    return torch.cdist(positions, positions)
+    return torch.cdist(positions, positions).requires_grad_()
 

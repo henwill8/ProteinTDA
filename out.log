@@ -1,0 +1,87 @@
+Traceback (most recent call last):
+  File "/home/ssrl/AhmedStuff/ProteinTDA/main.py", line 8, in <module>
+    from transformers import AutoTokenizer, EsmForProteinFolding
+  File "<frozen importlib._bootstrap>", line 1412, in _handle_fromlist
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2254, in __getattr__
+    module = self._get_module(self._class_to_module[name])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2486, in _get_module
+    return importlib.import_module("." + module_name, self.__name__)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/models/auto/tokenization_auto.py", line 37, in <module>
+    from ..encoder_decoder import EncoderDecoderConfig
+  File "<frozen importlib._bootstrap>", line 1412, in _handle_fromlist
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2254, in __getattr__
+    module = self._get_module(self._class_to_module[name])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2486, in _get_module
+    return importlib.import_module("." + module_name, self.__name__)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/models/encoder_decoder/configuration_encoder_decoder.py", line 27, in <module>
+    @auto_docstring(checkpoint="")
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/utils/auto_docstring.py", line 4517, in auto_docstring_decorator
+    return auto_class_docstring(obj, custom_args=custom_args, custom_intro=custom_intro, checkpoint=checkpoint)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/utils/auto_docstring.py", line 4263, in auto_class_docstring
+    getattr(auto_module, PLACEHOLDER_TO_AUTO_MODULE["model_class"][0]),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2348, in __getattr__
+    value = self._get_module(name)
+            ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2486, in _get_module
+    return importlib.import_module("." + module_name, self.__name__)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/models/auto/modeling_auto.py", line 21, in <module>
+    from .auto_factory import (
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/models/auto/auto_factory.py", line 42, in <module>
+    from ...generation import GenerationMixin
+  File "<frozen importlib._bootstrap>", line 1412, in _handle_fromlist
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2254, in __getattr__
+    module = self._get_module(self._class_to_module[name])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/utils/import_utils.py", line 2486, in _get_module
+    return importlib.import_module("." + module_name, self.__name__)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/importlib/__init__.py", line 90, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/generation/utils.py", line 44, in <module>
+    from ..masking_utils import create_masks_for_generate
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/transformers/masking_utils.py", line 38, in <module>
+    from torch._dynamo._trace_wrapped_higher_order_op import TransformGetItemToIndex
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/torch/_dynamo/__init__.py", line 13, in <module>
+    from . import (
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/torch/_dynamo/aot_compile.py", line 17, in <module>
+    from torch._dynamo.convert_frame import GraphRuntimeEnv
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/torch/_dynamo/convert_frame.py", line 62, in <module>
+    from torch._dynamo.symbolic_convert import TensorifyState
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/torch/_dynamo/symbolic_convert.py", line 54, in <module>
+    from torch._dynamo.exc import ObservedException, TensorifyScalarRestartAnalysis
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/torch/_dynamo/exc.py", line 44, in <module>
+    from .utils import counters
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/torch/_dynamo/utils.py", line 68, in <module>
+    import torch.fx.experimental.symbolic_shapes
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/torch/fx/experimental/symbolic_shapes.py", line 3, in <module>
+    import sympy
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/sympy/__init__.py", line 111, in <module>
+    from .series import (Order, O, limit, Limit, gruntz, series, approximants,
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/sympy/series/__init__.py", line 11, in <module>
+    from .formal import fps
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/sympy/series/formal.py", line 1690, in <module>
+    class FormalPowerSeriesInverse(FiniteFormalPowerSeries):
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/sympy/core/basic.py", line 218, in __init_subclass__
+    _prepare_class_assumptions(cls)
+  File "/home/ssrl/AhmedStuff/esm/lib/python3.12/site-packages/sympy/core/assumptions.py", line 625, in _prepare_class_assumptions
+    if isinstance(v, (bool, int, type(None))):
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
