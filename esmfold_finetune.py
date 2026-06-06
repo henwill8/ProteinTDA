@@ -27,6 +27,9 @@ def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2
     for param in model.parameters():
         param.requires_grad = False
 
+    if n_layers <= 0:
+        return
+
     encoder_layers = model.esm.encoder.layer
     for layer in encoder_layers[-n_layers:]:
         for param in layer.parameters():
