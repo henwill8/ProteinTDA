@@ -123,14 +123,24 @@ def distance_matrix(positions: torch.Tensor) -> torch.Tensor:
     return torch.cdist(positions, positions).requires_grad_()
 
 def pre_loss_conversion(
-            esm_out: EsmForProteinFoldingOutput,
-            sc_protein: SCNProtein,
-            pred_adj: torch.Tensor,
-            exp_adj: torch.Tensor,
-            *,
-            device: torch.device | None = None,
-            dtype: torch.dtype = torch.float32,
+    esm_out: EsmForProteinFoldingOutput,
+    sc_protein: SCNProtein,
+    *,
+    device: torch.device,
+    tda_atom: SideChainAtom = SideChainAtom.CB,
 ):
+    atom_exists = esm_out.atom14_atom_exists[0] if esm_out.atom14_atom_exists is not None else None
+    pred_positions = atom_positions_from_atom14(
+        esm_out.positions[-1][0],
+        Atom14.CB if tda_atom is SideChainAtom.CB else Atom14.CA,
+        atom_exists,
+    )
+    target_positions = atom_positions_from_sidechainnet(
+        sc_protein,
+        tda_atom,
+        device=device,
+    )
+
     out = {}
     out["sm"] = {}
     out["sm"]["frames"] = esm_out.frames
@@ -142,7 +152,7 @@ def pre_loss_conversion(
     out["lddt_logits"] = esm_out.lddt_head[-1,:,:,1,:] # <- Looking at lddt loss in openfold, they extract C_Alpha which is why there is the 1. The -1 extracts the final iteration.
     out["distogram_logits"] = esm_out.distogram_logits
     out["final_affine_tensor"] = out["sm"]["frames"][-1]
-    out["adj"] = pred_adj
+    out["adj"] = distance_matrix(pred_positions)
     # ? experimentally_resolved_logits
     # ? masked_msa_logits
 
@@ -171,7 +181,7 @@ def pre_loss_conversion(
         k: v.unsqueeze(0) for k, v in batch.items() 
     }
 
-    batch["adj"] = exp_adj
+    batch["adj"] = distance_matrix(target_positions).detach()
     out["final_atom_positions"] = atom14_to_atom37(out["sm"]["positions"][-1], batch)
 
     return out, batch

@@ -56,12 +56,13 @@ LOSS_CONFIG = mlc.ConfigDict(
             "eps": _EPS,
             "weight": 1.0,
         },
-        "violation": {
+        "violation": { # if violation loss is enabled, then stereo_chemical_props.txt must be present in the openfold installation
             "violation_tolerance_factor": 12.0,
             "clash_overlap_tolerance": 1.5,
             "average_clashes": False,
             "eps": _EPS,
             "weight": 0.0,
+            "enabled": False,
         },
         "tm": {
             "max_bin": 31,
@@ -93,21 +94,3 @@ LOSS_CONFIG = mlc.ConfigDict(
         "eps": _EPS,
     }
 )
-
-
-def loss_config(
-    *,
-    wasserstein_h0_weight: float = 1.0,
-    wasserstein_h1_weight: float = 1.0,
-    max_rips_dimension: int = 2,
-    hom_dim: int = 2,
-) -> mlc.ConfigDict:
-    """Return a copy of the project loss config with Wasserstein overrides applied."""
-    config = LOSS_CONFIG.copy_and_resolve_references()
-    config.wasserstein.max_dimension = max_rips_dimension
-    config.wasserstein.hom_dim = hom_dim
-    config.wasserstein_h0.weight = wasserstein_h0_weight
-    config.wasserstein_h0.enabled = wasserstein_h0_weight > 0.0 and hom_dim >= 1
-    config.wasserstein_h1.weight = wasserstein_h1_weight
-    config.wasserstein_h1.enabled = wasserstein_h1_weight > 0.0 and hom_dim >= 2
-    return config

@@ -34,7 +34,7 @@ class ESMFoldLoss(AlphaFoldLoss):
     """AlphaFoldLoss without masked MSA or experimentally-resolved terms."""
 
     def loss(self, out, batch, _return_breakdown=False):
-        if "violation" not in out:
+        if self.config.violation.enabled and "violation" not in out:
             out["violation"] = find_structural_violations(
                 batch,
                 out["sm"]["positions"][-1],
@@ -69,11 +69,13 @@ class ESMFoldLoss(AlphaFoldLoss):
                 out["sm"]["unnormalized_angles"],
                 **{**batch, **self.config.supervised_chi},
             ),
-            "violation": lambda: violation_loss(
+        }
+
+        if self.config.violation.enabled:
+            loss_fns["violation"] = lambda: violation_loss(
                 out["violation"],
                 **{**batch, **self.config.violation},
-            ),
-        }
+            )
 
         if self.config.tm.enabled:
             loss_fns["tm"] = lambda: tm_loss(

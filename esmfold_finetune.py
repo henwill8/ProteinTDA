@@ -16,11 +16,10 @@ from data_conversions import (
     Atom14,
     atom_positions_from_atom14,
     atom_positions_from_sidechainnet,
-    out_conversion,
+    pre_loss_conversion,
     SideChainAtom,
 )
 from loss import ESMFoldLoss
-from model_config import LOSS_CONFIG
 
 def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2) -> None:
     for param in model.parameters():
@@ -57,7 +56,7 @@ def compute_losses(
     if outputs.positions is None:
         raise RuntimeError("ESMFold did not return positions.")
 
-    out, batch = out_conversion(outputs, protein, device)
+    out, batch = pre_loss_conversion(outputs, protein, device=device)
     total, breakdown = loss_fn(out, batch, _return_breakdown=True)
 
     return {
@@ -89,14 +88,15 @@ def train_one_epoch(
                     device,
                     loss_fn,
                 )
-            except Exception as e: 
+            except (ValueError, RuntimeError) as e:
                 print(e)
+                continue
 
             losses["total"].backward()
             optimizer.step()
 
-            for key in totals:
-                totals[key] += float(losses[key].detach())
+            for key, value in losses.items():
+                totals[key] += float(value.detach())
             n += 1
 
     if n == 0:

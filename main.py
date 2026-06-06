@@ -7,7 +7,6 @@ import numpy as np
 from sklearn.model_selection import KFold
 
 import sidechainnet as scn
-from sidechainnet.dataloaders.SCNProtein import SCNProtein
 
 import torch
 from torch.utils.data import DataLoader
@@ -20,11 +19,11 @@ from esmfold_finetune import (
     trainable_parameter_count,
 )
 from loss import ESMFoldLoss
-from model_config import loss_config
+from model_config import LOSS_CONFIG
 
-def set_seed(seed=42):
-    torch.manual_seed(42)
-    np.random.seed(42)
+def set_seed(seed: int = 42) -> None:
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -32,16 +31,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model", default="facebook/esmfold_v1")
     parser.add_argument("--casp-version", default="debug")
     parser.add_argument("--casp-thinning", type=int, default=30)
+    parser.add_argument("--allow-incomplete", type=bool, default=False)
     parser.add_argument("--scn-dir", type=Path, default=Path("sidechainnet_data"))
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--unfreeze-esm-layers", type=int, default=2)
-    parser.add_argument("--wasserstein-h0-weight", type=float, default=1.0)
-    parser.add_argument("--wasserstein-h1-weight", type=float, default=1.0)
-    parser.add_argument("--max-rips-dimension", type=int, default=2)
-    parser.add_argument("--hom-dim", type=int, default=2)
-    parser.add_argument("--allow-incomplete", action="store_true")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output-dir", type=Path, default=Path("checkpoints/esmfold_finetune"))
     return parser.parse_args(argv)
@@ -113,12 +108,12 @@ def main(argv: list[str] | None = None) -> int:
                 train_loader,
                 optimizer,
                 device,
-                loss_fn=ESMFoldLoss(loss_config()),
+                loss_fn=ESMFoldLoss(config=LOSS_CONFIG),
             )
             print(
-                f"epoch {epoch + 1}/{args.epochs}  "
-                + "  ".join(f"{key}={value:.4f}" for key, value in metrics.items())
-                + f"fold {fold + 1}/{kf.n_splits}"
+                f"epoch {epoch + 1}/{args.epochs}"
+                + "\n" + "  ".join(f"{key}={value:.4f}" for key, value in metrics.items())
+                + f"\nfold {fold + 1}/{kf.n_splits}"
             )
 
         plddt_score, tm_score = test_model(
