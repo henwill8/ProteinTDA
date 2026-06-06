@@ -5,12 +5,13 @@ adding a topological (Wasserstein) loss on C_beta/C_alpha distance matrices (TDA
 Model: https://huggingface.co/facebook/esmfold_v1
 """
 
+from collections import defaultdict
+
 import numpy as np
 import torch
 from tmtools import tm_align
 from tqdm import tqdm
 from transformers import EsmForProteinFolding
-from collections import defaultdict
 
 from data_conversions import (
     Atom14,
@@ -20,6 +21,7 @@ from data_conversions import (
     SideChainAtom,
 )
 from loss import ESMFoldLoss
+
 
 def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2) -> None:
     for param in model.parameters():

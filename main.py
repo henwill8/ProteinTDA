@@ -35,10 +35,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scn-dir", type=Path, default=Path("sidechainnet_data"))
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--unfreeze-esm-layers", type=int, default=2)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output-dir", type=Path, default=Path("checkpoints/esmfold_finetune"))
+    parser.add_argument("--log-file", type=Path, default=Path("logs/kfold_test_scores.log"))
     return parser.parse_args(argv)
 
 
@@ -78,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
         dataset = dataset[-1000:]
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    fold_plddt_scores: list[float] = []
+    fold_tm_scores: list[float] = []
 
     for fold, (train_idx, test_idx) in enumerate(kf.split(dataset)):
         train_dataset = [dataset[i] for i in train_idx]
@@ -120,7 +123,20 @@ def main(argv: list[str] | None = None) -> int:
             test_loader,
             device,
         )
-        print(plddt_score, tm_score)
+        print(f"fold {fold + 1}/{kf.n_splits}  mean_plddt={plddt_score:.4f}  mean_tm={tm_score:.4f}")
+        fold_plddt_scores.append(plddt_score)
+        fold_tm_scores.append(tm_score)
+
+    args.log_file.parent.mkdir(parents=True, exist_ok=True)
+    with args.log_file.open("w", encoding="utf-8") as log_file:
+        for fold_idx, (plddt, tm) in enumerate(zip(fold_plddt_scores, fold_tm_scores), start=1):
+            log_file.write(f"fold {fold_idx}: mean_plddt={plddt:.4f} mean_tm={tm:.4f}\n")
+        log_file.write(
+            f"mean_plddt mean={np.mean(fold_plddt_scores):.4f} var={np.var(fold_plddt_scores):.4f}\n"
+        )
+        log_file.write(
+            f"mean_tm mean={np.mean(fold_tm_scores):.4f} var={np.var(fold_tm_scores):.4f}\n"
+        )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(args.output_dir)
