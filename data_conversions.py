@@ -113,6 +113,7 @@ def out_conversion(
     out["tm_logits"] = esm_out.ptm_logits
     out["lddt_logits"] = esm_out.lddt_head[-1,:,:,1,:] # <- Looking at lddt loss in openfold, they extract C_Alpha which is why there is the 1. The -1 extracts the final iteration.
     out["distogram_logits"] = esm_out.distogram_logits
+    out["final_affine_tensor"] = out["sm"]["frames"][-1]
     # ? experimentally_resolved_logits
     # ? masked_msa_logits
 
@@ -127,6 +128,13 @@ def out_conversion(
     batch = data_transforms.make_atom14_masks(batch) # <- This will make residx atom14_to_atom37 and atom37_to_atom14 along with atom37_atom_exists and atom14_atom_exists
     batch["all_atom_positions"], batch["all_atom_mask"], batch["seq_mask"] = sidechainnet_to_atom37(sc_protein, device)
     batch = data_transforms.make_atom14_positions(batch) # <- Makes atom14_gt_positions, atom14_gt_exists, atom14_alt_gt_exists, atom14_alt_gt_positions, atom14_atom_is_ambiguous
+    batch = data_transforms.atom37_to_frames(batch) # <- Gets input for sidechain FAPE loss 
+    batch = data_transforms.get_backbone_frames(batch) # <- Gets input for backbone FAPE loss
+    batch = data_transforms.atom37_to_torsion_angles(batch) # <- Prepares us for chi angles
+    batch = data_transforms.get_chi_angles(batch) # <- Everything for supervised chi loss
+    batch["resolution"] = torch.tensor(sc_protein.resolution) # <- Used in pLDDT loss
+    batch = data_transforms.make_pseudo_beta(protein) # <- Preparation for Distorgram Loss, pTM loss
 
-    out["final_atom_positions"] = atom14_to_atom37(out["sm"]["positions"]["-1"], batch)
+
+    out["final_atom_positions"] = atom14_to_atom37(out["sm"]["positions"][-1], batch)
     return out, batch
