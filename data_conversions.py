@@ -1,6 +1,7 @@
 import torch
 import openfold.data.data_transforms as data_transforms
 from transformers.models.esm.modeling_esmfold import EsmForProteinFoldingOutput
+from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
 from openfold.utils.tensor_utils import batched_gather
 from openfold.np import residue_constants as rc 
@@ -110,12 +111,8 @@ def out_conversion(
     out["sm"]["angles"] = esm_out.angles
     out["sm"]["unnormalized_angles"] = esm_out.unnormalized_angles
     out["tm_logits"] = esm_out.ptm_logits
-
-    # Unsure if this is exactly right
-    out["lddt_logits"] = esm_out.lddt_head
-
-    # ? final_atom_positions
-    # ? distogram_logits
+    out["lddt_logits"] = esm_out.lddt_head[-1,:,:,1,:] # <- Looking at lddt loss in openfold, they extract C_Alpha which is why there is the 1. The -1 extracts the final iteration.
+    out["distogram_logits"] = esm_out.distogram_logits
     # ? experimentally_resolved_logits
     # ? masked_msa_logits
 
@@ -131,4 +128,5 @@ def out_conversion(
     batch["all_atom_positions"], batch["all_atom_mask"], batch["seq_mask"] = sidechainnet_to_atom37(sc_protein, device)
     batch = data_transforms.make_atom14_positions(batch) # <- Makes atom14_gt_positions, atom14_gt_exists, atom14_alt_gt_exists, atom14_alt_gt_positions, atom14_atom_is_ambiguous
 
+    out["final_atom_positions"] = atom14_to_atom37(out["sm"]["positions"]["-1"], batch)
     return out, batch
