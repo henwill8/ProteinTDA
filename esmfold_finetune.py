@@ -11,6 +11,7 @@ from tmtools import tm_align
 from tqdm import tqdm
 from transformers import EsmForProteinFolding
 from enum import Enum
+from openfold.utils.loss import AlphaFoldLoss
 
 from persistence import wasserstein_loss
 from data_conversions import atom_positions_from_sidechainnet, distance_matrix, SideChainAtom
@@ -84,7 +85,6 @@ def compute_losses(
     if outputs.positions is None:
         raise RuntimeError("ESMFold did not return positions.")
 
-    
     atom_exists = outputs.atom14_atom_exists[0] if outputs.atom14_atom_exists is not None else None
     pred_cb = atom_positions_from_atom14(outputs["positions"][-1][0], Atom14.CB, atom_exists)
     target_cb = atom_positions_from_sidechainnet(protein, SideChainAtom.CB, device=device)
