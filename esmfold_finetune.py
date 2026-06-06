@@ -16,11 +16,6 @@ from openfold.utils.loss import AlphaFoldLoss
 from persistence import wasserstein_loss
 from data_conversions import atom_positions_from_sidechainnet, distance_matrix, SideChainAtom, pre_loss_conversion 
 
-# OpenFold atom37 indices
-class Atom14(Enum):
-    CA = 1
-    CB = 4
-
 
 def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2) -> None:
     for param in model.parameters():
@@ -36,26 +31,6 @@ def trainable_parameter_count(model: torch.nn.Module) -> tuple[int, int]:
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     return trainable, total
-
-
-def atom_positions_from_atom14(
-    positions: torch.Tensor,
-    atom: Atom14,
-    atom_exists: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """
-    Extracts the positions of the given atom from the ESMFold atom14 output.
-    """
-    coords: list[torch.Tensor] = []
-    length = positions.shape[0]
-    for i in range(length):
-        atom_pos = positions[i, atom.value]
-        if atom_exists is not None and atom_exists[i, atom.value] < 0.5:
-            atom_pos = positions[i, Atom14.CA.value]
-        coords.append(atom_pos)
-    if not coords:
-        raise ValueError("No valid atom coordinates in model output.")
-    return torch.stack(coords)
 
 
 def esmfold_loss(pred_cb: torch.Tensor, target_cb: torch.Tensor) -> torch.Tensor:
