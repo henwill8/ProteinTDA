@@ -8,10 +8,33 @@ from openfold.np import residue_constants as rc
 
 from enum import Enum
 
+# OpenFold atom14 indices
+class Atom14(Enum):
+    CA = 1
+    CB = 4
+
 
 class SideChainAtom(Enum):
     CA = 1
     CB = 5
+
+
+def atom_positions_from_atom14(
+    positions: torch.Tensor,
+    atom: Atom14,
+    atom_exists: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Extracts the positions of the given atom from the ESMFold atom14 output."""
+    coords: list[torch.Tensor] = []
+    length = positions.shape[0]
+    for i in range(length):
+        atom_pos = positions[i, atom.value]
+        if atom_exists is not None and atom_exists[i, atom.value] < 0.5:
+            atom_pos = positions[i, Atom14.CA.value]
+        coords.append(atom_pos)
+    if not coords:
+        raise ValueError("No valid atom coordinates in model output.")
+    return torch.stack(coords)
 
 
 def atom_positions_from_sidechainnet(
@@ -45,9 +68,6 @@ def atom_positions_from_sidechainnet(
         out = out.to(device)
     return out
 
-def distance_matrix(positions: torch.Tensor) -> torch.Tensor:
-    """Full pairwise distance matrix, shape (n, n)."""
-    return torch.cdist(positions, positions).requires_grad_()
 
 def sidechainnet_to_atom37(
     protein: SCNProtein,
@@ -87,9 +107,9 @@ def sidechainnet_to_atom37(
     return all_atom_positions, all_atom_mask, seq_mask
 
 
-def atom37_to_atom14(atom_37: torch.Tensor, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+def atom37_to_atom14(atom37: torch.Tensor, batch: dict[str, torch.Tensor]) -> torch.Tensor:
     atom14_data = batched_gather(
-                atom_37,
+                atom37,
                 batch["residx_atom14_to_atom37"],
                 dim=-2,
                 no_batch_dims=len(atom37.shape[:-2]),
@@ -97,6 +117,12 @@ def atom37_to_atom14(atom_37: torch.Tensor, batch: dict[str, torch.Tensor]) -> t
     atom14_data = atom14_data * batch["atom14_atom_exists"][..., None]
 
     return atom14_data
+
+
+def distance_matrix(positions: torch.Tensor) -> torch.Tensor:
+    """Full pairwise distance matrix, shape (n, n)."""
+    return torch.cdist(positions, positions).requires_grad_()
+
 
 def out_conversion(
             esm_out: EsmForProteinFoldingOutput,
