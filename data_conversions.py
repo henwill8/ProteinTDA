@@ -92,17 +92,21 @@ def atom37_to_atom14(atom_37: torch.Tensor, batch: dict[str, torch.Tensor]) -> t
                 atom_37,
                 batch["residx_atom14_to_atom37"],
                 dim=-2,
-                no_batch_dims=len(atom37.shape[:-2]),
+                no_batch_dims=len(atom_37.shape[:-2]),
             )
     atom14_data = atom14_data * batch["atom14_atom_exists"][..., None]
 
     return atom14_data
 
-def out_conversion(
+def pre_loss_conversion(
             esm_out: EsmForProteinFoldingOutput,
             sc_protein: SCNProtein,
-            device
-            ):
+            pred_adj: torch.Tensor,
+            exp_adj: torch.Tensor,
+            *,
+            device: torch.device | None = None,
+            dtype: torch.dtype = torch.float32,
+):
     out = {}
     out["sm"] = {}
     out["sm"]["frames"] = esm_out.frames
@@ -114,27 +118,36 @@ def out_conversion(
     out["lddt_logits"] = esm_out.lddt_head[-1,:,:,1,:] # <- Looking at lddt loss in openfold, they extract C_Alpha which is why there is the 1. The -1 extracts the final iteration.
     out["distogram_logits"] = esm_out.distogram_logits
     out["final_affine_tensor"] = out["sm"]["frames"][-1]
+    out["adj"] = pred_adj
     # ? experimentally_resolved_logits
     # ? masked_msa_logits
+
 
     batch = {}
     # batch from sc_protein
     batch["aatype"] = torch.tensor(
             [rc.restype_order_with_x.get(aa, rc.restype_num) for aa in sc_protein.seq], #rc.restype_num is 20, line 878 of residue constants - seems to be a fallback value
             dtype=torch.long,
+            device=device
             )
-    batch["seq_length"] = torch.tensor(len(sc_protein.seq))
-    batch["residue_index"] = torch.arange(end=batch["seq_length"], device=device)
+    L = len(sc_protein.seq)
+    batch["seq_length"] = torch.tensor(L,device=device)
+    batch["residue_index"] = torch.arange(end=L, device=device)
     batch = data_transforms.make_atom14_masks(batch) # <- This will make residx atom14_to_atom37 and atom37_to_atom14 along with atom37_atom_exists and atom14_atom_exists
     batch["all_atom_positions"], batch["all_atom_mask"], batch["seq_mask"] = sidechainnet_to_atom37(sc_protein, device)
     batch = data_transforms.make_atom14_positions(batch) # <- Makes atom14_gt_positions, atom14_gt_exists, atom14_alt_gt_exists, atom14_alt_gt_positions, atom14_atom_is_ambiguous
     batch = data_transforms.atom37_to_frames(batch) # <- Gets input for sidechain FAPE loss 
     batch = data_transforms.get_backbone_frames(batch) # <- Gets input for backbone FAPE loss
-    batch = data_transforms.atom37_to_torsion_angles(batch) # <- Prepares us for chi angles
+    batch = data_transforms.atom37_to_torsion_angles("")(batch) # <- Prepares us for chi angles
     batch = data_transforms.get_chi_angles(batch) # <- Everything for supervised chi loss
-    batch["resolution"] = torch.tensor(sc_protein.resolution) # <- Used in pLDDT loss
-    batch = data_transforms.make_pseudo_beta(protein) # <- Preparation for Distorgram Loss, pTM loss
+    batch["resolution"] = torch.tensor(sc_protein.resolution if sc_protein.resolution is not None else 0.0, device=device) # <- Used in pLDDT loss
+    batch = data_transforms.make_pseudo_beta("")(batch) # <- Preparation for Distorgram Loss, pTM loss
 
+    batch = {
+        k: v.unsqueeze(0) for k, v in batch.items() 
+    }
 
+    batch["adj"] = exp_adj
     out["final_atom_positions"] = atom14_to_atom37(out["sm"]["positions"][-1], batch)
+
     return out, batch

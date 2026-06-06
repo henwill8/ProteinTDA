@@ -14,7 +14,7 @@ from enum import Enum
 from openfold.utils.loss import AlphaFoldLoss
 
 from persistence import wasserstein_loss
-from data_conversions import atom_positions_from_sidechainnet, distance_matrix, SideChainAtom
+from data_conversions import atom_positions_from_sidechainnet, distance_matrix, SideChainAtom, pre_loss_conversion 
 
 # OpenFold atom37 indices
 class Atom14(Enum):
@@ -95,6 +95,8 @@ def compute_losses(
     target_adj = distance_matrix(target_cb)
     target_adj.requires_grad = False
 
+    pre_loss_conversion(outputs,protein,pred_cb,target_cb,device=device)
+
     topo = wasserstein_loss(
         pred_adj,
         target_adj,
@@ -143,8 +145,8 @@ def train_one_epoch(
                     max_rips_dimension=max_rips_dimension,
                     hom_dim=hom_dim,
                 )
-            except (ValueError, RuntimeError):
-                continue
+            except Exception as e: 
+                print(e)
 
             losses["total"].backward()
             optimizer.step()
