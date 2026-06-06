@@ -33,7 +33,6 @@ def atom_positions_from_sidechainnet(
         if char != "+":
             continue
         atom_pos = coords[i, atom.value]
-        # TODO: ensure this actually gets CA if CB is missing
         if torch.isnan(atom_pos).any():
             atom_pos = coords[i, SideChainAtom.CA.value]
         positions.append(atom_pos)
