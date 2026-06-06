@@ -19,6 +19,8 @@ from esmfold_finetune import (
     test_model,
     trainable_parameter_count,
 )
+from loss import ESMFoldLoss
+from model_config import loss_config
 
 def set_seed(seed=42):
     torch.manual_seed(42)
@@ -111,17 +113,12 @@ def main(argv: list[str] | None = None) -> int:
                 train_loader,
                 optimizer,
                 device,
-                wasserstein_h0_weight=args.wasserstein_h0_weight,
-                wasserstein_h1_weight=args.wasserstein_h1_weight,
-                max_rips_dimension=args.max_rips_dimension,
-                hom_dim=args.hom_dim,
+                loss_fn=ESMFoldLoss(loss_config()),
             )
             print(
                 f"epoch {epoch + 1}/{args.epochs}  "
-                f"loss={metrics['total']:.4f}  "
-                f"esmfold_loss={metrics['esmfold_loss']:.4f}  "
-                f"wass_h0={metrics['wasserstein_h0']:.4f}  "
-                f"wass_h1={metrics['wasserstein_h1']:.4f}"
+                + "  ".join(f"{key}={value:.4f}" for key, value in metrics.items())
+                + f"fold {fold + 1}/{kf.n_splits}"
             )
 
         plddt_score, tm_score = test_model(

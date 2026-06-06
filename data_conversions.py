@@ -112,7 +112,7 @@ def atom37_to_atom14(atom37: torch.Tensor, batch: dict[str, torch.Tensor]) -> to
                 atom37,
                 batch["residx_atom14_to_atom37"],
                 dim=-2,
-                no_batch_dims=len(atom_37.shape[:-2]),
+                no_batch_dims=len(atom37.shape[:-2]),
             )
     atom14_data = atom14_data * batch["atom14_atom_exists"][..., None]
 

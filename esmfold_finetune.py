@@ -10,12 +10,17 @@ import torch
 from tmtools import tm_align
 from tqdm import tqdm
 from transformers import EsmForProteinFolding
-from enum import Enum
-from openfold.utils.loss import AlphaFoldLoss
+from collections import defaultdict
 
-from persistence import wasserstein_loss
-from data_conversions import atom_positions_from_sidechainnet, distance_matrix, SideChainAtom, pre_loss_conversion 
-
+from data_conversions import (
+    Atom14,
+    atom_positions_from_atom14,
+    atom_positions_from_sidechainnet,
+    out_conversion,
+    SideChainAtom,
+)
+from loss import ESMFoldLoss
+from model_config import LOSS_CONFIG
 
 def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2) -> None:
     for param in model.parameters():
@@ -33,20 +38,12 @@ def trainable_parameter_count(model: torch.nn.Module) -> tuple[int, int]:
     return trainable, total
 
 
-def esmfold_loss(pred_cb: torch.Tensor, target_cb: torch.Tensor) -> torch.Tensor:
-    return torch.zeros((), device=pred_cb.device)
-
-
 def compute_losses(
     model: EsmForProteinFolding,
     tokenizer,
     protein,
     device: torch.device,
-    *,
-    wasserstein_h0_weight: float,
-    wasserstein_h1_weight: float,
-    max_rips_dimension: int,
-    hom_dim: int,
+    loss_fn: ESMFoldLoss,
 ) -> dict[str, torch.Tensor]:
     sequence = str(protein.seq)
     inputs = tokenizer(
@@ -60,33 +57,12 @@ def compute_losses(
     if outputs.positions is None:
         raise RuntimeError("ESMFold did not return positions.")
 
-    atom_exists = outputs.atom14_atom_exists[0] if outputs.atom14_atom_exists is not None else None
-    pred_cb = atom_positions_from_atom14(outputs["positions"][-1][0], Atom14.CB, atom_exists)
-    target_cb = atom_positions_from_sidechainnet(protein, SideChainAtom.CB, device=device)
+    out, batch = out_conversion(outputs, protein, device)
+    total, breakdown = loss_fn(out, batch, _return_breakdown=True)
 
-    esmfold_loss_value = esmfold_loss(pred_cb, target_cb)
-
-    pred_adj = distance_matrix(pred_cb)
-    target_adj = distance_matrix(target_cb)
-    target_adj.requires_grad = False
-
-    pre_loss_conversion(outputs,protein,pred_cb,target_cb,device=device)
-
-    topo = wasserstein_loss(
-        pred_adj,
-        target_adj,
-        max_dimension=max_rips_dimension,
-        hom_dim=hom_dim,
-    )
-
-    wass_h0 = topo["h0"]
-    wass_h1 = topo["h1"]
-    total = esmfold_loss_value + wasserstein_h0_weight * wass_h0 + wasserstein_h1_weight * wass_h1
     return {
         "total": total,
-        "esmfold_loss": esmfold_loss_value,
-        "wasserstein_h0": wass_h0,
-        "wasserstein_h1": wass_h1,
+        **{key: value for key, value in breakdown.items()},
     }
 
 
@@ -96,14 +72,10 @@ def train_one_epoch(
     loader,
     optimizer,
     device,
-    *,
-    wasserstein_h0_weight: float,
-    wasserstein_h1_weight: float,
-    max_rips_dimension: int,
-    hom_dim: int,
+    loss_fn: ESMFoldLoss,
 ) -> dict[str, float]:
     model.train()
-    totals = {"total": 0.0, "esmfold_loss": 0.0, "wasserstein_h0": 0.0, "wasserstein_h1": 0.0}
+    totals = defaultdict(lambda: 0.0)
     n = 0
 
     for batch in tqdm(loader, desc="train", leave=False):
@@ -115,10 +87,7 @@ def train_one_epoch(
                     tokenizer,
                     protein,
                     device,
-                    wasserstein_h0_weight=wasserstein_h0_weight,
-                    wasserstein_h1_weight=wasserstein_h1_weight,
-                    max_rips_dimension=max_rips_dimension,
-                    hom_dim=hom_dim,
+                    loss_fn,
                 )
             except Exception as e: 
                 print(e)
@@ -133,6 +102,7 @@ def train_one_epoch(
     if n == 0:
         return totals
     return {key: value / n for key, value in totals.items()}
+
 
 def test_model(
     model,
@@ -157,7 +127,7 @@ def test_model(
                 output = model(**inputs)
                 if output.positions is None:
                     raise RuntimeError("ESMFold did not return positions.")
-                
+
                 plddt = output.plddt.tolist()
                 protein_mean_plddt = np.mean(plddt)
                 plddt_list.append(protein_mean_plddt)
@@ -173,6 +143,6 @@ def test_model(
 
                 tm_score_list.append(tm_score)
 
-        mean_plddt = np.mean(plddt_list) 
+        mean_plddt = np.mean(plddt_list)
         mean_tm = np.mean(tm_score_list)
         return mean_plddt, mean_tm

@@ -58,28 +58,3 @@ def wasserstein_distance(
         )
         losses.append(loss_wd)
     return losses
-
-
-def wasserstein_loss(
-    pred_adj: torch.Tensor,
-    target_adj: torch.Tensor,
-    *,
-    max_dimension: int = 2,
-    hom_dim: int = 2,
-) -> dict[str, torch.Tensor]:
-    """
-    Wasserstein distances between predicted and target persistence diagrams.
-
-    Returns separate losses for H0 (``h0``) and H1 (``h1``) when ``hom_dim >= 2``.
-    """
-    target_diags = pd_from_graph(target_adj, max_dimension, hom_dim)
-    pred_diags = pd_from_graph(pred_adj, max_dimension, hom_dim)
-    terms = wasserstein_distance(pred_diags, target_diags, hom_dim)
-    zero = torch.zeros((), device=pred_adj.device, dtype=pred_adj.dtype)
-    losses: dict[str, torch.Tensor] = {}
-    if hom_dim >= 1:
-        losses["h0"] = terms[0] if len(terms) > 0 else zero
-    if hom_dim >= 2:
-        losses["h1"] = terms[1] if len(terms) > 1 else zero
-    return losses
-
