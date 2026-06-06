@@ -10,6 +10,7 @@ jax
 scikit-learn
 tmtools
 git+https://github.com/aqlaboratory/openfold.git
+dm-tree
 
 # SidechainNet (https://github.com/jonathanking/sidechainnet)
 sidechainnet

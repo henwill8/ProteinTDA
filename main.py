@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     device = torch.device(args.device)
 
+    set_seed(seed=42)
+
     print(f"Loading {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     print(f"Sending model to device ({device})...")

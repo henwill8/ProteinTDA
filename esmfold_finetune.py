@@ -13,7 +13,7 @@ from transformers import EsmForProteinFolding
 from enum import Enum
 
 from persistence import wasserstein_loss
-from sidechainnet_utils import atom_positions_from_sidechainnet, distance_matrix, SideChainAtom
+from data_conversions import atom_positions_from_sidechainnet, distance_matrix, SideChainAtom
 
 # OpenFold atom37 indices
 class Atom14(Enum):
