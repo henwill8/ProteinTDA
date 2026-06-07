@@ -10,11 +10,10 @@ import sidechainnet as scn
 
 import torch
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, EsmForProteinFolding
+from transformers import AutoTokenizer
 
 from esmfold_finetune import (
-    freeze_except_last_esm_layers,
-    patch_forward_for_training,
+    build_model,
     train_one_epoch,
     test_model,
     trainable_parameter_count,
@@ -39,7 +38,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--unfreeze-esm-layers", type=int, default=2)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--output-dir", type=Path, default=Path("checkpoints/esmfold_finetune"))
     parser.add_argument("--log-file", type=Path, default=Path("logs/kfold_test_scores.log"))
     return parser.parse_args(argv)
 
@@ -50,22 +48,9 @@ def main(argv: list[str] | None = None) -> int:
 
     set_seed(seed=42)
 
-    print(f"Loading {args.model}...")
+    print(f"Loading tokenizer for {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    print(f"Sending model to device ({device})...")
-    model = EsmForProteinFolding.from_pretrained(args.model, low_cpu_mem_usage=True).to(device)
-    model.esm = model.esm.half()
-    patch_forward_for_training(model)
-
-    print(f"Freezing all parameters except the last {args.unfreeze_esm_layers} ESM encoder layers...")
-    freeze_except_last_esm_layers(model, n_layers=args.unfreeze_esm_layers)
-
-    print("Counting trainable parameters...")
-    trainable, total = trainable_parameter_count(model)
-    print(f"Trainable parameters: {trainable:,} / {total:,}")
-
     torch.backends.cuda.matmul.allow_tf32 = True
-    model.trunk.set_chunk_size(64)
 
     print("Loading SidechainNet...")
     dataset = scn.load(
@@ -85,6 +70,17 @@ def main(argv: list[str] | None = None) -> int:
     fold_tm_scores: list[float] = []
 
     for fold, (train_idx, test_idx) in enumerate(kf.split(dataset)):
+        set_seed(42 + fold)
+
+        print(f"Fold {fold + 1}/{kf.n_splits}: loading fresh model on {device}...")
+        model = build_model(
+            args.model,
+            device,
+            unfreeze_esm_layers=args.unfreeze_esm_layers,
+        )
+        trainable, total = trainable_parameter_count(model)
+        print(f"Trainable parameters: {trainable:,} / {total:,}")
+
         train_dataset = [dataset[i] for i in train_idx]
         test_dataset = [dataset[i] for i in test_idx]
 
@@ -105,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
 
         for epoch in range(args.epochs):
+            # needs to be updated to randomize num_recycles every batch
             metrics = train_one_epoch(
                 model,
                 tokenizer,
@@ -112,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
                 optimizer,
                 device,
                 loss_fn=ESMFoldLoss(config=LOSS_CONFIG),
+                n_trainable_esm_layers=args.unfreeze_esm_layers,
             )
             print(
                 f"epoch {epoch + 1}/{args.epochs}"
@@ -140,11 +138,6 @@ def main(argv: list[str] | None = None) -> int:
             f"mean_tm mean={np.mean(fold_tm_scores):.4f} var={np.var(fold_tm_scores):.4f}\n"
         )
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
-    print(f"Saved to {args.output_dir}")
-    
     return 0
 
 

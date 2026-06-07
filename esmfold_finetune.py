@@ -128,8 +128,14 @@ def _forward_preserve_esm_grad(
 
     ptm_logits = self.ptm_head(structure["s_z"])
     structure["ptm_logits"] = ptm_logits
-    structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=self.distogram_bins)
-    structure.update(compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=self.distogram_bins))
+    try:
+        structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=self.distogram_bins)
+    except IndexError:
+        structure["ptm"] = None
+
+    structure.update(
+        compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=self.distogram_bins)
+    )
 
     return EsmForProteinFoldingOutput(**structure)
 
@@ -137,6 +143,47 @@ def _forward_preserve_esm_grad(
 def patch_forward_for_training(model: EsmForProteinFolding) -> None:
     """Replace ESMFold forward so losses can backprop into trainable ESM layers."""
     model.forward = types.MethodType(_forward_preserve_esm_grad, model)
+
+
+def build_model(
+    model_name: str,
+    device: torch.device,
+    *,
+    unfreeze_esm_layers: int = 2,
+    esm_half: bool = True,
+) -> EsmForProteinFolding:
+    model = EsmForProteinFolding.from_pretrained(model_name, low_cpu_mem_usage=True).to(device)
+    if esm_half:
+        # potentially remove this or have trainable layers be fp32 if training is not stable
+        model.esm = model.esm.half()
+    patch_forward_for_training(model)
+    freeze_except_last_esm_layers(model, n_layers=unfreeze_esm_layers)
+    model.trunk.set_chunk_size(64)
+    return model
+
+
+def train_model(
+    model: EsmForProteinFolding,
+    *,
+    n_trainable_esm_layers: int,
+    dropout_in_frozen: bool = False,
+) -> None:
+    """
+    If dropout_in_frozen is False, frozen ESM encoder layers and the folding trunk run in eval mode so
+    dropout is disabled there while trainable ESM layers keep it enabled.
+    """
+    model.train()
+    if dropout_in_frozen:
+        return
+
+    encoder_layers = model.esm.encoder.layer
+    n_frozen_esm = max(0, len(encoder_layers) - n_trainable_esm_layers)
+    for layer in encoder_layers[:n_frozen_esm]:
+        layer.eval()
+    for layer in encoder_layers[n_frozen_esm:]:
+        layer.train()
+
+    model.trunk.eval()
 
 
 def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2) -> None:
@@ -193,8 +240,15 @@ def train_one_epoch(
     optimizer,
     device,
     loss_fn: ESMFoldLoss,
+    *,
+    n_trainable_esm_layers: int = 2,
+    dropout_in_frozen: bool = False,
 ) -> dict[str, float]:
-    model.train()
+    train_model(
+        model,
+        n_trainable_esm_layers=n_trainable_esm_layers,
+        dropout_in_frozen=dropout_in_frozen,
+    )
     totals = defaultdict(lambda: 0.0)
     n = 0
 
