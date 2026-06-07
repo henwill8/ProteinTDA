@@ -70,9 +70,8 @@ def main(argv: list[str] | None = None) -> int:
         complete_structures_only = not args.allow_incomplete,
     )
 
-    #if len(dataset) > 1000:
-    #    dataset = dataset[-1000:]
-    dataset=dataset[:5]
+    if len(dataset) > 1000:
+        dataset = dataset[-1000:]
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
     fold_plddt_scores: list[float] = []
