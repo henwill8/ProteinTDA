@@ -14,6 +14,7 @@ from transformers import AutoTokenizer, EsmForProteinFolding
 
 from esmfold_finetune import (
     freeze_except_last_esm_layers,
+    patch_forward_for_training,
     train_one_epoch,
     test_model,
     trainable_parameter_count,
@@ -54,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Sending model to device ({device})...")
     model = EsmForProteinFolding.from_pretrained(args.model, low_cpu_mem_usage=True).to(device)
     model.esm = model.esm.half()
+    patch_forward_for_training(model)
 
     print(f"Freezing all parameters except the last {args.unfreeze_esm_layers} ESM encoder layers...")
     freeze_except_last_esm_layers(model, n_layers=args.unfreeze_esm_layers)

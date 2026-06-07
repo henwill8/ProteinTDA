@@ -5,6 +5,7 @@ adding a topological (Wasserstein) loss on C_beta/C_alpha distance matrices (TDA
 Model: https://huggingface.co/facebook/esmfold_v1
 """
 
+import types
 from collections import defaultdict
 
 import numpy as np
@@ -12,6 +13,15 @@ import torch
 from tmtools import tm_align
 from tqdm import tqdm
 from transformers import EsmForProteinFolding
+from transformers.models.esm.modeling_esmfold import (
+    EsmForProteinFoldingOutput,
+    categorical_lddt,
+)
+from transformers.models.esm.openfold_utils import (
+    compute_predicted_aligned_error,
+    compute_tm,
+    make_atom14_masks,
+)
 
 from data_conversions import (
     Atom14,
@@ -21,6 +31,112 @@ from data_conversions import (
     SideChainAtom,
 )
 from loss import ESMFoldLoss
+
+
+def _forward_preserve_esm_grad(
+    self,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor | None = None,
+    position_ids: torch.Tensor | None = None,
+    masking_pattern: torch.Tensor | None = None,
+    num_recycles: int | None = None,
+    output_hidden_states: bool | None = False,
+    **kwargs,
+) -> EsmForProteinFoldingOutput:
+    """
+    ESMFold forward that keeps ESM representations in the autograd graph while training.
+
+    https://github.com/huggingface/transformers/blob/main/src/transformers/models/esm/modeling_esmfold.py#L2044
+    """
+    cfg = self.config.esmfold_config
+
+    aa = input_ids
+    batch_size = aa.shape[0]
+    seq_len = aa.shape[1]
+    device = input_ids.device
+    if attention_mask is None:
+        attention_mask = torch.ones_like(aa, device=device)
+    if position_ids is None:
+        position_ids = torch.arange(seq_len, device=device).expand_as(input_ids)
+
+    esmaa = self.af2_idx_to_esm_idx(aa, attention_mask)
+
+    if masking_pattern is not None:
+        masked_aa, esmaa, mlm_targets = self.bert_mask(aa, esmaa, attention_mask, masking_pattern)
+    else:
+        masked_aa = aa
+        mlm_targets = None
+
+    esm_s = self.compute_language_model_representations(esmaa)
+    esm_s = esm_s.to(self.esm_s_combine.dtype)
+
+    if cfg.esm_ablate_sequence:
+        esm_s = esm_s * 0
+
+    if not self.training:
+        esm_s = esm_s.detach()
+
+    esm_s = (self.esm_s_combine.softmax(0).unsqueeze(0) @ esm_s).squeeze(2)
+    s_s_0 = self.esm_s_mlp(esm_s)
+
+    s_z_0 = s_s_0.new_zeros(batch_size, seq_len, seq_len, cfg.trunk.pairwise_state_dim)
+
+    if self.config.esmfold_config.embed_aa:
+        s_s_0 += self.embedding(masked_aa)
+
+    structure: dict = self.trunk(s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
+    structure = {
+        key: value
+        for key, value in structure.items()
+        if key
+        in [
+            "s_z",
+            "s_s",
+            "frames",
+            "sidechain_frames",
+            "unnormalized_angles",
+            "angles",
+            "positions",
+            "states",
+        ]
+    }
+
+    if mlm_targets:
+        structure["mlm_targets"] = mlm_targets
+
+    disto_logits = self.distogram_head(structure["s_z"])
+    disto_logits = (disto_logits + disto_logits.transpose(1, 2)) / 2
+    structure["distogram_logits"] = disto_logits
+
+    lm_logits = self.lm_head(structure["s_s"])
+    structure["lm_logits"] = lm_logits
+
+    structure["aatype"] = aa
+    make_atom14_masks(structure)
+    for key in [
+        "atom14_atom_exists",
+        "atom37_atom_exists",
+    ]:
+        structure[key] *= attention_mask.unsqueeze(-1)
+    structure["residue_index"] = position_ids
+
+    lddt_head = self.lddt_head(structure["states"]).reshape(
+        structure["states"].shape[0], batch_size, seq_len, -1, self.lddt_bins
+    )
+    structure["lddt_head"] = lddt_head
+    structure["plddt"] = categorical_lddt(lddt_head[-1], bins=self.lddt_bins)
+
+    ptm_logits = self.ptm_head(structure["s_z"])
+    structure["ptm_logits"] = ptm_logits
+    structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=self.distogram_bins)
+    structure.update(compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=self.distogram_bins))
+
+    return EsmForProteinFoldingOutput(**structure)
+
+
+def patch_forward_for_training(model: EsmForProteinFolding) -> None:
+    """Replace ESMFold forward so losses can backprop into trainable ESM layers."""
+    model.forward = types.MethodType(_forward_preserve_esm_grad, model)
 
 
 def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2) -> None:
