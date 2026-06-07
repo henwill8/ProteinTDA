@@ -5,6 +5,7 @@ loss on C_beta/C_alpha distance matrices (TDA).
 Model: https://huggingface.co/facebook/esmfold_v1
 """
 
+import random
 import types
 from collections import defaultdict
 
@@ -35,6 +36,13 @@ from loss import ESMFoldLoss
 
 def _esm_encoder_is_trainable(model: EsmForProteinFolding) -> bool:
     return any(p.requires_grad for p in model.esm.encoder.layer.parameters())
+
+
+def _compute_esm_representations(model: EsmForProteinFolding, esmaa: torch.Tensor) -> torch.Tensor:
+    if _esm_encoder_is_trainable(model):
+        return model.compute_language_model_representations(esmaa)
+    with torch.no_grad():
+        return model.compute_language_model_representations(esmaa)
 
 
 def _forward_preserve_esm_grad(
@@ -71,7 +79,7 @@ def _forward_preserve_esm_grad(
         masked_aa = aa
         mlm_targets = None
 
-    esm_s = self.compute_language_model_representations(esmaa)
+    esm_s = _compute_esm_representations(self, esmaa)
     esm_s = esm_s.to(self.esm_s_combine.dtype)
 
     if cfg.esm_ablate_sequence:
@@ -114,8 +122,8 @@ def _forward_preserve_esm_grad(
     disto_logits = (disto_logits + disto_logits.transpose(1, 2)) / 2
     structure["distogram_logits"] = disto_logits
 
-    lm_logits = self.lm_head(structure["s_s"])
-    structure["lm_logits"] = lm_logits
+    if not self.training:
+        structure["lm_logits"] = self.lm_head(structure["s_s"])
 
     structure["aatype"] = aa
     make_atom14_masks(structure)
@@ -154,11 +162,68 @@ def patch_forward_for_training(model: EsmForProteinFolding) -> None:
     model.forward = types.MethodType(_forward_preserve_esm_grad, model)
 
 
+def configure_finetuning(
+    model: EsmForProteinFolding,
+    *,
+    unfreeze_esm_layers: int = 0,
+    unfreeze_trunk_blocks: int = 2,
+    unfreeze_structure_module: bool = False,
+) -> None:
+    for param in model.parameters():
+        param.requires_grad = False
+
+    if unfreeze_esm_layers > 0:
+        for layer in model.esm.encoder.layer[-unfreeze_esm_layers:]:
+            for param in layer.parameters():
+                param.requires_grad = True
+
+    if unfreeze_trunk_blocks > 0:
+        for block in model.trunk.blocks[-unfreeze_trunk_blocks:]:
+            for param in block.parameters():
+                param.requires_grad = True
+
+    if unfreeze_structure_module:
+        for param in model.trunk.structure_module.parameters():
+            param.requires_grad = True
+        for param in model.trunk.trunk2sm_s.parameters():
+            param.requires_grad = True
+        for param in model.trunk.trunk2sm_z.parameters():
+            param.requires_grad = True
+
+
+def install_trunk_grad_stop(model: EsmForProteinFolding, n_trainable_trunk_blocks: int) -> None:
+    """
+    Detach activations after the last frozen trunk block so backward skips earlier blocks.
+    """
+    existing = getattr(model, "_trunk_grad_stop_hook", None)
+    if existing is not None:
+        existing.remove()
+        model._trunk_grad_stop_hook = None
+
+    n_frozen = len(model.trunk.blocks) - n_trainable_trunk_blocks
+    if n_frozen <= 0:
+        return
+
+    def _detach_block_output(_module, _inputs, output):
+        if isinstance(output, tuple):
+            return tuple(x.detach() if torch.is_tensor(x) else x for x in output)
+        if torch.is_tensor(output):
+            return output.detach()
+        return output
+
+    model._trunk_grad_stop_hook = model.trunk.blocks[n_frozen - 1].register_forward_hook(
+        _detach_block_output
+    )
+
+
 def build_model(
     model_name: str,
     device: torch.device,
     *,
-    n_trainable_esm_layers: int = 2,
+    unfreeze_esm_layers: int = 0,
+    unfreeze_trunk_blocks: int = 2,
+    unfreeze_structure_module: bool = False,
+    trunk_chunk_size: int = 4,
     esm_half: bool = True,
 ) -> EsmForProteinFolding:
     model = EsmForProteinFolding.from_pretrained(model_name, low_cpu_mem_usage=True).to(device)
@@ -166,15 +231,23 @@ def build_model(
         # potentially remove this or have trainable layers be fp32 if training is not stable
         model.esm = model.esm.half()
     patch_forward_for_training(model)
-    freeze_except_last_esm_layers(model, n_layers=n_trainable_esm_layers)
-    model.trunk.set_chunk_size(64)
+    configure_finetuning(
+        model,
+        unfreeze_esm_layers=unfreeze_esm_layers,
+        unfreeze_trunk_blocks=unfreeze_trunk_blocks,
+        unfreeze_structure_module=unfreeze_structure_module,
+    )
+    install_trunk_grad_stop(model, n_trainable_trunk_blocks=unfreeze_trunk_blocks)
+    model.trunk.set_chunk_size(trunk_chunk_size)
     return model
 
 
-def train_model(
+def apply_training_mode(
     model: EsmForProteinFolding,
     *,
-    n_trainable_esm_layers: int = 2,
+    unfreeze_esm_layers: int = 0,
+    unfreeze_trunk_blocks: int = 2,
+    unfreeze_structure_module: bool = False,
     dropout_in_frozen: bool = False,
 ) -> None:
     """
@@ -185,56 +258,39 @@ def train_model(
     if dropout_in_frozen:
         return
 
-    # same as comment in freeze_except_last_esm_layers
+    encoder_layers = model.esm.encoder.layer
+    n_frozen_esm = len(encoder_layers) - max(0, unfreeze_esm_layers)
+    for layer in encoder_layers[:n_frozen_esm]:
+        layer.eval()
+    for layer in encoder_layers[n_frozen_esm:]:
+        layer.train()
 
-    # encoder_layers = model.esm.encoder.layer
-    # n_trainable_esm = max(0, n_trainable_esm_layers)
-    # n_frozen_esm = len(encoder_layers) - n_trainable_esm
-    # for layer in encoder_layers[:n_frozen_esm]:
-    #     layer.eval()
-    # for layer in encoder_layers[n_frozen_esm:]:
-    #     layer.train()
-
-    n_trainable_trunk = max(0, n_trainable_esm_layers)
-    n_frozen_trunk = len(model.trunk.blocks) - n_trainable_trunk
+    n_frozen_trunk = len(model.trunk.blocks) - max(0, unfreeze_trunk_blocks)
     for block in model.trunk.blocks[:n_frozen_trunk]:
         block.eval()
     for block in model.trunk.blocks[n_frozen_trunk:]:
         block.train()
 
-    # model.trunk.structure_module.train()
-    # model.trunk.trunk2sm_s.train()
-    # model.trunk.trunk2sm_z.train()
+    if unfreeze_structure_module:
+        model.trunk.structure_module.train()
+        model.trunk.trunk2sm_s.train()
+        model.trunk.trunk2sm_z.train()
+    else:
+        model.trunk.structure_module.eval()
+        model.trunk.trunk2sm_s.eval()
+        model.trunk.trunk2sm_z.eval()
 
-
-def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2) -> None:
-    for param in model.parameters():
-        param.requires_grad = False
-
-    if n_layers <= 0:
-        return
-
-    # Not sure if we want to train ESM encoder, trunk, or structure module
-    
-    # for layer in model.esm.encoder.layer[-n_layers:]:
-    #     for param in layer.parameters():
-    #         param.requires_grad = True
-
-    for block in model.trunk.blocks[-n_layers:]:
-        for param in block.parameters():
-            param.requires_grad = True
-
-    # for param in model.trunk.structure_module.parameters():
-    #     param.requires_grad = True
-    # for param in model.trunk.trunk2sm_s.parameters():
-    #     param.requires_grad = True
-    # for param in model.trunk.trunk2sm_z.parameters():
-    #     param.requires_grad = True
 
 def trainable_parameter_count(model: torch.nn.Module) -> tuple[int, int]:
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     return trainable, total
+
+
+def _sample_num_recycles(max_recycles: int) -> int:
+    if max_recycles <= 0:
+        return 0
+    return random.randint(0, max_recycles)
 
 
 def compute_losses(
@@ -243,6 +299,9 @@ def compute_losses(
     protein,
     device: torch.device,
     loss_fn: ESMFoldLoss,
+    *,
+    num_recycles: int | None = None,
+    use_amp: bool = False,
 ) -> dict[str, torch.Tensor]:
     sequence = str(protein.seq)
     inputs = tokenizer(
@@ -252,12 +311,14 @@ def compute_losses(
     )
     inputs = {key: value.to(device) for key, value in inputs.items()}
 
-    outputs = model(**inputs)
-    if outputs.positions is None:
-        raise RuntimeError("ESMFold did not return positions.")
+    amp_enabled = use_amp and device.type == "cuda"
+    with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=amp_enabled):
+        outputs = model(**inputs, num_recycles=num_recycles)
+        if outputs.positions is None:
+            raise RuntimeError("ESMFold did not return positions.")
 
-    out, batch = pre_loss_conversion(outputs, protein, device=device)
-    total, breakdown = loss_fn(out, batch, _return_breakdown=True)
+        out, batch = pre_loss_conversion(outputs, protein, device=device)
+        total, breakdown = loss_fn(out, batch, _return_breakdown=True)
 
     return {
         "total": total,
@@ -273,20 +334,34 @@ def train_one_epoch(
     device,
     loss_fn: ESMFoldLoss,
     *,
-    n_trainable_esm_layers: int = 2,
+    unfreeze_esm_layers: int = 0,
+    unfreeze_trunk_blocks: int = 2,
+    unfreeze_structure_module: bool = False,
     dropout_in_frozen: bool = False,
+    train_recycles: int = 1,
+    randomize_recycles: bool = True,
+    use_amp: bool = False,
+    grad_clip_norm: float | None = 1.0,
 ) -> dict[str, float]:
-    train_model(
+    apply_training_mode(
         model,
-        n_trainable_esm_layers=n_trainable_esm_layers,
+        unfreeze_esm_layers=unfreeze_esm_layers,
+        unfreeze_trunk_blocks=unfreeze_trunk_blocks,
+        unfreeze_structure_module=unfreeze_structure_module,
         dropout_in_frozen=dropout_in_frozen,
     )
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp and device.type == "cuda")
     totals = defaultdict(lambda: 0.0)
     n = 0
 
     for batch in tqdm(loader, desc="train", leave=False):
         for protein in batch:
             optimizer.zero_grad(set_to_none=True)
+            if randomize_recycles and train_recycles > 1:
+                num_recycles = _sample_num_recycles(train_recycles)
+            else:
+                num_recycles = train_recycles
+
             try:
                 losses = compute_losses(
                     model,
@@ -294,17 +369,43 @@ def train_one_epoch(
                     protein,
                     device,
                     loss_fn,
+                    num_recycles=num_recycles,
+                    use_amp=use_amp,
                 )
-            except (ValueError, RuntimeError) as e:
-                print(e)
+            except (ValueError, RuntimeError, torch.cuda.OutOfMemoryError) as e:
+                if isinstance(e, torch.cuda.OutOfMemoryError):
+                    print(f"OOM on seq len {len(protein.seq)}, skipping")
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+                else:
+                    print(e)
                 continue
 
-            losses["total"].backward()
-            optimizer.step()
+            if scaler.is_enabled():
+                scaler.scale(losses["total"]).backward()
+                if grad_clip_norm is not None:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        [p for p in model.parameters() if p.requires_grad],
+                        grad_clip_norm,
+                    )
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                losses["total"].backward()
+                if grad_clip_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(
+                        [p for p in model.parameters() if p.requires_grad],
+                        grad_clip_norm,
+                    )
+                optimizer.step()
 
             for key, value in losses.items():
                 totals[key] += float(value.detach())
             n += 1
+
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
 
     if n == 0:
         return totals
@@ -316,6 +417,8 @@ def test_model(
     tokenizer,
     loader,
     device,
+    *,
+    infer_recycles: int | None = None,
 ):
     model.eval()
     with torch.no_grad():
@@ -331,7 +434,7 @@ def test_model(
                 )
                 inputs = {key: value.to(device) for key, value in inputs.items()}
 
-                output = model(**inputs)
+                output = model(**inputs, num_recycles=infer_recycles)
                 if output.positions is None:
                     raise RuntimeError("ESMFold did not return positions.")
 

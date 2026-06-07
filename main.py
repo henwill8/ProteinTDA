@@ -21,6 +21,7 @@ from esmfold_finetune import (
 from loss import ESMFoldLoss
 from model_config import LOSS_CONFIG
 
+
 def set_seed(seed: int = 42) -> None:
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -36,7 +37,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--unfreeze-esm-layers", type=int, default=2)
+    parser.add_argument("--unfreeze-trunk-blocks", type=int, default=2)
+    parser.add_argument("--unfreeze-structure-module", type=bool, default=False)
+    parser.add_argument("--unfreeze-esm-layers", type=int, default=0)
+    parser.add_argument("--train-recycles", type=int, default=1) # Should be 8, but for memory purposes keeping it low for now
+    parser.add_argument("--trunk-chunk-size", type=int, default=4)
+    parser.add_argument("--amp", type=bool, default=True)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--log-file", type=Path, default=Path("logs/kfold_test_scores.log"))
     return parser.parse_args(argv)
@@ -61,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         force_download = False,
         complete_structures_only = not args.allow_incomplete,
     )
-    
+
     if len(dataset) > 1000:
         dataset = dataset[-1000:]
 
@@ -76,7 +82,10 @@ def main(argv: list[str] | None = None) -> int:
         model = build_model(
             args.model,
             device,
-            n_trainable_esm_layers=args.unfreeze_esm_layers,
+            unfreeze_esm_layers=args.unfreeze_esm_layers,
+            unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
+            unfreeze_structure_module=args.unfreeze_structure_module,
+            trunk_chunk_size=args.trunk_chunk_size,
         )
         trainable, total = trainable_parameter_count(model)
         print(f"Trainable parameters: {trainable:,} / {total:,}")
@@ -101,7 +110,6 @@ def main(argv: list[str] | None = None) -> int:
         optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
 
         for epoch in range(args.epochs):
-            # needs to be updated to randomize num_recycles every batch
             metrics = train_one_epoch(
                 model,
                 tokenizer,
@@ -109,7 +117,11 @@ def main(argv: list[str] | None = None) -> int:
                 optimizer,
                 device,
                 loss_fn=ESMFoldLoss(config=LOSS_CONFIG),
-                n_trainable_esm_layers=args.unfreeze_esm_layers,
+                unfreeze_esm_layers=args.unfreeze_esm_layers,
+                unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
+                unfreeze_structure_module=args.unfreeze_structure_module,
+                train_recycles=args.train_recycles,
+                use_amp=args.amp,
             )
             print(
                 f"epoch {epoch + 1}/{args.epochs}"
