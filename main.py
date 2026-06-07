@@ -2,9 +2,10 @@
 
 import sys
 import argparse
+import copy
 from pathlib import Path
 import numpy as np
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, train_test_split
 
 import sidechainnet as scn
 
@@ -34,7 +35,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--casp-thinning", type=int, default=30)
     parser.add_argument("--allow-incomplete", type=bool, default=False)
     parser.add_argument("--scn-dir", type=Path, default=Path("sidechainnet_data"))
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--unfreeze-trunk-blocks", type=int, default=2)
@@ -68,8 +70,9 @@ def main(argv: list[str] | None = None) -> int:
         complete_structures_only = not args.allow_incomplete,
     )
 
-    if len(dataset) > 1000:
-        dataset = dataset[-1000:]
+    #if len(dataset) > 1000:
+    #    dataset = dataset[-1000:]
+    dataset=dataset[:5]
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
     fold_plddt_scores: list[float] = []
@@ -89,14 +92,25 @@ def main(argv: list[str] | None = None) -> int:
         )
         trainable, total = trainable_parameter_count(model)
         print(f"Trainable parameters: {trainable:,} / {total:,}")
+        
+        # This will give us a 60/20/20 split
+        train_idx, val_idx = train_test_split(train_idx, test_size=0.25)
 
         train_dataset = [dataset[i] for i in train_idx]
+        val_dataset = [dataset[i] for i in val_idx]
         test_dataset = [dataset[i] for i in test_idx]
 
         train_loader = DataLoader(
             dataset = train_dataset,
             batch_size = args.batch_size,
             shuffle = True,
+            collate_fn = lambda x: x,
+        )
+
+        val_loader = DataLoader(
+            dataset = val_dataset,
+            batch_size = args.batch_size,
+            shuffle = False,
             collate_fn = lambda x: x,
         )
 
@@ -108,6 +122,10 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
+
+        best_model_weights = None
+        max_val_tm = 0.0 
+        patience = 0
 
         for epoch in range(args.epochs):
             metrics = train_one_epoch(
@@ -123,11 +141,31 @@ def main(argv: list[str] | None = None) -> int:
                 train_recycles=args.train_recycles,
                 use_amp=args.amp,
             )
+            _, val_tm_score = test_model(
+                model,
+                tokenizer,
+                val_loader,
+                device,
+            )
+            if val_tm_score > max_val_tm:
+                max_val_tm = val_tm_score
+                patience = 0
+                best_model_weights = copy.deepcopy(model.state_dict())
+            else:
+                patience += 1
+
             print(
                 f"epoch {epoch + 1}/{args.epochs}"
                 + "\n" + "  ".join(f"{key}={value:.4f}" for key, value in metrics.items())
                 + f"\nfold {fold + 1}/{kf.n_splits}"
             )
+
+            if patience > args.patience:
+                print(f"Early stoppping at epoch {epoch}")
+                break
+
+        if best_model_weights is not None:
+            model.load_state_dict(best_model_weights)
 
         plddt_score, tm_score = test_model(
             model,
