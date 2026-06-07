@@ -76,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         model = build_model(
             args.model,
             device,
-            unfreeze_esm_layers=args.unfreeze_esm_layers,
+            n_trainable_esm_layers=args.unfreeze_esm_layers,
         )
         trainable, total = trainable_parameter_count(model)
         print(f"Trainable parameters: {trainable:,} / {total:,}")
