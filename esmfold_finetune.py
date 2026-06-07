@@ -1,6 +1,6 @@
 """
-Fine-tune facebook/esmfold_v1 with frozen weights except the last ESM encoder layers,
-adding a topological (Wasserstein) loss on C_beta/C_alpha distance matrices (TDA).
+Fine-tune facebook/esmfold_v1 adding a topological (Wasserstein)
+loss on C_beta/C_alpha distance matrices (TDA).
 
 Model: https://huggingface.co/facebook/esmfold_v1
 """
@@ -31,6 +31,10 @@ from data_conversions import (
     SideChainAtom,
 )
 from loss import ESMFoldLoss
+
+
+def _esm_encoder_is_trainable(model: EsmForProteinFolding) -> bool:
+    return any(p.requires_grad for p in model.esm.encoder.layer.parameters())
 
 
 def _forward_preserve_esm_grad(
@@ -73,7 +77,9 @@ def _forward_preserve_esm_grad(
     if cfg.esm_ablate_sequence:
         esm_s = esm_s * 0
 
-    if not self.training:
+    # Keep ESM in the graph only if encoder layers are being trained, otherwise
+    # detach to avoid backprop through the full model.
+    if not self.training or not _esm_encoder_is_trainable(self):
         esm_s = esm_s.detach()
 
     esm_s = (self.esm_s_combine.softmax(0).unsqueeze(0) @ esm_s).squeeze(2)
@@ -128,14 +134,17 @@ def _forward_preserve_esm_grad(
 
     ptm_logits = self.ptm_head(structure["s_z"])
     structure["ptm_logits"] = ptm_logits
-    try:
-        structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=self.distogram_bins)
-    except IndexError:
+    if self.training:
+        # ptm is unused by the training loss and compute_tm can fail on short chains
         structure["ptm"] = None
-
-    structure.update(
-        compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=self.distogram_bins)
-    )
+    else:
+        try:
+            structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=self.distogram_bins)
+        except IndexError:
+            structure["ptm"] = None
+        structure.update(
+            compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=self.distogram_bins)
+        )
 
     return EsmForProteinFoldingOutput(**structure)
 
@@ -149,7 +158,7 @@ def build_model(
     model_name: str,
     device: torch.device,
     *,
-    unfreeze_esm_layers: int = 2,
+    n_trainable_esm_layers: int = 2,
     esm_half: bool = True,
 ) -> EsmForProteinFolding:
     model = EsmForProteinFolding.from_pretrained(model_name, low_cpu_mem_usage=True).to(device)
@@ -157,7 +166,7 @@ def build_model(
         # potentially remove this or have trainable layers be fp32 if training is not stable
         model.esm = model.esm.half()
     patch_forward_for_training(model)
-    freeze_except_last_esm_layers(model, n_layers=unfreeze_esm_layers)
+    freeze_except_last_esm_layers(model, n_layers=n_trainable_esm_layers)
     model.trunk.set_chunk_size(64)
     return model
 
@@ -165,7 +174,7 @@ def build_model(
 def train_model(
     model: EsmForProteinFolding,
     *,
-    n_trainable_esm_layers: int,
+    n_trainable_esm_layers: int = 2,
     dropout_in_frozen: bool = False,
 ) -> None:
     """
@@ -176,14 +185,26 @@ def train_model(
     if dropout_in_frozen:
         return
 
-    encoder_layers = model.esm.encoder.layer
-    n_frozen_esm = max(0, len(encoder_layers) - n_trainable_esm_layers)
-    for layer in encoder_layers[:n_frozen_esm]:
-        layer.eval()
-    for layer in encoder_layers[n_frozen_esm:]:
-        layer.train()
+    # same as comment in freeze_except_last_esm_layers
 
-    model.trunk.eval()
+    # encoder_layers = model.esm.encoder.layer
+    # n_trainable_esm = max(0, n_trainable_esm_layers)
+    # n_frozen_esm = len(encoder_layers) - n_trainable_esm
+    # for layer in encoder_layers[:n_frozen_esm]:
+    #     layer.eval()
+    # for layer in encoder_layers[n_frozen_esm:]:
+    #     layer.train()
+
+    n_trainable_trunk = max(0, n_trainable_esm_layers)
+    n_frozen_trunk = len(model.trunk.blocks) - n_trainable_trunk
+    for block in model.trunk.blocks[:n_frozen_trunk]:
+        block.eval()
+    for block in model.trunk.blocks[n_frozen_trunk:]:
+        block.train()
+
+    # model.trunk.structure_module.train()
+    # model.trunk.trunk2sm_s.train()
+    # model.trunk.trunk2sm_z.train()
 
 
 def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2) -> None:
@@ -193,11 +214,22 @@ def freeze_except_last_esm_layers(model: EsmForProteinFolding, n_layers: int = 2
     if n_layers <= 0:
         return
 
-    encoder_layers = model.esm.encoder.layer
-    for layer in encoder_layers[-n_layers:]:
-        for param in layer.parameters():
+    # Not sure if we want to train ESM encoder, trunk, or structure module
+    
+    # for layer in model.esm.encoder.layer[-n_layers:]:
+    #     for param in layer.parameters():
+    #         param.requires_grad = True
+
+    for block in model.trunk.blocks[-n_layers:]:
+        for param in block.parameters():
             param.requires_grad = True
 
+    # for param in model.trunk.structure_module.parameters():
+    #     param.requires_grad = True
+    # for param in model.trunk.trunk2sm_s.parameters():
+    #     param.requires_grad = True
+    # for param in model.trunk.trunk2sm_z.parameters():
+    #     param.requires_grad = True
 
 def trainable_parameter_count(model: torch.nn.Module) -> tuple[int, int]:
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
