@@ -1,4 +1,5 @@
 import torch
+import random
 
 from openfold.utils.loss import (
     AlphaFoldLoss,
@@ -33,6 +34,10 @@ def wasserstein_loss(
 class ESMFoldLoss(AlphaFoldLoss):
     """AlphaFoldLoss without masked MSA or experimentally-resolved terms."""
 
+    def __init__(self, config):
+        super().__init__(config)
+        self.original_fape_config = config.fape
+
     def loss(self, out, batch, _return_breakdown=False):
         if self.config.violation.enabled and "violation" not in out:
             out["violation"] = find_structural_violations(
@@ -48,6 +53,12 @@ class ESMFoldLoss(AlphaFoldLoss):
                     out["sm"]["positions"][-1],
                 )
             )
+
+        if random.random() < 0.1:
+            self.config.fape.backbone.use_clamped_fape = None
+            self.config.fape.sidechain.use_clamped_fape = None
+        else:
+            self.config.fape = self.original_fape_config
 
         loss_fns = {
             "distogram": lambda: distogram_loss(

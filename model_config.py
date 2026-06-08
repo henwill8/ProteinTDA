@@ -17,21 +17,17 @@ LOSS_CONFIG = mlc.ConfigDict(
             "eps": _EPS,
             "weight": 0.3,
         },
-        "experimentally_resolved": {
-            "eps": _EPS,
-            "min_resolution": 0.1,
-            "max_resolution": 3.0,
-            "weight": 0.0,
-        },
         "fape": {
             "backbone": {
                 "clamp_distance": 10.0,
                 "loss_unit_distance": 10.0,
+                "use_clamped_fape": 0.9,
                 "weight": 0.5,
             },
             "sidechain": {
                 "clamp_distance": 10.0,
                 "length_scale": 10.0,
+                "use_clamped_fape": 0.9,
                 "weight": 0.5,
             },
             "eps": 1e-4,
@@ -61,8 +57,8 @@ LOSS_CONFIG = mlc.ConfigDict(
             "clash_overlap_tolerance": 1.5,
             "average_clashes": False,
             "eps": _EPS,
-            "weight": 0.0,
-            "enabled": False,
+            "weight": 1.0,
+            "enabled": True,
         },
         "tm": {
             "max_bin": 31,
