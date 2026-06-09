@@ -34,134 +34,6 @@ from data_conversions import (
 from loss import ESMFoldLoss
 
 
-def _esm_encoder_is_trainable(model: EsmForProteinFolding) -> bool:
-    return any(p.requires_grad for p in model.esm.encoder.layer.parameters())
-
-
-def _compute_esm_representations(model: EsmForProteinFolding, esmaa: torch.Tensor) -> torch.Tensor:
-    if _esm_encoder_is_trainable(model):
-        return model.compute_language_model_representations(esmaa)
-    with torch.no_grad():
-        return model.compute_language_model_representations(esmaa)
-
-
-def _forward_preserve_esm_grad(
-    self,
-    input_ids: torch.Tensor,
-    attention_mask: torch.Tensor | None = None,
-    position_ids: torch.Tensor | None = None,
-    masking_pattern: torch.Tensor | None = None,
-    num_recycles: int | None = None,
-    output_hidden_states: bool | None = False,
-    **kwargs,
-) -> EsmForProteinFoldingOutput:
-    """
-    ESMFold forward that keeps ESM representations in the autograd graph while training.
-
-    https://github.com/huggingface/transformers/blob/main/src/transformers/models/esm/modeling_esmfold.py#L2044
-    """
-    cfg = self.config.esmfold_config
-
-    aa = input_ids
-    batch_size = aa.shape[0]
-    seq_len = aa.shape[1]
-    device = input_ids.device
-    if attention_mask is None:
-        attention_mask = torch.ones_like(aa, device=device)
-    if position_ids is None:
-        position_ids = torch.arange(seq_len, device=device).expand_as(input_ids)
-
-    esmaa = self.af2_idx_to_esm_idx(aa, attention_mask)
-
-    if masking_pattern is not None:
-        masked_aa, esmaa, mlm_targets = self.bert_mask(aa, esmaa, attention_mask, masking_pattern)
-    else:
-        masked_aa = aa
-        mlm_targets = None
-
-    esm_s = _compute_esm_representations(self, esmaa)
-    esm_s = esm_s.to(self.esm_s_combine.dtype)
-
-    if cfg.esm_ablate_sequence:
-        esm_s = esm_s * 0
-
-    # Keep ESM in the graph only if encoder layers are being trained, otherwise
-    # detach to avoid backprop through the full model.
-    if not self.training or not _esm_encoder_is_trainable(self):
-        esm_s = esm_s.detach()
-
-    esm_s = (self.esm_s_combine.softmax(0).unsqueeze(0) @ esm_s).squeeze(2)
-    s_s_0 = self.esm_s_mlp(esm_s)
-
-    s_z_0 = s_s_0.new_zeros(batch_size, seq_len, seq_len, cfg.trunk.pairwise_state_dim)
-
-    if self.config.esmfold_config.embed_aa:
-        s_s_0 += self.embedding(masked_aa)
-
-    structure: dict = self.trunk(s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
-    structure = {
-        key: value
-        for key, value in structure.items()
-        if key
-        in [
-            "s_z",
-            "s_s",
-            "frames",
-            "sidechain_frames",
-            "unnormalized_angles",
-            "angles",
-            "positions",
-            "states",
-        ]
-    }
-
-    if mlm_targets:
-        structure["mlm_targets"] = mlm_targets
-
-    disto_logits = self.distogram_head(structure["s_z"])
-    disto_logits = (disto_logits + disto_logits.transpose(1, 2)) / 2
-    structure["distogram_logits"] = disto_logits
-
-    if not self.training:
-        structure["lm_logits"] = self.lm_head(structure["s_s"])
-
-    structure["aatype"] = aa
-    make_atom14_masks(structure)
-    for key in [
-        "atom14_atom_exists",
-        "atom37_atom_exists",
-    ]:
-        structure[key] *= attention_mask.unsqueeze(-1)
-    structure["residue_index"] = position_ids
-
-    lddt_head = self.lddt_head(structure["states"]).reshape(
-        structure["states"].shape[0], batch_size, seq_len, -1, self.lddt_bins
-    )
-    structure["lddt_head"] = lddt_head
-    structure["plddt"] = categorical_lddt(lddt_head[-1], bins=self.lddt_bins)
-
-    ptm_logits = self.ptm_head(structure["s_z"])
-    structure["ptm_logits"] = ptm_logits
-    if self.training:
-        # ptm is unused by the training loss and compute_tm can fail on short chains
-        structure["ptm"] = None
-    else:
-        try:
-            structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=self.distogram_bins)
-        except IndexError:
-            structure["ptm"] = None
-        structure.update(
-            compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=self.distogram_bins)
-        )
-
-    return EsmForProteinFoldingOutput(**structure)
-
-
-def patch_forward_for_training(model: EsmForProteinFolding) -> None:
-    """Replace ESMFold forward so losses can backprop into trainable ESM layers."""
-    model.forward = types.MethodType(_forward_preserve_esm_grad, model)
-
-
 def configure_finetuning(
     model: EsmForProteinFolding,
     *,
@@ -191,31 +63,6 @@ def configure_finetuning(
             param.requires_grad = True
 
 
-def install_trunk_grad_stop(model: EsmForProteinFolding, n_trainable_trunk_blocks: int) -> None:
-    """
-    Detach activations after the last frozen trunk block so backward skips earlier blocks.
-    """
-    existing = getattr(model, "_trunk_grad_stop_hook", None)
-    if existing is not None:
-        existing.remove()
-        model._trunk_grad_stop_hook = None
-
-    n_frozen = len(model.trunk.blocks) - n_trainable_trunk_blocks
-    if n_frozen <= 0:
-        return
-
-    def _detach_block_output(_module, _inputs, output):
-        if isinstance(output, tuple):
-            return tuple(x.detach() if torch.is_tensor(x) else x for x in output)
-        if torch.is_tensor(output):
-            return output.detach()
-        return output
-
-    model._trunk_grad_stop_hook = model.trunk.blocks[n_frozen - 1].register_forward_hook(
-        _detach_block_output
-    )
-
-
 def build_model(
     model_name: str,
     device: torch.device,
@@ -230,14 +77,12 @@ def build_model(
     if esm_half:
         # potentially remove this or have trainable layers be fp32 if training is not stable
         model.esm = model.esm.half()
-    # patch_forward_for_training(model)
     configure_finetuning(
         model,
         unfreeze_esm_layers=unfreeze_esm_layers,
         unfreeze_trunk_blocks=unfreeze_trunk_blocks,
         unfreeze_structure_module=unfreeze_structure_module,
     )
-    install_trunk_grad_stop(model, n_trainable_trunk_blocks=unfreeze_trunk_blocks)
     model.trunk.set_chunk_size(trunk_chunk_size)
     return model
 
@@ -399,6 +244,7 @@ def train_one_epoch(
                         grad_clip_norm,
                     )
                 optimizer.step()
+
 
             for key, value in losses.items():
                 totals[key] += float(value.detach())

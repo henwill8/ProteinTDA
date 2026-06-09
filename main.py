@@ -39,10 +39,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--unfreeze-trunk-blocks", type=int, default=2)
-    parser.add_argument("--unfreeze-structure-module", type=bool, default=False)
+    parser.add_argument("--unfreeze-structure-module", type=bool, default=True)
     parser.add_argument("--unfreeze-esm-layers", type=int, default=0)
-    parser.add_argument("--train-recycles", type=int, default=1) # Should be 8, but for memory purposes keeping it low for now
-    parser.add_argument("--trunk-chunk-size", type=int, default=4)
+    parser.add_argument("--train-recycles", type=int, default=8)
+    parser.add_argument("--trunk-chunk-size", type=int, default=64)
     parser.add_argument("--amp", type=bool, default=True)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--log-file", type=Path, default=Path("logs/kfold_test_scores.log"))
