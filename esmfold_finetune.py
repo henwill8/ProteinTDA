@@ -75,7 +75,9 @@ def build_model(
         unfreeze_structure_module=unfreeze_structure_module,
     )
     if gradient_checkpointing:
+        # Can pass in gradient_checkpointing_kwargs
         model.gradient_checkpointing_enable()
+        print(model.is_gradient_checkpointing)
     model.trunk.set_chunk_size(trunk_chunk_size)
     return model
 
