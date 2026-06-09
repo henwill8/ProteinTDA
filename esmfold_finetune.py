@@ -230,7 +230,7 @@ def build_model(
     if esm_half:
         # potentially remove this or have trainable layers be fp32 if training is not stable
         model.esm = model.esm.half()
-    patch_forward_for_training(model)
+    # patch_forward_for_training(model)
     configure_finetuning(
         model,
         unfreeze_esm_layers=unfreeze_esm_layers,
