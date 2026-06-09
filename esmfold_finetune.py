@@ -6,7 +6,6 @@ Model: https://huggingface.co/facebook/esmfold_v1
 """
 
 import random
-import types
 from collections import defaultdict
 
 import numpy as np
@@ -14,15 +13,6 @@ import torch
 from tmtools import tm_align
 from tqdm import tqdm
 from transformers import EsmForProteinFolding
-from transformers.models.esm.modeling_esmfold import (
-    EsmForProteinFoldingOutput,
-    categorical_lddt,
-)
-from transformers.models.esm.openfold_utils import (
-    compute_predicted_aligned_error,
-    compute_tm,
-    make_atom14_masks,
-)
 
 from data_conversions import (
     Atom14,
@@ -72,6 +62,7 @@ def build_model(
     unfreeze_structure_module: bool = False,
     trunk_chunk_size: int = 4,
     esm_half: bool = True,
+    gradient_checkpointing: bool = True,
 ) -> EsmForProteinFolding:
     model = EsmForProteinFolding.from_pretrained(model_name, low_cpu_mem_usage=True).to(device)
     if esm_half:
@@ -83,6 +74,8 @@ def build_model(
         unfreeze_trunk_blocks=unfreeze_trunk_blocks,
         unfreeze_structure_module=unfreeze_structure_module,
     )
+    if gradient_checkpointing:
+        model.gradient_checkpointing_enable()
     model.trunk.set_chunk_size(trunk_chunk_size)
     return model
 
@@ -244,7 +237,6 @@ def train_one_epoch(
                         grad_clip_norm,
                     )
                 optimizer.step()
-
 
             for key, value in losses.items():
                 totals[key] += float(value.detach())
