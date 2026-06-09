@@ -2,7 +2,6 @@
 
 import sys
 import argparse
-import copy
 from pathlib import Path
 import numpy as np
 from sklearn.model_selection import KFold, train_test_split
@@ -72,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if len(dataset) > 1000:
         dataset = dataset[-1000:]
+    # dataset = dataset[:5]
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
     fold_plddt_scores: list[float] = []
@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
             if val_tm_score > max_val_tm:
                 max_val_tm = val_tm_score
                 patience = 0
-                best_model_weights = copy.deepcopy(model.state_dict())
+                best_model_weights = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             else:
                 patience += 1
 
@@ -164,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
                 break
 
         if best_model_weights is not None:
-            model.load_state_dict(best_model_weights)
+            model.load_state_dict({k: v.to(device) for k, v in best_model_weights.items()})
 
         plddt_score, tm_score = test_model(
             model,
