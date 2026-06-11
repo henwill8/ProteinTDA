@@ -76,7 +76,7 @@ def build_model(
     )
     if gradient_checkpointing:
         # Can pass in gradient_checkpointing_kwargs
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": True})
+        model.gradient_checkpointing_enable()
         print(model.is_gradient_checkpointing)
     model.trunk.set_chunk_size(trunk_chunk_size)
     return model
