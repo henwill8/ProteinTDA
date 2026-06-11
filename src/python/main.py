@@ -33,7 +33,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--casp-version", default="debug")
     parser.add_argument("--casp-thinning", type=int, default=30)
     parser.add_argument("--allow-incomplete", type=bool, default=False)
-    parser.add_argument("--scn-dir", type=Path, default=Path("sidechainnet_data"))
+    parser.add_argument("--scn-dir", type=Path, default=Path("sidechainnet_data")) # Probably move this to data/sidechainnet
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-5)
