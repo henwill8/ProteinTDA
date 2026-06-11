@@ -8,3 +8,8 @@
 /output
 /logs
 *.out
+vpd/_cpp.cp312-win_amd64.pyd
+/vpd.egg-info
+/build
+/vpd/build
+/vpd/vpd.egg-info
