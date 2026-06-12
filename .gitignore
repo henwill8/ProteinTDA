@@ -7,3 +7,8 @@
 /__pycache__
 /output
 /logs
+*.pyc
+/vpd.egg-info
+*.pyd
+/vpd/build
+/vpd/vpd.egg-info
