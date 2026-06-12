@@ -1,4 +1,5 @@
 #include "heat_flow.hpp"
+#include "utils.hpp"
 
 torch::Tensor graph_laplacian(torch::Tensor adjacency, bool normalized) {
     TORCH_CHECK(adjacency.dim() == 2, "adjacency must be a 2D tensor");
@@ -84,15 +85,17 @@ torch::Tensor heat_vertex_function(
         if (normalize.value() == "rank") {
             f = torch::argsort(torch::argsort(f)) / f.size(0);
         } else if (normalize.value() == "minmax") {
-            f_min, f_max = f.min(), f.max();
-            if (f_max > f_min) {    
+            const auto f_min = f.min();
+            const auto f_max = f.max();
+            if ((f_max - f_min).item<double>() > 0) {
                 f = (f - f_min) / (f_max - f_min);
             } else {
                 f = torch::zeros_like(f);
             }
         } else if (normalize.value() == "zscore") {
-            f_mean, f_std = f.mean(), f.std();
-            if (f_std > 0) {
+            const auto f_mean = f.mean();
+            const auto f_std = f.std();
+            if (f_std.item<double>() > 0) {
                 f = (f - f_mean) / f_std;
             } else {
                 f = torch::zeros_like(f);

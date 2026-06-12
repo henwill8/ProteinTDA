@@ -14,7 +14,7 @@ setup(
     ext_modules=[
         CppExtension(
             'vpd._cpp',
-            ['./src/heat_flow.cpp'],
+            ['./src/heat_flow.cpp', './src/utils.cpp'],
             include_dirs=['./src/include'],
         ),
     ],
