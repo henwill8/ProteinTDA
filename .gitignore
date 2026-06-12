@@ -13,3 +13,5 @@ vpd/_cpp.cp312-win_amd64.pyd
 /build
 /vpd/build
 /vpd/vpd.egg-info
+/src/__pycache__
+*.pyc
