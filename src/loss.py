@@ -1,5 +1,6 @@
 import torch
 import random
+from vpd import _cpp
 
 from openfold.utils.loss import (
     AlphaFoldLoss,
@@ -14,7 +15,6 @@ from openfold.utils.loss import (
     violation_loss,
 )
 from persistence import pd_from_graph, wasserstein_distance
-
 
 def wasserstein_loss(
     pred_adj: torch.Tensor,
@@ -34,9 +34,11 @@ def wasserstein_loss(
 class ESMFoldLoss(AlphaFoldLoss):
     """AlphaFoldLoss without masked MSA or experimentally-resolved terms."""
 
-    def __init__(self, config):
+    def __init__(self, config, h0rff, h1rff):
         super().__init__(config)
         self.original_fape_config = config.fape
+        self.h0rff = h0rff
+        self.h1rff = h1rff
 
     def loss(self, out, batch, _return_breakdown=False):
         if self.config.violation.enabled and "violation" not in out:

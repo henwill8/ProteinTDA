@@ -20,6 +20,7 @@ from esmfold_finetune import (
 )
 from loss import ESMFoldLoss
 from model_config import LOSS_CONFIG
+from vpd_macros import create_heat_random_fourier_features 
 
 
 def set_seed(seed: int = 42) -> None:
@@ -55,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     device = torch.device(args.device)
 
     set_seed(seed=42)
+
+    h1rff = create_heat_random_fourier_features(n=1, axis_dim=10, resolution=100, R=20, tau=1, mask=None, seed=42)
+    h2rff = create_heat_random_fourier_features(n=2,  axis_dim=10, resolution=10, R=20, tau=1, mask=None, seed=42)
 
     print(f"Loading tokenizer for {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
@@ -135,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
                 train_loader,
                 optimizer,
                 device,
-                loss_fn=ESMFoldLoss(config=LOSS_CONFIG),
+                loss_fn=ESMFoldLoss(config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff),
                 unfreeze_esm_layers=args.unfreeze_esm_layers,
                 unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
                 unfreeze_structure_module=args.unfreeze_structure_module,

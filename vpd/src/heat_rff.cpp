@@ -13,14 +13,8 @@ double Heat_RFF::qdist(const std::array<double, 2>& p1, const std::array<double,
     return std::min(d_euclidean, d_line);
 }
 
-std::vector<double> Heat_RFF::generate_edge_weights(const std::optional<std::vector<int>>& mask) {
-  int num_nodes = this->dim;
-  size_t edges_size = static_cast<size_t>(this->dim * this->dim);
-  std::vector<double> edges(edges_size,0.0);
-
-  if (mask.has_value() && mask.value().size() != edges_size) {
-    throw std::invalid_argument("Mask size must match the size of the edge matrix");
-  }
+std::vector<std::array<double,2>> Heat_RFF::generate_nodes() {
+  const std::size_t num_nodes = static_cast<std::size_t>(this->dim);
 
   std::vector<std::array<double, 2>> nodes;
   nodes.reserve(num_nodes);
@@ -29,7 +23,7 @@ std::vector<double> Heat_RFF::generate_edge_weights(const std::optional<std::vec
   int last_x = 0;
   
   // This is designed to get us nodes in lexicographic order.
-  for (int iy = last_x; iy <= pts_per_axis; ++iy) {
+  for (int iy = last_x; iy < pts_per_axis; ++iy) {
     int end_x = (this->n == 2) ? iy : 0;
     for (int ix = 0; ix <= end_x; ++ix) {
       double x = ix * this->resolution;
@@ -38,30 +32,17 @@ std::vector<double> Heat_RFF::generate_edge_weights(const std::optional<std::vec
     }
   }
 
-  for(int i = 0; i < num_nodes; ++i) {
-    for (int j = 0; j < num_nodes; ++j) {
-      int edge_index = i * num_nodes + j;
-
-      if (mask.has_value() && mask.value()[edge_index] == 0) {
-        edges[edge_index] = 0.0;
-        continue;
-      }
-
-      edges[edge_index] = qdist(nodes[i], nodes[j]);
-    }
-  }
-
-  return edges;
+  return nodes;
 }
 
 double Heat_RFF::laplacian_symbol(const std::vector<double>& theta, int n) {
-  if (theta.size() != static_cast<size_t>(n) || edges.size() != static_cast<size_t>(n * n)) {
+  if (theta.size() != static_cast<size_t>(n)) {
     throw std::invalid_argument("Size mismatch between theta and edges matrix.");
   }
   double result = 0.0;
   for (int i = 0; i < n; ++i) {
       for (int64_t j = i + 1; j < n; ++j) {
-        double edge_weight = this->edges[i * n + j];
+        double edge_weight = qdist(this->nodes[i], this->nodes[j]); 
         if (edge_weight != 0.0) {
           double diff = theta[i] - theta[j];
           result += edge_weight * (1.0 - std::cos(diff));
@@ -116,7 +97,7 @@ torch::Tensor Heat_RFF::pd_to_vpd(torch::Tensor pd) {
     indices = iy;
   } else {
    //Formula for indices in lexicograpghic order x<= y, I can convince you its right in person Monday lol.
-   indices = (iy * (iy + 1))/2 + ix;
+   indices = (iy * (iy - 1))/2 + ix;
   }
 
   // I'm 85% sure this does what we expect
@@ -147,7 +128,7 @@ Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, co
     int points_per_axis = axis_dim * resolution;
     this->dim = (points_per_axis * points_per_axis - points_per_axis) / 2;
   }
-  this->edges = this->generate_edge_weights(mask);
+  this->nodes = this->generate_nodes();
   this->thetas = this->generate_random_thetas();
   this->weights = this->compute_theta_weights();
 }
