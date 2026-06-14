@@ -1,5 +1,4 @@
 #include "heat_flow.hpp"
-#include "utils.hpp"
 
 torch::Tensor graph_laplacian(torch::Tensor adjacency, bool normalized) {
     TORCH_CHECK(adjacency.dim() == 2, "adjacency must be a 2D tensor");
@@ -116,44 +115,3 @@ torch::Tensor lower_star_filtration_value(
     return std::get<0>(vertex_function.index_select(0, clique_vertices).max(0));
 }
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def(
-        "graph_laplacian",
-        &graph_laplacian,
-        "Compute graph Laplacian",
-        py::arg("adjacency"),
-        py::arg("normalized") = true
-    );
-    m.def(
-        "heat_kernel",
-        &heat_kernel,
-        "Compute heat kernel H(tau) = exp(-tau * L)",
-        py::arg("L"),
-        py::arg("tau")
-    );
-    m.def(
-        "heat_edge_weights",
-        &heat_edge_weights,
-        "Compute heat-based edge weights w_tau(u,v) = H(tau)_{uv}",
-        py::arg("adjacency"),
-        py::arg("tau") = 1.0,
-        py::arg("normalized") = true
-    );
-    m.def(
-        "heat_vertex_function",
-        &heat_vertex_function,
-        "Compute heat-derived vertex function for lower-star filtration",
-        py::arg("adjacency"),
-        py::arg("tau") = 1.0,
-        py::arg("source") = py::none(),
-        py::arg("method") = "content",
-        py::arg("normalize") = "rank"
-    );
-    m.def(
-        "lower_star_filtration_value",
-        &lower_star_filtration_value,
-        "Compute lower-star filtration value: f(sigma) = max_{v in sigma} f(v)",
-        py::arg("clique_vertices"),
-        py::arg("vertex_function")
-    );
-}
