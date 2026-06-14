@@ -216,3 +216,23 @@ public:
     return loss;
   }
 };
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  pybind11::class_<Heat_RFF>(m, "Heat_RFF")
+    .def(pybind11::init<int, int, double, int, double, const std::optional<std::vector<int>>&, std::optional<uint32_t>>(),
+        pybind11::arg("n"),
+        pybind11::arg("axis_dim"),
+        pybind11::arg("resolution"),
+        pybind11::arg("R"),
+        pybind11::arg("tau"),
+        pybind11::arg("mask") = pybind11:none,
+        pybind11::arg("seed") = pybind11:none())
+
+    .def("vpd_loss_vector", &Heat_RFF::vpd_loss_vector_,
+        pybind11::arg("pd1"),
+        pybind11::arg("pd2"))
+
+    .def("vpd_loss", &Heat_RFF::vpd_loss,
+        pybind11::arg("pd1"),
+        pybind11::arg("pd2"));
+}
