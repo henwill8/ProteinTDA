@@ -27,23 +27,30 @@ torch::Tensor straight_through_bincount(torch::Tensor indices, int64_t dim) {
     return StraightThroughBincount::apply(indices, dim);
 }
 
-// Quotient distance
 double Heat_RFF::dist_to_diagonal_grid(const std::array<double, 2>& p) const {
+    // Project p onto the diagonal (t, t)
+    double t = 0.5 * (p[0] + p[1]);
     const int points_per_axis = this->axis_dim * static_cast<int>(this->resolution);
-    double best = std::numeric_limits<double>::infinity();
-    for (int k = 0; k < points_per_axis; ++k) {
-        const double d = k * this->resolution;
-        const auto dx = p[0] - d;
-        const auto dy = p[1] - d;
-        best = std::min(best, std::sqrt(dx * dx + dy * dy));
-    }
-    return best;
+
+    double min_t = 0.0;
+    double max_t = (points_per_axis - 1) * this->resolution;
+
+    // Find closest grid value to (t, t)
+    double d_grid = std::round((t - min_t) / this->resolution) * this->resolution + min_t;
+    // Clamp to grid range
+    d_grid = std::clamp(d_grid, min_t, max_t);
+
+    double dx = p[0] - d_grid;
+    double dy = p[1] - d_grid;
+    return std::sqrt(dx * dx + dy * dy);
 }
 
+// Quotient distance
 double Heat_RFF::qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2) {
     const auto dx = p2[0] - p1[0];
     const auto dy = p2[1] - p1[1];
     const auto d_euclidean = std::sqrt(dx * dx + dy * dy);
+    // const auto d_line = (std::abs(p1[1] - p1[0]) / std::numbers::sqrt2) + (std::abs(p2[1] - p2[0]) / std::numbers::sqrt2);
     const auto d_line = dist_to_diagonal_grid(p1) + dist_to_diagonal_grid(p2);
     return std::min(d_euclidean, d_line);
 }
