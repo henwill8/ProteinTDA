@@ -1,9 +1,3 @@
-"""
-Local OpenFold loss config for ESMFold fine-tuning.
-
-Copied from ``openfold.config`` with Wasserstein TDA loss sections added.
-"""
-
 import ml_collections as mlc
 
 _EPS = 1e-8
@@ -20,6 +14,7 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
     }
 )
 
+# Copied from openfold.config
 LOSS_CONFIG = mlc.ConfigDict(
     {
         "distogram": {

@@ -19,7 +19,7 @@ from esmfold_finetune import (
     trainable_parameter_count,
 )
 from loss import ESMFoldLoss
-from model_config import LOSS_CONFIG
+from config import LOSS_CONFIG
 from vpd_macros import create_heat_random_fourier_features 
 
 
