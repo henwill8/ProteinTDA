@@ -97,39 +97,30 @@ std::vector<double> Heat_RFF::generate_random_thetas() {
 std::vector<double> Heat_RFF::compute_theta_weights() {
     std::vector<double> weights(this->R);
     std::vector<double> current_theta(this->dim);
-    const double edge_count = static_cast<double>(std::max(1, this->dim * (this->dim - 1) / 2));
-    const double coord_scale = std::max(
-        static_cast<double>(this->axis_dim) * this->resolution, 1.0);
 
     for (int r = 0; r < this->R; ++r) { 
         for (int i = 0; i < this->dim; ++i) {
             current_theta[i] = this->thetas[r * this->dim + i];
         }
 
-        const double lambda = laplacian_symbol(current_theta, this->dim)
-            / (edge_count * coord_scale);
+        const double lambda = laplacian_symbol(current_theta, this->dim);
         weights[r] = std::exp(-this->tau * lambda);
     }
     return weights;
 }
 
 torch::Tensor Heat_RFF::align_pd_to_grid(torch::Tensor pd) {
-  torch::Tensor aligned_pd = straight_through_round(pd * this->resolution);
+    torch::Tensor aligned_pd = straight_through_round(pd * this->resolution);
 
-  // It is likely that a few safety checks could be useful here. I'm not exactly sure though so we can talk about it later.
+    // It is likely that a few safety checks could be useful here. I'm not exactly sure though so we can talk about it later.
 
-  return aligned_pd;
+    return aligned_pd;
 }
 
 torch::Tensor Heat_RFF::pd_to_vpd(torch::Tensor pd) {
     torch::Tensor aligned_pd = align_pd_to_grid(pd);
-    torch::Tensor ix = straight_through_round(aligned_pd.select(1, 0));
-    torch::Tensor iy = straight_through_round(aligned_pd.select(1, 1));
-
-    const int64_t max_coord = static_cast<int64_t>(this->axis_dim * this->resolution) - 1;
-    ix = torch::clamp(ix, 0, static_cast<double>(max_coord));
-    iy = torch::clamp(iy, 0, static_cast<double>(max_coord));
-    ix = torch::minimum(ix, iy);
+    torch::Tensor ix = aligned_pd.select(1, 0);
+    torch::Tensor iy = aligned_pd.select(1, 1);
 
     torch::Tensor indices;
     if (this->n == 1) {
@@ -139,20 +130,12 @@ torch::Tensor Heat_RFF::pd_to_vpd(torch::Tensor pd) {
         indices = (iy * (iy - 1)) / 2 + ix;
     }
 
-    indices = torch::clamp(indices, 0, static_cast<double>(this->dim - 1));
     return straight_through_bincount(indices, this->dim);
 }
 
 torch::Tensor Heat_RFF::pd_diff(torch::Tensor pd1, torch::Tensor pd2) {
-    // Map both diagrams into the bounds of the grid [0, axis_dim] (if this is not mathematically viable lemme know)
-    torch::Tensor scale = torch::maximum(pd1.max(), pd2.max());
-    scale = torch::clamp(scale, 1e-8);
-    const double grid_extent = static_cast<double>(this->axis_dim);
-    torch::Tensor norm1 = pd1 / scale * grid_extent;
-    torch::Tensor norm2 = pd2 / scale * grid_extent;
-
-    torch::Tensor vpd1 = pd_to_vpd(norm1);
-    torch::Tensor vpd2 = pd_to_vpd(norm2);
+    torch::Tensor vpd1 = pd_to_vpd(pd1);
+    torch::Tensor vpd2 = pd_to_vpd(pd2);
 
     return vpd1 - vpd2;
 }
@@ -214,5 +197,9 @@ torch::Tensor Heat_RFF::vpd_loss(torch::Tensor pd1, torch::Tensor pd2) {
     torch::Tensor vpd_loss_vector = vpd_loss_vector_(pd1, pd2);
     torch::Tensor loss = torch::sum(torch::square(vpd_loss_vector));
     return loss;
+}
+
+torch::Tensor Heat_RFF::get_vpd(torch::Tensor pd) {
+    return pd_to_vpd(pd);
 }
 

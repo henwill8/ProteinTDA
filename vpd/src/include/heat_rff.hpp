@@ -68,4 +68,6 @@ public:
    *
    */
   torch::Tensor vpd_loss(torch::Tensor pd1, torch::Tensor pd2);
+
+  torch::Tensor get_vpd(torch::Tensor pd);
 };

@@ -31,7 +31,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     .def("vpd_loss", &Heat_RFF::vpd_loss,
         py::arg("pd1"),
-        py::arg("pd2"));
+        py::arg("pd2"))
+
+    .def("get_vpd", &Heat_RFF::get_vpd,
+        py::arg("pd"));
     m.def(
         "graph_laplacian",
         &graph_laplacian,
