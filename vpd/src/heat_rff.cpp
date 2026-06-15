@@ -8,17 +8,16 @@ torch::Tensor straight_through_round(torch::Tensor x) {
 class StraightThroughBincount : public torch::autograd::Function<StraightThroughBincount> {
     public:
         static torch::Tensor forward(torch::autograd::AutogradContext* ctx, torch::Tensor indices, int64_t dim) {
-            // indices might need to be rounded to int64 when passing to bincount
-            // auto indices = torch::round(indices).to(torch::kInt64);
+            auto indices_int = torch::round(indices).to(torch::kInt64);
             
-            ctx->save_for_backward({indices});
-            return torch::bincount(indices, {}, dim).to(indices.options().dtype(torch::kFloat64));
+            ctx->save_for_backward({indices_int});
+            return torch::bincount(indices_int, {}, dim).to(indices.options().dtype(torch::kFloat64));
         }
 
         static torch::autograd::variable_list backward(torch::autograd::AutogradContext* ctx, torch::autograd::variable_list grad_outputs) {
-            auto indices = ctx->get_saved_variables()[0];
+            auto indices_int = ctx->get_saved_variables()[0];
             auto grad_output = grad_outputs[0];
-            auto grad_indices = torch::index_select(grad_output, 0, indices); // if loss increases for a bin, points in that bin get the gradient
+            auto grad_indices = torch::index_select(grad_output, 0, indices_int); // if loss increases for a bin, points in that bin get the gradient
             return {grad_indices, torch::Tensor()};
         }
 };
@@ -50,8 +49,8 @@ double Heat_RFF::qdist(const std::array<double, 2>& p1, const std::array<double,
     const auto dx = p2[0] - p1[0];
     const auto dy = p2[1] - p1[1];
     const auto d_euclidean = std::sqrt(dx * dx + dy * dy);
-    // const auto d_line = (std::abs(p1[1] - p1[0]) / std::numbers::sqrt2) + (std::abs(p2[1] - p2[0]) / std::numbers::sqrt2);
-    const auto d_line = dist_to_diagonal_grid(p1) + dist_to_diagonal_grid(p2);
+    const auto d_line = (std::abs(p1[1] - p1[0]) / std::numbers::sqrt2) + (std::abs(p2[1] - p2[0]) / std::numbers::sqrt2);
+    // const auto d_line = dist_to_diagonal_grid(p1) + dist_to_diagonal_grid(p2);
     return std::min(d_euclidean, d_line);
 }
 

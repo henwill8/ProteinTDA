@@ -105,7 +105,11 @@ LOSS_CONFIG = mlc.ConfigDict(
             "weight": 1.0,
             "enabled": True,
         },
-        "vpd_loss": {
+        "vpd_h0": {
+            "weight": 1.0,
+            "enabled": True,
+        },
+        "vpd_h1": {
             "weight": 1.0,
             "enabled": True,
         },

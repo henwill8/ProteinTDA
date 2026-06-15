@@ -120,7 +120,9 @@ def atom37_to_atom14(atom37: torch.Tensor, batch: dict[str, torch.Tensor]) -> to
 
 def distance_matrix(positions: torch.Tensor) -> torch.Tensor:
     """Full pairwise distance matrix, shape (n, n)."""
-    return torch.cdist(positions, positions).fill_diagonal_(0.0).requires_grad_()
+    dists = torch.cdist(positions, positions).clone()
+    dists.fill_diagonal_(0.0)
+    return dists
 
 def pre_loss_conversion(
     esm_out: EsmForProteinFoldingOutput,
