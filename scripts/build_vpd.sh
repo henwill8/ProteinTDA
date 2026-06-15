@@ -31,5 +31,14 @@ resolve_python() {
 }
 
 PYTHON="$(resolve_python)"
+
+if ! "$PYTHON" -c "import torch" >/dev/null 2>&1; then
+  echo "error: torch is not installed in the active environment." >&2
+  echo "Install project requirements first, e.g. pip install -r requirements.txt" >&2
+  exit 1
+fi
+
+"$PYTHON" -m pip uninstall vpd -y >/dev/null 2>&1 || true
+
 cd "$VPD_DIR"
-"$PYTHON" setup.py build_ext --inplace
+"$PYTHON" -m pip install -e . --no-build-isolation

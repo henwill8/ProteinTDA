@@ -1,26 +1,32 @@
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CppExtension
 
-import sys
 import os
 
-if os.path.basename(os.getcwd()) != "vpd":
-    print("WARNING: You must run this setup.py script from the parent directory of 'vpd' for paths to resolve correctly.", file=sys.stderr)
-    sys.exit(1)
+include_dir = os.path.join("src", "include")
+sources = [
+    os.path.join("src", "heat_flow.cpp"),
+    os.path.join("src", "heat_rff.cpp"),
+    os.path.join("src", "bindings.cpp"),
+]
 
-include_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),'src', 'include')
+if os.name == "nt":
+    extra_compile_args = ["/O2", "/std:c++20"]
+else:
+    extra_compile_args = ["-O3", "-std=c++20"]
 
 setup(
-    name='vpd',
+    name="vpd",
+    version="0.1.0",
+    packages=["vpd"],
+    package_dir={"vpd": "."},
     ext_modules=[
         CppExtension(
-            '_cpp',
-            ['./src/heat_flow.cpp', './src/heat_rff.cpp', './src/bindings.cpp'],
+            name="vpd._cpp",
+            sources=sources,
             include_dirs=[include_dir],
-            extra_compile_args=['-O3', '-std=c++20']
+            extra_compile_args=extra_compile_args,
         ),
     ],
-    cmdclass={
-        'build_ext': BuildExtension
-    }
+    cmdclass={"build_ext": BuildExtension},
 )

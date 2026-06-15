@@ -9,10 +9,10 @@
 /output
 /logs
 *.out
-vpd/_cpp.cp312-win_amd64.pyd
-/vpd.egg-info
+vpd/_cpp*.pyd
+vpd/_cpp*.so
+vpd/*.egg-info
 /build
 /vpd/build
-/vpd/vpd.egg-info
 /src/__pycache__
 *.pyc
