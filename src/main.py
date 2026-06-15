@@ -19,7 +19,7 @@ from esmfold_finetune import (
     trainable_parameter_count,
 )
 from loss import ESMFoldLoss
-from config import LOSS_CONFIG
+from config import HEAT_RFF_CONFIG, LOSS_CONFIG
 from vpd_macros import create_heat_random_fourier_features 
 
 
@@ -57,8 +57,8 @@ def main(argv: list[str] | None = None) -> int:
 
     set_seed(seed=42)
 
-    h1rff = create_heat_random_fourier_features(n=1, axis_dim=10, resolution=100, R=20, tau=1, mask=None, seed=42)
-    h2rff = create_heat_random_fourier_features(n=2,  axis_dim=10, resolution=10, R=20, tau=1, mask=None, seed=42)
+    h0rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h0rff"])
+    h1rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h1rff"])
 
     print(f"Loading tokenizer for {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)

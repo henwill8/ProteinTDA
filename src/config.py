@@ -4,13 +4,24 @@ _EPS = 1e-8
 
 HEAT_RFF_CONFIG = mlc.ConfigDict(
     {
-        "n": 2,
-        "axis_dim": 100,
-        "resolution": 100,
-        "R": 100,
-        "tau": 1,
-        "mask": None,
-        "seed": 42
+        "h0rff": {
+            "n": 1,
+            "axis_dim": 100,
+            "resolution": 100,
+            "R": 20,
+            "tau": 1,
+            "mask": None,
+            "seed": 42
+        },
+        "h1rff": {
+            "n": 2,
+            "axis_dim": 10,
+            "resolution": 10,
+            "R": 20,
+            "tau": 1,
+            "mask": None,
+            "seed": 42
+        }
     }
 )
 
