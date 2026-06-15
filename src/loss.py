@@ -17,17 +17,14 @@ from openfold.utils.loss import (
 from persistence import pd_from_graph, wasserstein_distance
 
 def wasserstein_loss(
-    pred_adj: torch.Tensor,
-    target_adj: torch.Tensor,
+    pred_diags: torch.Tensor,
+    target_diags: torch.Tensor,
     *,
-    max_dimension: int = 2,
     hom_dim: int = 2,
 ) -> dict[str, torch.Tensor]:
     """Wasserstein distances between predicted and target persistence diagrams."""
-    target_diags = pd_from_graph(target_adj, max_dimension, hom_dim)
-    pred_diags = pd_from_graph(pred_adj, max_dimension, hom_dim)
     terms = wasserstein_distance(pred_diags, target_diags, hom_dim)
-    zero = torch.zeros((), device=pred_adj.device, dtype=pred_adj.dtype)
+    zero = torch.zeros((), device=pred_diags.device, dtype=pred_diags.dtype)
     return {f"h{i}": terms[i] if i < len(terms) else zero for i in range(hom_dim)}
 
 
@@ -102,10 +99,13 @@ class ESMFoldLoss(AlphaFoldLoss):
                 **{**batch, **self.config.chain_center_of_mass},
             )
 
+        target_diags = pd_from_graph(batch["adj"], **self.config.pd)
+        pred_diags = pd_from_graph(out["adj"], **self.config.pd)
+
         wasserstein_terms = wasserstein_loss(
-            pred_adj=out["adj"],
-            target_adj=batch["adj"],
-            **self.config.wasserstein,
+            pred_diags=pred_diags,
+            target_diags=target_diags,
+            **self.config.pd,
         )
 
         if self.config.wasserstein_h0.enabled:
@@ -113,6 +113,10 @@ class ESMFoldLoss(AlphaFoldLoss):
 
         if self.config.wasserstein_h1.enabled:
             loss_fns["wasserstein_h1"] = lambda: wasserstein_terms["h1"]
+
+        if self.config.vpd_loss.enabled:
+            loss_fns["vpd_h0"] = lambda: self.h0rff.vpd_loss(pred_diags[0], target_diags[0])
+            loss_fns["vpd_h1"] = lambda: self.h1rff.vpd_loss(pred_diags[1], target_diags[1])
 
         cum_loss = 0.0
         losses = {}

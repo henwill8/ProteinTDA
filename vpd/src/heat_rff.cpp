@@ -28,16 +28,23 @@ torch::Tensor straight_through_bincount(torch::Tensor indices, int64_t dim) {
 }
 
 // Quotient distance
+double Heat_RFF::dist_to_diagonal_grid(const std::array<double, 2>& p) const {
+    const int points_per_axis = this->axis_dim * static_cast<int>(this->resolution);
+    double best = std::numeric_limits<double>::infinity();
+    for (int k = 0; k < points_per_axis; ++k) {
+        const double d = k * this->resolution;
+        const auto dx = p[0] - d;
+        const auto dy = p[1] - d;
+        best = std::min(best, std::sqrt(dx * dx + dy * dy));
+    }
+    return best;
+}
+
 double Heat_RFF::qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2) {
-    // Euclidean distance
     const auto dx = p2[0] - p1[0];
     const auto dy = p2[1] - p1[1];
-    const auto d_euclidean = sqrt(dx * dx + dy * dy);
-
-    // Distance to line y = x - should be careful this is the distance to a point on the grid
-    const auto d_line = (std::abs(p1[1] - p1[0]) / std::numbers::sqrt2) + (std::abs(p2[1] - p2[0]) / std::numbers::sqrt2);
-
-    // TODO: fix this
+    const auto d_euclidean = std::sqrt(dx * dx + dy * dy);
+    const auto d_line = dist_to_diagonal_grid(p1) + dist_to_diagonal_grid(p2);
     return std::min(d_euclidean, d_line);
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 #include <cmath>
@@ -24,6 +25,7 @@ private:
   std::vector<double> weights;
 
   std::array<double, 2> node_at(int index) const;
+  double dist_to_diagonal_grid(const std::array<double, 2>& p) const;
   double qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2);
   double laplacian_symbol(const std::vector<double>& theta, int n);
   std::vector<double> generate_random_thetas();

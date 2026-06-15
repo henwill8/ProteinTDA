@@ -93,7 +93,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             "eps": _EPS,
             "enabled": False,
         },
-        "wasserstein": {
+        "pd": {
             "max_dimension": 2,
             "hom_dim": 2,
         },
@@ -102,6 +102,10 @@ LOSS_CONFIG = mlc.ConfigDict(
             "enabled": True,
         },
         "wasserstein_h1": {
+            "weight": 1.0,
+            "enabled": True,
+        },
+        "vpd_loss": {
             "weight": 1.0,
             "enabled": True,
         },
