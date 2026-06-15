@@ -12,7 +12,7 @@ class StraightThroughBincount : public torch::autograd::Function<StraightThrough
             // auto indices = torch::round(indices).to(torch::kInt64);
             
             ctx->save_for_backward({indices});
-            return torch::bincount(indices, {}, dim).to(torch::kFloat64);
+            return torch::bincount(indices, {}, dim).to(indices.options().dtype(torch::kFloat64));
         }
 
         static torch::autograd::variable_list backward(torch::autograd::AutogradContext* ctx, torch::autograd::variable_list grad_outputs) {
@@ -150,8 +150,9 @@ Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, co
 torch::Tensor Heat_RFF::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2) {
     torch::Tensor difference_vpd = pd_diff(pd1, pd2);
 
-    torch::Tensor theta_tensor = torch::from_blob(this->thetas.data(), {this->R, this->dim}, torch::kFloat64);
-    torch::Tensor weights_tensor = torch::from_blob(this->weights.data(), {this->R}, torch::kFloat64);
+    const auto tensor_options = difference_vpd.options().dtype(torch::kFloat64);
+    torch::Tensor theta_tensor = torch::from_blob(this->thetas.data(), {this->R, this->dim}, torch::kFloat64).clone().to(tensor_options);
+    torch::Tensor weights_tensor = torch::from_blob(this->weights.data(), {this->R}, torch::kFloat64).clone().to(tensor_options);
 
     // Calculating \langle \alpha, \theta^{(r)} \ranlge_{r = 1}^{R} (sorry I wrote it in LaTeX, I hope you understand it)
     // dim: [R, dim] x [dim] = [R], each ith entry is the ith dot product

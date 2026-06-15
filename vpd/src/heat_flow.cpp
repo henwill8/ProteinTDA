@@ -73,7 +73,7 @@ torch::Tensor heat_vertex_function(
         if (source.has_value()) {
             initial_source = source.value() / source.value().sum();
         } else {
-            initial_source = torch::ones(n) / n;
+            initial_source = torch::ones({n}, adjacency.options()) / static_cast<double>(n);
         }
         f = H * initial_source;
     } else {
