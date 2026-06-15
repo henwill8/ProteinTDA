@@ -31,6 +31,7 @@ private:
   torch::Tensor align_pd_to_grid(torch::Tensor pd);
   torch::Tensor pd_to_vpd(torch::Tensor pd);
   torch::Tensor pd_diff(torch::Tensor pd1, torch::Tensor pd2);
+  void init_dim();
 
 public:
   /** 
@@ -45,6 +46,9 @@ public:
    * @param[in] seed (optional) A seed for reproducible randomness. Defaults to 42. 
    */
   Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask = std::nullopt, std::optional<uint32_t> seed = std::nullopt);
+  Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights);
+  const std::vector<double>& get_thetas() const { return thetas; }
+  const std::vector<double>& get_weights() const { return weights; }
   /**
    * @brief Computes the loss between two persistent diagrams and returns it as a vector in 2R dimensional space.
    *

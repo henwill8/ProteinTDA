@@ -126,6 +126,17 @@ torch::Tensor Heat_RFF::pd_diff(torch::Tensor pd1, torch::Tensor pd2) {
     return vpd1 - vpd2;
 }
 
+void Heat_RFF::init_dim() {
+    if (this->n == 1) {
+        this->dim = this->axis_dim * this->resolution;
+    } else if (this->n == 2) {
+        const int points_per_axis = this->axis_dim * this->resolution;
+        this->dim = (points_per_axis * points_per_axis - points_per_axis) / 2;
+    } else {
+        throw std::invalid_argument("n must be 1 or 2");
+    }
+}
+
 Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask, std::optional<uint32_t> seed) {
     this->n = n;
     this->R = R;
@@ -137,14 +148,27 @@ Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, co
     } else {
         this->seed = seed.value();
     }
-    if (n == 1) {
-        this->dim = axis_dim * resolution;
-    } else if (n == 2) {
-        int points_per_axis = axis_dim * resolution;
-        this->dim = (points_per_axis * points_per_axis - points_per_axis) / 2;
-    }
+    this->init_dim();
     this->thetas = this->generate_random_thetas();
     this->weights = this->compute_theta_weights();
+}
+
+Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights) {
+    this->n = n;
+    this->R = R;
+    this->tau = tau;
+    this->resolution = resolution;
+    this->axis_dim = axis_dim;
+    this->seed = 0;
+    this->init_dim();
+    if (thetas.size() != static_cast<size_t>(this->R * this->dim)) {
+        throw std::invalid_argument("thetas size mismatch");
+    }
+    if (weights.size() != static_cast<size_t>(this->R)) {
+        throw std::invalid_argument("weights size mismatch");
+    }
+    this->thetas = thetas;
+    this->weights = weights;
 }
 
 torch::Tensor Heat_RFF::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2) {
