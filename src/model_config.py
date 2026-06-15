@@ -8,6 +8,18 @@ import ml_collections as mlc
 
 _EPS = 1e-8
 
+HEAT_RFF_CONFIG = mlc.ConfigDict(
+    {
+        "n": 2,
+        "axis_dim": 100,
+        "resolution": 100,
+        "R": 100,
+        "tau": 1,
+        "mask": None,
+        "seed": 42
+    }
+)
+
 LOSS_CONFIG = mlc.ConfigDict(
     {
         "distogram": {
