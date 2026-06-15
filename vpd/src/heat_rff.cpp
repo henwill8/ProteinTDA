@@ -1,6 +1,33 @@
 #include "heat_rff.hpp"
 
-  // Quotient distance
+// https://discuss.pytorch.org/t/torch-round-gradient/28628/9
+torch::Tensor straight_through_round(torch::Tensor x) {
+    return x + (torch::round(x) - x).detach();
+}
+
+class StraightThroughBincount : public torch::autograd::Function<StraightThroughBincount> {
+    public:
+        static torch::Tensor forward(torch::autograd::AutogradContext* ctx, torch::Tensor indices, int64_t dim) {
+            // indices might need to be rounded to int64 when passing to bincount
+            // auto indices = torch::round(indices).to(torch::kInt64);
+            
+            ctx->save_for_backward({indices});
+            return torch::bincount(indices, {}, dim).to(torch::kFloat64);
+        }
+
+        static torch::autograd::variable_list backward(torch::autograd::AutogradContext* ctx, torch::autograd::variable_list grad_outputs) {
+            auto indices = ctx->get_saved_variables()[0];
+            auto grad_output = grad_outputs[0];
+            auto grad_indices = torch::index_select(grad_output, 0, indices); // if loss increases for a bin, points in that bin get the gradient
+            return {grad_indices, torch::Tensor()};
+        }
+};
+
+torch::Tensor straight_through_bincount(torch::Tensor indices, int64_t dim) {
+    return StraightThroughBincount::apply(indices, dim);
+}
+
+// Quotient distance
 double Heat_RFF::qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2) {
     // Euclidean distance
     const auto dx = p2[0] - p1[0];
@@ -54,8 +81,8 @@ std::vector<double> Heat_RFF::generate_random_thetas() {
 }
 
 std::vector<double> Heat_RFF::compute_theta_weights() {
-    std::vector<double> weights(R);
-    std::vector<double> current_theta(dim);
+    std::vector<double> weights(this->R);
+    std::vector<double> current_theta(this->dim);
 
     for (int r = 0; r < this->R; ++r) { 
         for (int i = 0; i < this->dim; ++i) {
@@ -69,7 +96,7 @@ std::vector<double> Heat_RFF::compute_theta_weights() {
 }
 
 torch::Tensor Heat_RFF::align_pd_to_grid(torch::Tensor pd) {
-  torch::Tensor aligned_pd = torch::round(pd * this->resolution); 
+  torch::Tensor aligned_pd = straight_through_round(pd * this->resolution);
 
   // It is likely that a few safety checks could be useful here. I'm not exactly sure though so we can talk about it later.
 
@@ -78,9 +105,9 @@ torch::Tensor Heat_RFF::align_pd_to_grid(torch::Tensor pd) {
 
 torch::Tensor Heat_RFF::pd_to_vpd(torch::Tensor pd) {
     torch::Tensor aligned_pd = align_pd_to_grid(pd);
-    torch::Tensor ix = torch::round(aligned_pd.select(1, 0)).to(torch::kInt64);
-    torch::Tensor iy = torch::round(aligned_pd.select(1, 1)).to(torch::kInt64);
-    
+    torch::Tensor ix = straight_through_round(aligned_pd.select(1, 0));
+    torch::Tensor iy = straight_through_round(aligned_pd.select(1, 1));
+
     torch::Tensor indices;
     if (this->n == 1) {
         indices = iy;
@@ -89,8 +116,7 @@ torch::Tensor Heat_RFF::pd_to_vpd(torch::Tensor pd) {
         indices = (iy * (iy - 1))/2 + ix;
     }
 
-    // I'm 85% sure this does what we expect
-    return torch::bincount(indices, {}, this->dim).to(torch::kFloat64);
+    return straight_through_bincount(indices, this->dim);
 }
 
 torch::Tensor Heat_RFF::pd_diff(torch::Tensor pd1, torch::Tensor pd2) {
