@@ -10,73 +10,62 @@ double Heat_RFF::qdist(const std::array<double, 2>& p1, const std::array<double,
     // Distance to line y = x - should be careful this is the distance to a point on the grid
     const auto d_line = (std::abs(p1[1] - p1[0]) / std::numbers::sqrt2) + (std::abs(p2[1] - p2[0]) / std::numbers::sqrt2);
 
+    // TODO: fix this
     return std::min(d_euclidean, d_line);
 }
 
-std::vector<std::array<double,2>> Heat_RFF::generate_nodes() {
-  const std::size_t num_nodes = static_cast<std::size_t>(this->dim);
-
-  std::vector<std::array<double, 2>> nodes;
-  nodes.reserve(num_nodes);
-
-  int pts_per_axis = static_cast<int>(this->axis_dim * this->resolution);
-  int last_x = 0;
-  
-  // This is designed to get us nodes in lexicographic order.
-  for (int iy = last_x; iy < pts_per_axis; ++iy) {
-    int end_x = (this->n == 2) ? iy : 0;
-    for (int ix = 0; ix <= end_x; ++ix) {
-      double x = ix * this->resolution;
-      double y = iy * this->resolution;
-      nodes.push_back({x, y});
+std::array<double, 2> Heat_RFF::node_at(int index) const {
+    if (this->n == 1) {
+        return {0.0, index * this->resolution};
     }
-  }
 
-  return nodes;
+    const int iy = static_cast<int>((std::sqrt(8.0 * index + 1.0) - 1.0) / 2.0); // solution to iy(iy + 1) / 2 <= index
+    const int ix = index - iy * (iy + 1) / 2; // checks how many nodes were in the previous rows n(n + 1) / 2
+    return {ix * this->resolution, iy * this->resolution};
 }
 
 double Heat_RFF::laplacian_symbol(const std::vector<double>& theta, int n) {
-  if (theta.size() != static_cast<size_t>(n)) {
-    throw std::invalid_argument("Size mismatch between theta and edges matrix.");
-  }
-  double result = 0.0;
-  for (int i = 0; i < n; ++i) {
-      for (int64_t j = i + 1; j < n; ++j) {
-        double edge_weight = qdist(this->nodes[i], this->nodes[j]); 
-        if (edge_weight != 0.0) {
-          double diff = theta[i] - theta[j];
-          result += edge_weight * (1.0 - std::cos(diff));
+    if (theta.size() != static_cast<size_t>(n)) {
+        throw std::invalid_argument("Size mismatch between theta and edges matrix.");
+    }
+    double result = 0.0;
+    for (int i = 0; i < n; ++i) {
+        for (int64_t j = i + 1; j < n; ++j) {
+            double edge_weight = qdist(node_at(i), node_at(j));
+            if (edge_weight != 0.0) {
+                double diff = theta[i] - theta[j];
+                result += edge_weight * (1.0 - std::cos(diff));
+            }
         }
-      }
-  }
-  return result;
+    }
+    return result;
 }
 
 // Returns theta of given dimension
 std::vector<double> Heat_RFF::generate_random_thetas() {
-  std::mt19937 gen (this->seed);
-  const double TWO_PI = 2.0 * std::numbers::pi;
-  std::uniform_real_distribution<double> dist(0.0, TWO_PI);
-  std::vector<double> thetas(this->R * this->dim);
-  for (int i = 0; i < this->R * this->dim; ++i) {
-    thetas[i] = dist(gen);
-  }
-  return thetas;
+    std::mt19937 gen (this->seed);
+    const double TWO_PI = 2.0 * std::numbers::pi;
+    std::uniform_real_distribution<double> dist(0.0, TWO_PI);
+    std::vector<double> thetas(this->R * this->dim);
+    for (int i = 0; i < this->R * this->dim; ++i) {
+        thetas[i] = dist(gen);
+    }
+    return thetas;
 }
 
 std::vector<double> Heat_RFF::compute_theta_weights() {
-  std::vector<double> weights(R);
-  std::vector<double> current_theta(dim);
+    std::vector<double> weights(R);
+    std::vector<double> current_theta(dim);
 
-  for (int r = 0; r < this->R; ++r) { 
-    for (int i = 0; i < this->dim; ++i) {
-      current_theta[i] = this->thetas[r * this->dim + i];
+    for (int r = 0; r < this->R; ++r) { 
+        for (int i = 0; i < this->dim; ++i) {
+            current_theta[i] = this->thetas[r * this->dim + i];
+        }
+
+        double lambda = laplacian_symbol(current_theta, this->dim);
+        weights[r] = std::exp(-this->tau * lambda);
     }
-
-    double lambda = laplacian_symbol(current_theta, this->dim);
-    weights[r] = std::exp(-this->tau * lambda);
-  }
-  return weights;
+    return weights;
 }
 
 torch::Tensor Heat_RFF::align_pd_to_grid(torch::Tensor pd) {
@@ -88,73 +77,72 @@ torch::Tensor Heat_RFF::align_pd_to_grid(torch::Tensor pd) {
 }
 
 torch::Tensor Heat_RFF::pd_to_vpd(torch::Tensor pd) {
-  torch::Tensor aligned_pd = align_pd_to_grid(pd);
-  torch::Tensor ix = torch::round(aligned_pd.select(1, 0)).to(torch::kInt64);
-  torch::Tensor iy = torch::round(aligned_pd.select(1, 1)).to(torch::kInt64);
-  
-  torch::Tensor indices;
-  if (this -> n == 1) {
-    indices = iy;
-  } else {
-   //Formula for indices in lexicograpghic order x<= y, I can convince you its right in person Monday lol.
-   indices = (iy * (iy - 1))/2 + ix;
-  }
+    torch::Tensor aligned_pd = align_pd_to_grid(pd);
+    torch::Tensor ix = torch::round(aligned_pd.select(1, 0)).to(torch::kInt64);
+    torch::Tensor iy = torch::round(aligned_pd.select(1, 1)).to(torch::kInt64);
+    
+    torch::Tensor indices;
+    if (this->n == 1) {
+        indices = iy;
+    } else {
+        //Formula for indices in lexicograpghic order x<= y, I can convince you its right in person Monday lol.
+        indices = (iy * (iy - 1))/2 + ix;
+    }
 
-  // I'm 85% sure this does what we expect
-  return torch::bincount(indices, {}, this->dim).to(torch::kFloat64);
+    // I'm 85% sure this does what we expect
+    return torch::bincount(indices, {}, this->dim).to(torch::kFloat64);
 }
 
 torch::Tensor Heat_RFF::pd_diff(torch::Tensor pd1, torch::Tensor pd2) {
-  torch::Tensor vpd1 = pd_to_vpd(pd1);
-  torch::Tensor vpd2 = pd_to_vpd(pd2);
-  
-  return vpd1 - vpd2;
+    torch::Tensor vpd1 = pd_to_vpd(pd1);
+    torch::Tensor vpd2 = pd_to_vpd(pd2);
+    
+    return vpd1 - vpd2;
 }
 
 Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask, std::optional<uint32_t> seed) {
-  this->n = n;
-  this->R = R;
-  this->tau = tau;
-  this->resolution = resolution;
-  this->axis_dim = axis_dim;
-  if (seed == std::nullopt) { // < --- This could be changed to have true randomness instead
-    this->seed = 42;
-  } else {
-    this->seed = seed.value();
-  }
-  if (n == 1) {
-    this->dim = axis_dim * resolution;
-  } else if (n == 2) {
-    int points_per_axis = axis_dim * resolution;
-    this->dim = (points_per_axis * points_per_axis - points_per_axis) / 2;
-  }
-  this->nodes = this->generate_nodes();
-  this->thetas = this->generate_random_thetas();
-  this->weights = this->compute_theta_weights();
+    this->n = n;
+    this->R = R;
+    this->tau = tau;
+    this->resolution = resolution;
+    this->axis_dim = axis_dim;
+    if (seed == std::nullopt) { // < --- This could be changed to have true randomness instead
+        this->seed = 42;
+    } else {
+        this->seed = seed.value();
+    }
+    if (n == 1) {
+        this->dim = axis_dim * resolution;
+    } else if (n == 2) {
+        int points_per_axis = axis_dim * resolution;
+        this->dim = (points_per_axis * points_per_axis - points_per_axis) / 2;
+    }
+    this->thetas = this->generate_random_thetas();
+    this->weights = this->compute_theta_weights();
 }
 
 torch::Tensor Heat_RFF::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2) {
-  torch::Tensor difference_vpd = pd_diff(pd1, pd2);
+    torch::Tensor difference_vpd = pd_diff(pd1, pd2);
 
-  torch::Tensor theta_tensor = torch::from_blob(this->thetas.data(), {this->R, this->dim}, torch::kFloat64);
-  torch::Tensor weights_tensor = torch::from_blob(this->weights.data(), {this->R}, torch::kFloat64);
+    torch::Tensor theta_tensor = torch::from_blob(this->thetas.data(), {this->R, this->dim}, torch::kFloat64);
+    torch::Tensor weights_tensor = torch::from_blob(this->weights.data(), {this->R}, torch::kFloat64);
 
-  // Calculating \langle \alpha, \theta^{(r)} \ranlge_{r = 1}^{R} (sorry I wrote it in LaTeX, I hope you understand it)
-  // dim: [R, dim] x [dim] = [R], each ith entry is the ith dot product
-  torch::Tensor dot_products = torch::matmul(theta_tensor, difference_vpd);
+    // Calculating \langle \alpha, \theta^{(r)} \ranlge_{r = 1}^{R} (sorry I wrote it in LaTeX, I hope you understand it)
+    // dim: [R, dim] x [dim] = [R], each ith entry is the ith dot product
+    torch::Tensor dot_products = torch::matmul(theta_tensor, difference_vpd);
 
-  // This approximates both the Monte Carlo sampling bias and the scaling by the measure v_t. 
-  torch::Tensor scale = torch::sqrt(weights_tensor / static_cast<double>(this->R));
+    // This approximates both the Monte Carlo sampling bias and the scaling by the measure v_t. 
+    torch::Tensor scale = torch::sqrt(weights_tensor / static_cast<double>(this->R));
 
-  torch::Tensor cos_vals = scale * torch::cos(dot_products);
-  torch::Tensor sin_vals = scale * torch::sin(dot_products);
+    torch::Tensor cos_vals = scale * torch::cos(dot_products);
+    torch::Tensor sin_vals = scale * torch::sin(dot_products);
 
-  return torch::cat({cos_vals, sin_vals});
+    return torch::cat({cos_vals, sin_vals});
 }
 
 torch::Tensor Heat_RFF::vpd_loss(torch::Tensor pd1, torch::Tensor pd2) {
-  torch::Tensor vpd_loss_vector = vpd_loss_vector_(pd1, pd2);
-  torch::Tensor loss = torch::sum(torch::square(vpd_loss_vector));
-  return loss;
+    torch::Tensor vpd_loss_vector = vpd_loss_vector_(pd1, pd2);
+    torch::Tensor loss = torch::sum(torch::square(vpd_loss_vector));
+    return loss;
 }
 

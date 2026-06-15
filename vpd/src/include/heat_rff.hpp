@@ -20,12 +20,11 @@ private:
   int seed;
   double resolution;
   int axis_dim;
-  std::vector<std::array<double,2>> nodes;
   std::vector<double> thetas;
   std::vector<double> weights;
 
+  std::array<double, 2> node_at(int index) const;
   double qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2);
-  std::vector<std::array<double,2>> generate_nodes();
   double laplacian_symbol(const std::vector<double>& theta, int n);
   std::vector<double> generate_random_thetas();
   std::vector<double> compute_theta_weights();
