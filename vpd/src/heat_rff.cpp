@@ -137,30 +137,17 @@ void Heat_RFF::init_dim() {
     }
 }
 
-Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask, std::optional<uint32_t> seed) {
+void Heat_RFF::init_base(int n, int axis_dim, double resolution, int R, double tau, int seed) {
     this->n = n;
     this->R = R;
     this->tau = tau;
     this->resolution = resolution;
     this->axis_dim = axis_dim;
-    if (seed == std::nullopt) { // < --- This could be changed to have true randomness instead
-        this->seed = 42;
-    } else {
-        this->seed = seed.value();
-    }
-    this->init_dim();
-    this->thetas = this->generate_random_thetas();
-    this->weights = this->compute_theta_weights();
+    this->seed = seed;
+    init_dim();
 }
 
-Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights) {
-    this->n = n;
-    this->R = R;
-    this->tau = tau;
-    this->resolution = resolution;
-    this->axis_dim = axis_dim;
-    this->seed = 0;
-    this->init_dim();
+void Heat_RFF::set_thetas_and_weights(const std::vector<double>& thetas, const std::vector<double>& weights) {
     if (thetas.size() != static_cast<size_t>(this->R * this->dim)) {
         throw std::invalid_argument("thetas size mismatch");
     }
@@ -169,6 +156,16 @@ Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, co
     }
     this->thetas = thetas;
     this->weights = weights;
+}
+
+Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask, std::optional<uint32_t> seed) {
+    init_base(n, axis_dim, resolution, R, tau, seed.value_or(42));
+    set_thetas_and_weights(generate_random_thetas(), compute_theta_weights());
+}
+
+Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights) {
+    init_base(n, axis_dim, resolution, R, tau, 0);
+    set_thetas_and_weights(thetas, weights);
 }
 
 torch::Tensor Heat_RFF::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2) {

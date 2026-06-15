@@ -31,7 +31,9 @@ private:
   torch::Tensor align_pd_to_grid(torch::Tensor pd);
   torch::Tensor pd_to_vpd(torch::Tensor pd);
   torch::Tensor pd_diff(torch::Tensor pd1, torch::Tensor pd2);
+  void init_base(int n, int axis_dim, double resolution, int R, double tau, int seed);
   void init_dim();
+  void set_thetas_and_weights(const std::vector<double>& thetas, const std::vector<double>& weights);
 
 public:
   /** 
@@ -43,7 +45,7 @@ public:
    * @param[in] R The number of samples to take.
    * @param[in] tau The temperature value to use for the heat kernel computations
    * @param[in] mask (optional) A mask to make some of the edges 0
-   * @param[in] seed (optional) A seed for reproducible randomness. Defaults to 42. 
+   * @param[in] seed (optional) A seed for reproducible randomness. Defaults to 42.
    */
   Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask = std::nullopt, std::optional<uint32_t> seed = std::nullopt);
   Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights);
