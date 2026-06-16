@@ -24,6 +24,7 @@ private:
   std::vector<double> thetas;
   std::vector<double> weights;
 
+  int points_per_axis() const;
   std::array<double, 2> node_at(int index) const;
   double dist_to_diagonal_grid(const std::array<double, 2>& p) const;
   double qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2);

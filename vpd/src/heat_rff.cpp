@@ -10,7 +10,6 @@ class StraightThroughBincount : public torch::autograd::Function<StraightThrough
     public:
         static torch::Tensor forward(torch::autograd::AutogradContext* ctx, torch::Tensor indices, int64_t dim) {
             auto indices_int = torch::round(indices).to(torch::kInt64);
-            
             ctx->save_for_backward({indices_int});
             return torch::bincount(indices_int, {}, dim).to(indices.options().dtype(torch::kFloat64));
         }
@@ -27,13 +26,18 @@ torch::Tensor straight_through_bincount(torch::Tensor indices, int64_t dim) {
     return StraightThroughBincount::apply(indices, dim);
 }
 
+int Heat_RFF::points_per_axis() const {
+    // subtract one to avoid going over the edge of the grid
+    // though perhaps we might want to switch it to including the edge since we are discluding (0, 0)?
+    return this->axis_dim * static_cast<int>(this->resolution) - 1;
+}
+
 double Heat_RFF::dist_to_diagonal_grid(const std::array<double, 2>& p) const {
     // Project p onto the diagonal (t, t)
     double t = 0.5 * (p[0] + p[1]);
-    const int points_per_axis = this->axis_dim * static_cast<int>(this->resolution);
 
     double min_t = 0.0;
-    double max_t = (points_per_axis - 1) * this->resolution;
+    double max_t = points_per_axis() * this->resolution;
 
     // Find closest grid value to (t, t)
     double d_grid = std::round((t - min_t) / this->resolution) * this->resolution + min_t;
@@ -113,7 +117,17 @@ torch::Tensor Heat_RFF::align_pd_to_grid(torch::Tensor pd) {
     torch::Tensor aligned_pd = straight_through_round(pd * this->resolution);
 
     // It is likely that a few safety checks could be useful here. I'm not exactly sure though so we can talk about it later.
-
+    
+    // Remove any indices that are greater than dim - 1, as that would create a shape mismatch
+    auto invalid_mask = aligned_pd > this->dim - 1;
+    if (invalid_mask.any().item<bool>()) {
+        auto invalid_indices = aligned_pd.masked_select(invalid_mask);
+        std::cout << "Bincount: Removing "
+                  << invalid_indices.size(0)
+                  << " indices >= dim (" << this->dim << "): "
+                  << invalid_indices << std::endl;
+        aligned_pd = aligned_pd.masked_select(~invalid_mask);
+    }
     return aligned_pd;
 }
 
@@ -134,10 +148,11 @@ torch::Tensor Heat_RFF::pd_to_vpd(torch::Tensor pd) {
 }
 
 torch::Tensor Heat_RFF::pd_diff(torch::Tensor pd1, torch::Tensor pd2) {
-    // Map both diagrams into the bounds of the grid [0, axis_dim] by the same scale factor (if this is not mathematically viable lemme know)
+    // Map both diagrams into the bounds of the grid using the same scale factor for both pd's
     torch::Tensor scale = torch::maximum(pd1.max(), pd2.max());
     scale = torch::clamp(scale, 1e-8);
-    const double grid_max = static_cast<double>(this->axis_dim);
+    // subtract 1 from points_per_axis as x starts at 0 and y starts at 1
+    const double grid_max = static_cast<double>(points_per_axis() - 1) / this->resolution;
     torch::Tensor norm1 = pd1 / scale * grid_max;
     torch::Tensor norm2 = pd2 / scale * grid_max;
 
@@ -150,11 +165,11 @@ torch::Tensor Heat_RFF::pd_diff(torch::Tensor pd1, torch::Tensor pd2) {
 }
 
 void Heat_RFF::init_dim() {
+    const int ppa = points_per_axis();
     if (this->n == 1) {
-        this->dim = this->axis_dim * this->resolution - 1;
+        this->dim = ppa;
     } else if (this->n == 2) {
-        const int points_per_axis = this->axis_dim * this->resolution;
-        this->dim = (points_per_axis * points_per_axis - points_per_axis) / 2;
+        this->dim = ppa * (ppa + 1) / 2;
     } else {
         throw std::invalid_argument("n must be 1 or 2");
     }
