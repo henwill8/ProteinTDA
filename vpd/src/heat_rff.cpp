@@ -57,7 +57,7 @@ double Heat_RFF::qdist(const std::array<double, 2>& p1, const std::array<double,
 
 std::array<double, 2> Heat_RFF::node_at(int index) const {
     if (this->n == 1) {
-        return {0.0, index * this->resolution};
+        return {(index + 1) * this->resolution};
     }
 
     const int iy = static_cast<int>((std::sqrt(8.0 * index + 1.0) - 1.0) / 2.0); // solution to iy(iy + 1) / 2 <= index
@@ -119,30 +119,39 @@ torch::Tensor Heat_RFF::align_pd_to_grid(torch::Tensor pd) {
 
 torch::Tensor Heat_RFF::pd_to_vpd(torch::Tensor pd) {
     torch::Tensor aligned_pd = align_pd_to_grid(pd);
-    torch::Tensor ix = aligned_pd.select(1, 0);
-    torch::Tensor iy = aligned_pd.select(1, 1);
+    torch::Tensor grid_x = aligned_pd.select(1, 0);
+    torch::Tensor grid_y = aligned_pd.select(1, 1);
 
     torch::Tensor indices;
     if (this->n == 1) {
-        indices = iy;
+        indices = grid_y - 1;
     } else {
         // Formula for indices in lexicographic order x <= y.
-        indices = (iy * (iy - 1)) / 2 + ix;
+        indices = (grid_y * (grid_y - 1)) / 2 + grid_x;
     }
 
     return straight_through_bincount(indices, this->dim);
 }
 
 torch::Tensor Heat_RFF::pd_diff(torch::Tensor pd1, torch::Tensor pd2) {
-    torch::Tensor vpd1 = pd_to_vpd(pd1);
-    torch::Tensor vpd2 = pd_to_vpd(pd2);
+    // Map both diagrams into the bounds of the grid [0, axis_dim] by the same scale factor (if this is not mathematically viable lemme know)
+    torch::Tensor scale = torch::maximum(pd1.max(), pd2.max());
+    scale = torch::clamp(scale, 1e-8);
+    const double grid_max = static_cast<double>(this->axis_dim);
+    torch::Tensor norm1 = pd1 / scale * grid_max;
+    torch::Tensor norm2 = pd2 / scale * grid_max;
+
+    torch::Tensor vpd1 = pd_to_vpd(norm1);
+    torch::Tensor vpd2 = pd_to_vpd(norm2);
+    // torch::Tensor vpd1 = pd_to_vpd(pd1);
+    // torch::Tensor vpd2 = pd_to_vpd(pd2);
 
     return vpd1 - vpd2;
 }
 
 void Heat_RFF::init_dim() {
     if (this->n == 1) {
-        this->dim = this->axis_dim * this->resolution;
+        this->dim = this->axis_dim * this->resolution - 1;
     } else if (this->n == 2) {
         const int points_per_axis = this->axis_dim * this->resolution;
         this->dim = (points_per_axis * points_per_axis - points_per_axis) / 2;
@@ -187,7 +196,7 @@ torch::Tensor Heat_RFF::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2) {
     // This approximates both the Monte Carlo sampling bias and the scaling by the measure v_t. 
     torch::Tensor scale = torch::sqrt(weights_tensor / static_cast<double>(this->R));
 
-    torch::Tensor cos_vals = scale * torch::cos(dot_products);
+    torch::Tensor cos_vals = scale * (1 - torch::cos(dot_products));
     torch::Tensor sin_vals = scale * torch::sin(dot_products);
 
     return torch::cat({cos_vals, sin_vals});
