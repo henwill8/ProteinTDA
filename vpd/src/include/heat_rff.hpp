@@ -27,8 +27,8 @@ private:
   int points_per_axis() const;
   std::array<double, 2> node_at(int index) const;
   double dist_to_diagonal_grid(const std::array<double, 2>& p) const;
-  double qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2);
-  double laplacian_symbol(const std::vector<double>& theta, int n);
+  double qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2) const;
+  double laplacian_symbol(const double* theta, int n) const;
   std::vector<double> generate_random_thetas();
   std::vector<double> compute_theta_weights();
   torch::Tensor align_pd_to_grid(torch::Tensor pd);

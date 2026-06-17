@@ -48,4 +48,5 @@ def create_heat_random_fourier_features(n, axis_dim, resolution, R=100, tau=1, m
 
 if __name__ == "__main__":
     print("Python is searching in these folders:", sys.path)
-    print(create_heat_random_fourier_features(**HEAT_RFF_CONFIG))
+    print(create_heat_random_fourier_features(**HEAT_RFF_CONFIG.h0rff))
+    print(create_heat_random_fourier_features(**HEAT_RFF_CONFIG.h1rff))

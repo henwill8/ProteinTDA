@@ -2,6 +2,10 @@
 #include <iostream>
 #include <tuple>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 // https://discuss.pytorch.org/t/torch-round-gradient/28628/9
 torch::Tensor straight_through_round(torch::Tensor x) {
     return x + (torch::round(x) - x).detach();
@@ -51,7 +55,7 @@ double Heat_RFF::dist_to_diagonal_grid(const std::array<double, 2>& p) const {
 }
 
 // Quotient distance
-double Heat_RFF::qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2) {
+double Heat_RFF::qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2) const {
     const auto dx = p2[0] - p1[0];
     const auto dy = p2[1] - p1[1];
     const auto d_euclidean = std::sqrt(dx * dx + dy * dy);
@@ -70,10 +74,7 @@ std::array<double, 2> Heat_RFF::node_at(int index) const {
     return {ix * this->resolution, iy * this->resolution};
 }
 
-double Heat_RFF::laplacian_symbol(const std::vector<double>& theta, int n) {
-    if (theta.size() != static_cast<size_t>(n)) {
-        throw std::invalid_argument("Size mismatch between theta and edges matrix.");
-    }
+double Heat_RFF::laplacian_symbol(const double* theta, int n) const {
     double result = 0.0;
     for (int i = 0; i < n; ++i) {
         for (int64_t j = i + 1; j < n; ++j) {
@@ -89,25 +90,34 @@ double Heat_RFF::laplacian_symbol(const std::vector<double>& theta, int n) {
 
 // Returns theta of given dimension
 std::vector<double> Heat_RFF::generate_random_thetas() {
-    std::mt19937 gen (this->seed);
     const double TWO_PI = 2.0 * std::numbers::pi;
-    std::uniform_real_distribution<double> dist(0.0, TWO_PI);
-    std::vector<double> thetas(this->R * this->dim);
-    for (int i = 0; i < this->R * this->dim; ++i) {
-        thetas[i] = dist(gen);
+    const int total = this->R * this->dim;
+    std::vector<double> thetas(total);
+
+#pragma omp parallel
+    {
+#ifdef _OPENMP
+        const int tid = omp_get_thread_num();
+#else
+        const int tid = 0;
+#endif
+        std::mt19937 gen(static_cast<uint32_t>(this->seed + tid)); // each thread needs a different generator
+        std::uniform_real_distribution<double> dist(0.0, TWO_PI);
+
+#pragma omp for
+        for (int i = 0; i < total; ++i) {
+            thetas[i] = dist(gen);
+        }
     }
     return thetas;
 }
 
 std::vector<double> Heat_RFF::compute_theta_weights() {
     std::vector<double> weights(this->R);
-    std::vector<double> current_theta(this->dim);
 
-    for (int r = 0; r < this->R; ++r) { 
-        for (int i = 0; i < this->dim; ++i) {
-            current_theta[i] = this->thetas[r * this->dim + i];
-        }
-
+#pragma omp parallel for
+    for (int r = 0; r < this->R; ++r) {
+        const double* current_theta = this->thetas.data() + r * this->dim;
         const double lambda = laplacian_symbol(current_theta, this->dim);
         weights[r] = std::exp(-this->tau * lambda);
     }
@@ -209,10 +219,11 @@ std::tuple<torch::Tensor,torch::Tensor> Heat_RFF::vpd_loss_vector_(torch::Tensor
     // dim: [R, dim] x [dim] = [R], each ith entry is the ith dot product
     torch::Tensor dot_products = torch::matmul(theta_tensor, difference_vpd);
 
+
     // This approximates both the Monte Carlo sampling bias and the scaling by the measure v_t. 
     torch::Tensor scale = torch::sqrt(weights_tensor / static_cast<double>(this->R));
 
-    torch::Tensor cos_vals = scale * (torch::cos(dot_products));
+    torch::Tensor cos_vals = scale * torch::cos(dot_products);
     torch::Tensor sin_vals = scale * torch::sin(dot_products);
 
     torch::Tensor cos_vals2 = scale * scale * (torch::cos(2 * dot_products));
