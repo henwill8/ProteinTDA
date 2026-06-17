@@ -1,5 +1,6 @@
 #include "heat_rff.hpp"
 #include <iostream>
+#include <tuple>
 
 // https://discuss.pytorch.org/t/torch-round-gradient/28628/9
 torch::Tensor straight_through_round(torch::Tensor x) {
@@ -197,7 +198,7 @@ Heat_RFF::Heat_RFF(int n, int axis_dim, double resolution, int R, double tau, co
     this->weights = weights;
 }
 
-torch::Tensor Heat_RFF::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2) {
+std::tuple<torch::Tensor,torch::Tensor> Heat_RFF::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2) {
     torch::Tensor difference_vpd = pd_diff(pd1, pd2);
 
     const auto tensor_options = difference_vpd.options().dtype(torch::kFloat64);
@@ -211,15 +212,21 @@ torch::Tensor Heat_RFF::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2) {
     // This approximates both the Monte Carlo sampling bias and the scaling by the measure v_t. 
     torch::Tensor scale = torch::sqrt(weights_tensor / static_cast<double>(this->R));
 
-    torch::Tensor cos_vals = scale * (1 - torch::cos(dot_products));
+    torch::Tensor cos_vals = scale * (torch::cos(dot_products));
     torch::Tensor sin_vals = scale * torch::sin(dot_products);
 
-    return torch::cat({cos_vals, sin_vals});
+    torch::Tensor cos_vals2 = scale * scale * (torch::cos(2 * dot_products));
+    torch::Tensor sin_vals2 = scale * scale * (torch::sin(2 * dot_products));
+
+    torch::Tensor vpd_loss_vector1 = torch::cat({cos_vals, sin_vals});
+    torch::Tensor vpd_loss_vector2 = torch::cat({cos_vals2, sin_vals2});
+
+    return std::make_tuple(vpd_loss_vector1,vpd_loss_vector2);
 }
 
 torch::Tensor Heat_RFF::vpd_loss(torch::Tensor pd1, torch::Tensor pd2) {
-    torch::Tensor vpd_loss_vector = vpd_loss_vector_(pd1, pd2);
-    torch::Tensor loss = torch::sum(torch::square(vpd_loss_vector));
+    torch::Tensor vpd_loss_vector = std::get<1>(vpd_loss_vector_(pd1, pd2));
+    torch::Tensor loss = torch::sum(vpd_loss_vector);
     return loss;
 }
 

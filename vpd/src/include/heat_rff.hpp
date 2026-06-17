@@ -55,12 +55,14 @@ public:
   const std::vector<double>& get_thetas() const { return thetas; }
   const std::vector<double>& get_weights() const { return weights; }
   /**
-   * @brief Computes the loss between two persistent diagrams and returns it as a vector in 2R dimensional space.
+   * @brief Computes the loss between two persistent diagrams 
    *
    * @param[in] pd1 The first persistent diagram.
    * @paran[in] pd2 The second persistent diagram
+   *
+   * @return A tuple of two tensors, the first being the loss_vector in 2R space, where the complex exponents are represented through cosine and sine, and a second loss vector using the doubles of the angles to compute the 2-norm.
    */
-  torch::Tensor vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2);
+  std::tuple<torch::Tensor,torch::Tensor> vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2);
   /**
    * @brief Computes the loss between two persistent diagrams and returns its L2 norm squared.
    *

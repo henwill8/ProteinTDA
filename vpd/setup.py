@@ -3,7 +3,8 @@ from torch.utils.cpp_extension import BuildExtension, CppExtension
 
 import os
 
-include_dir = os.path.join("src", "include")
+cwd = os.getcwd()
+include_dir = os.path.join(cwd,"src", "include")
 sources = [
     os.path.join("src", "heat_flow.cpp"),
     os.path.join("src", "heat_rff.cpp"),
