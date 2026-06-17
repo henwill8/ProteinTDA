@@ -7,16 +7,16 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
         "h0rff": {
             "n": 1,
             "axis_dim": 5,
-            "resolution": 100,
+            "resolution": 10,
             "R": 30,
-            "tau": 0.000001,
+            "tau": 0.00005,
             "mask": None,
             "seed": 42
         },
         "h1rff": {
             "n": 2,
             "axis_dim": 5,
-            "resolution": 100,
+            "resolution": 10,
             "R": 30,
             "tau": 0.000001,
             "mask": None,
@@ -34,6 +34,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             "no_bins": 64,
             "eps": _EPS,
             "weight": 0.3,
+            "enabled": True,
         },
         "fape": {
             "backbone": {
@@ -50,6 +51,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             },
             "eps": 1e-4,
             "weight": 1.0,
+            "enabled": True,
         },
         "plddt_loss": {
             "min_resolution": 0.1,
@@ -58,17 +60,20 @@ LOSS_CONFIG = mlc.ConfigDict(
             "no_bins": 50,
             "eps": _EPS,
             "weight": 0.01,
+            "enabled": True,
         },
         "masked_msa": {
             "num_classes": 23,
             "eps": _EPS,
             "weight": 2.0,
+            "enabled": True,
         },
         "supervised_chi": {
             "chi_weight": 0.5,
             "angle_norm_weight": 0.01,
             "eps": _EPS,
             "weight": 1.0,
+            "enabled": True,
         },
         "violation": { # if violation loss is enabled, then stereo_chemical_props.txt must be present in the openfold installation
             "violation_tolerance_factor": 12.0,

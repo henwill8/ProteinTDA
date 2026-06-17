@@ -38,6 +38,68 @@ class ESMFoldLoss(AlphaFoldLoss):
         self.h0rff = h0rff
         self.h1rff = h1rff
 
+    def _build_loss_fns(self, out, batch):
+        loss_fns = {}
+        cfg = self.config
+
+        def add(name, fn):
+            if cfg[name].enabled:
+                loss_fns[name] = fn
+
+        add("distogram", lambda: distogram_loss(
+            logits=out["distogram_logits"],
+            **batch,
+            **cfg.distogram,
+        ))
+        add("fape", lambda: fape_loss(
+            out,
+            batch,
+            cfg.fape
+        ))
+        add("plddt_loss", lambda: lddt_loss(
+            logits=out["lddt_logits"],
+            all_atom_pred_pos=out["final_atom_positions"],
+            **batch,
+            **cfg.plddt_loss,
+        ))
+        add("supervised_chi", lambda: supervised_chi_loss(
+            out["sm"]["angles"],
+            out["sm"]["unnormalized_angles"],
+            **batch,
+            **cfg.supervised_chi,
+        ))
+        add("violation", lambda: violation_loss(
+            out["violation"],
+            **batch,
+            **cfg.violation,
+        ))
+        add("tm", lambda: tm_loss(
+            logits=out["tm_logits"],
+            **out,
+            **batch,
+            **cfg.tm,
+        ))
+        add("chain_center_of_mass", lambda: chain_center_of_mass_loss(
+            all_atom_pred_pos=out["final_atom_positions"],
+            **batch,
+            **cfg.chain_center_of_mass,
+        ))
+
+        target_diags = pd_from_graph(batch["adj"], **cfg.pd)
+        pred_diags = pd_from_graph(out["adj"], **cfg.pd)
+        wasserstein_terms = wasserstein_loss(
+            pred_diags=pred_diags,
+            target_diags=target_diags,
+            hom_dim=cfg.pd.hom_dim,
+        )
+
+        add("wasserstein_h0", lambda: wasserstein_terms["h0"])
+        add("wasserstein_h1", lambda: wasserstein_terms["h1"])
+        add("vpd_h0", lambda: self.h0rff.vpd_loss(pred_diags[0], target_diags[0]))
+        add("vpd_h1", lambda: self.h1rff.vpd_loss(pred_diags[1], target_diags[1]))
+
+        return loss_fns
+
     def loss(self, out, batch, _return_breakdown=False):
         if self.config.violation.enabled and "violation" not in out:
             out["violation"] = find_structural_violations(
@@ -60,65 +122,7 @@ class ESMFoldLoss(AlphaFoldLoss):
         else:
             self.config.fape = self.original_fape_config
 
-        loss_fns = {
-            "distogram": lambda: distogram_loss(
-                logits=out["distogram_logits"],
-                **{**batch, **self.config.distogram},
-            ),
-            "fape": lambda: fape_loss(
-                out,
-                batch,
-                self.config.fape,
-            ),
-            "plddt_loss": lambda: lddt_loss(
-                logits=out["lddt_logits"],
-                all_atom_pred_pos=out["final_atom_positions"],
-                **{**batch, **self.config.plddt_loss},
-            ),
-            "supervised_chi": lambda: supervised_chi_loss(
-                out["sm"]["angles"],
-                out["sm"]["unnormalized_angles"],
-                **{**batch, **self.config.supervised_chi},
-            ),
-        }
-
-        if self.config.violation.enabled:
-            loss_fns["violation"] = lambda: violation_loss(
-                out["violation"],
-                **{**batch, **self.config.violation},
-            )
-
-        if self.config.tm.enabled:
-            loss_fns["tm"] = lambda: tm_loss(
-                logits=out["tm_logits"],
-                **{**batch, **out, **self.config.tm},
-            )
-
-        if self.config.chain_center_of_mass.enabled:
-            loss_fns["chain_center_of_mass"] = lambda: chain_center_of_mass_loss(
-                all_atom_pred_pos=out["final_atom_positions"],
-                **{**batch, **self.config.chain_center_of_mass},
-            )
-
-        target_diags = pd_from_graph(batch["adj"], **self.config.pd)
-        pred_diags = pd_from_graph(out["adj"], **self.config.pd)
-
-        wasserstein_terms = wasserstein_loss(
-            pred_diags=pred_diags,
-            target_diags=target_diags,
-            hom_dim=self.config.pd.hom_dim,
-        )
-
-        if self.config.wasserstein_h0.enabled:
-            loss_fns["wasserstein_h0"] = lambda: wasserstein_terms["h0"]
-
-        if self.config.wasserstein_h1.enabled:
-            loss_fns["wasserstein_h1"] = lambda: wasserstein_terms["h1"]
-
-        if self.config.vpd_h0.enabled:
-            loss_fns["vpd_h0"] = lambda: self.h0rff.vpd_loss(pred_diags[0], target_diags[0])
-        if self.config.vpd_h1.enabled:
-            loss_fns["vpd_h1"] = lambda: self.h1rff.vpd_loss(pred_diags[1], target_diags[1])
+        loss_fns = self._build_loss_fns(out, batch)
 
         cum_loss = 0.0
         losses = {}
