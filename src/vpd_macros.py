@@ -136,5 +136,5 @@ def create_heat_random_fourier_features(
 
 if __name__ == "__main__":
     print("Python is searching in these folders:", sys.path)
-    print(create_heat_random_fourier_features(**HEAT_RFF_CONFIG.h0rff))
-    print(create_heat_random_fourier_features(**HEAT_RFF_CONFIG.h1rff))
+    print(create_heat_random_fourier_features(**HEAT_RFF_CONFIG.h0rff, progress_batch=1))
+    print(create_heat_random_fourier_features(**HEAT_RFF_CONFIG.h1rff, progress_batch=1))
