@@ -10,7 +10,9 @@ include_dir = os.path.join(cwd, "src", "include")
 
 sources = [
     os.path.join("src", "straight_through.cpp"),
-    os.path.join("src", "heat_rff.cpp"),
+    os.path.join("src", "heat_kernel.cpp"),
+    os.path.join("src", "heat_kernel_builder.cpp"),
+    os.path.join("src", "vpd.cpp"),
     os.path.join("src", "bindings.cpp"),
 ]
 
