@@ -44,7 +44,8 @@ private:
     void reset_progress(int dim);
     void set_phase(Phase phase);
     void add_theta_ops(int count);
-    void add_weight_ops(int count);
+    void add_laplacian_ops(int count);
+    void add_weight_completed(int count);
 
 public:
     Heat_KernelBuilder(

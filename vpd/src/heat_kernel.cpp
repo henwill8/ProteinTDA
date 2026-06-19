@@ -48,15 +48,34 @@ std::array<double, 2> Heat_Kernel::node_at(int index) const {
     return {ix * this->resolution, iy * this->resolution};
 }
 
-double Heat_Kernel::laplacian_symbol(const double* theta, int n) const {
+double Heat_Kernel::laplacian_symbol(const double* theta, int n, Heat_KernelBuilder* builder) const {
+    const int progress_batch = builder != nullptr ? builder->progress_batch_ : Heat_KernelBuilder::DEFAULT_PROGRESS_BATCH;
     double result = 0.0;
-    for (int i = 0; i < n; ++i) {
-        for (int64_t j = i + 1; j < n; ++j) {
-            double edge_weight = qdist(node_at(i), node_at(j));
-            if (edge_weight != 0.0) {
-                double diff = theta[i] - theta[j];
-                result += edge_weight * (1.0 - std::cos(diff));
+
+#pragma omp parallel reduction(+ : result)
+    {
+        int local_completed = 0;
+
+#pragma omp for schedule(dynamic)
+        for (int i = 0; i < n; ++i) {
+            for (int64_t j = i + 1; j < n; ++j) {
+                double edge_weight = qdist(node_at(i), node_at(j));
+                if (edge_weight != 0.0) {
+                    double diff = theta[i] - theta[j];
+                    result += edge_weight * (1.0 - std::cos(diff));
+                }
+                if (builder != nullptr) {
+                    ++local_completed;
+                    if (local_completed >= progress_batch) {
+                        builder->add_laplacian_ops(local_completed);
+                        local_completed = 0;
+                    }
+                }
             }
+        }
+
+        if (builder != nullptr && local_completed > 0) {
+            builder->add_laplacian_ops(local_completed);
         }
     }
     return result;
@@ -101,28 +120,13 @@ std::vector<double> Heat_Kernel::generate_random_thetas(Heat_KernelBuilder* buil
 
 std::vector<double> Heat_Kernel::compute_theta_weights(Heat_KernelBuilder* builder) {
     std::vector<double> weights(this->R);
-    const int progress_batch = builder != nullptr ? builder->progress_batch_ : Heat_KernelBuilder::DEFAULT_PROGRESS_BATCH;
 
-#pragma omp parallel
-    {
-        int local_completed = 0;
-
-#pragma omp for schedule(dynamic)
-        for (int r = 0; r < this->R; ++r) {
-            const double* current_theta = this->thetas.data() + r * this->dim;
-            const double lambda = laplacian_symbol(current_theta, this->dim);
-            weights[r] = std::exp(-this->tau * lambda);
-            if (builder != nullptr) {
-                ++local_completed;
-                if (local_completed >= progress_batch) {
-                    builder->add_weight_ops(local_completed);
-                    local_completed = 0;
-                }
-            }
-        }
-
-        if (builder != nullptr && local_completed > 0) {
-            builder->add_weight_ops(local_completed);
+    for (int r = 0; r < this->R; ++r) {
+        const double* current_theta = this->thetas.data() + r * this->dim;
+        const double lambda = laplacian_symbol(current_theta, this->dim, builder);
+        weights[r] = std::exp(-this->tau * lambda);
+        if (builder != nullptr) {
+            builder->add_weight_completed(1);
         }
     }
     return weights;

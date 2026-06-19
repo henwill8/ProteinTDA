@@ -11,7 +11,6 @@ from tqdm import tqdm
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from vpd import _cpp
-from config import HEAT_RFF_CONFIG
 
 _CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "heat_rff"
 
@@ -132,9 +131,3 @@ def create_heat_random_fourier_features(
         cache_path,
     )
     return vpd
-
-
-if __name__ == "__main__":
-    print("Python is searching in these folders:", sys.path)
-    print(create_heat_random_fourier_features(**HEAT_RFF_CONFIG.h0rff, progress_batch=1))
-    print(create_heat_random_fourier_features(**HEAT_RFF_CONFIG.h1rff, progress_batch=1))

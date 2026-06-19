@@ -39,9 +39,12 @@ void Heat_KernelBuilder::add_theta_ops(int count) {
     completed_ops_.fetch_add(count, std::memory_order_relaxed);
 }
 
-void Heat_KernelBuilder::add_weight_ops(int count) {
+void Heat_KernelBuilder::add_laplacian_ops(int count) {
+    completed_ops_.fetch_add(count, std::memory_order_relaxed);
+}
+
+void Heat_KernelBuilder::add_weight_completed(int count) {
     weights_completed_.fetch_add(count, std::memory_order_relaxed);
-    completed_ops_.fetch_add(count * ops_per_weight_, std::memory_order_relaxed);
 }
 
 int64_t Heat_KernelBuilder::completed_ops() const {
