@@ -4,7 +4,7 @@ from transformers.models.esm.modeling_esmfold import EsmForProteinFoldingOutput
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
 from openfold.utils.tensor_utils import batched_gather
-from openfold.np import residue_constants as rc 
+from openfold.np import residue_constants as rc
 
 from enum import Enum
 
@@ -118,23 +118,86 @@ def atom37_to_atom14(atom37: torch.Tensor, batch: dict[str, torch.Tensor]) -> to
 
     return atom14_data
 
+
 def distance_matrix(positions: torch.Tensor) -> torch.Tensor:
     """Full pairwise distance matrix, shape (n, n)."""
-    dists = torch.cdist(positions, positions).clone()
+    dists = torch.cdist(positions, positions).clone() # Do we need the full matrix or can we use the upper triangle?
     dists.fill_diagonal_(0.0)
     return dists
 
-def pre_loss_conversion(
+
+def _loss_field_requirements(loss_config) -> dict[str, bool]:
+    cfg = loss_config
+    needs_tda = (
+        cfg.wasserstein_h0.enabled
+        or cfg.wasserstein_h1.enabled
+        or cfg.vpd_h0.enabled
+        or cfg.vpd_h1.enabled
+    )
+    needs_openfold_batch = any(
+        cfg[name].enabled
+        for name in (
+            "distogram",
+            "fape",
+            "plddt_loss",
+            "supervised_chi",
+            "violation",
+            "tm",
+            "chain_center_of_mass",
+        )
+    )
+    needs_final_atom_positions = cfg.plddt_loss.enabled or cfg.chain_center_of_mass.enabled
+    return {
+        "tda": needs_tda,
+        "openfold_batch": needs_openfold_batch,
+        "distogram": cfg.distogram.enabled,
+        "fape": cfg.fape.enabled,
+        "plddt": cfg.plddt_loss.enabled,
+        "chi": cfg.supervised_chi.enabled,
+        "violation": cfg.violation.enabled,
+        "tm": cfg.tm.enabled,
+        "needs_sm_positions": (
+            cfg.fape.enabled
+            or cfg.violation.enabled
+            or needs_final_atom_positions
+        ),
+        "needs_sm_frames": cfg.fape.enabled,
+        "needs_sm_angles": cfg.supervised_chi.enabled,
+        "needs_fape_frames_batch": cfg.fape.enabled,
+        "needs_chi_batch": cfg.supervised_chi.enabled,
+        "needs_resolution": cfg.plddt_loss.enabled,
+        "needs_pseudo_beta": cfg.distogram.enabled or cfg.tm.enabled,
+        "needs_final_atom_positions": needs_final_atom_positions,
+    }
+
+
+def _base_batch(sc_protein: SCNProtein, device: torch.device) -> dict[str, torch.Tensor]:
+    length = len(sc_protein.seq)
+    return {
+        "aatype": torch.tensor(
+            [rc.restype_order_with_x.get(aa, rc.restype_num) for aa in sc_protein.seq],
+            dtype=torch.long,
+            device=device,
+        ),
+        "seq_length": torch.tensor(length, device=device),
+        "residue_index": torch.arange(length, device=device),
+    }
+
+
+def _add_tda_fields(
+    out: dict,
+    batch: dict[str, torch.Tensor],
     esm_out: EsmForProteinFoldingOutput,
     sc_protein: SCNProtein,
     *,
     device: torch.device,
-    tda_atom: SideChainAtom = SideChainAtom.CB,
-):
+    tda_atom: SideChainAtom,
+) -> None:
     atom_exists = esm_out.atom14_atom_exists[0] if esm_out.atom14_atom_exists is not None else None
+    atom14_atom = Atom14.CB if tda_atom is SideChainAtom.CB else Atom14.CA
     pred_positions = atom_positions_from_atom14(
         esm_out.positions[-1][0],
-        Atom14.CB if tda_atom is SideChainAtom.CB else Atom14.CA,
+        atom14_atom,
         atom_exists,
     )
     target_positions = atom_positions_from_sidechainnet(
@@ -142,48 +205,68 @@ def pre_loss_conversion(
         tda_atom,
         device=device,
     )
-
-    out = {}
-    out["sm"] = {}
-    out["sm"]["frames"] = esm_out.frames
-    out["sm"]["sidechain_frames"] = esm_out.sidechain_frames
-    out["sm"]["positions"] = esm_out.positions
-    out["sm"]["angles"] = esm_out.angles
-    out["sm"]["unnormalized_angles"] = esm_out.unnormalized_angles
-    out["tm_logits"] = esm_out.ptm_logits
-    out["lddt_logits"] = esm_out.lddt_head[-1,:,:,1,:] # <- Looking at lddt loss in openfold, they extract C_Alpha which is why there is the 1. The -1 extracts the final iteration.
-    out["distogram_logits"] = esm_out.distogram_logits
-    out["final_affine_tensor"] = out["sm"]["frames"][-1]
     out["adj"] = distance_matrix(pred_positions)
-    # ? experimentally_resolved_logits
-    # ? masked_msa_logits
-
-
-    batch = {}
-    # batch from sc_protein
-    batch["aatype"] = torch.tensor(
-            [rc.restype_order_with_x.get(aa, rc.restype_num) for aa in sc_protein.seq], #rc.restype_num is 20, line 878 of residue constants - seems to be a fallback value
-            dtype=torch.long,
-            device=device
-            )
-    L = len(sc_protein.seq)
-    batch["seq_length"] = torch.tensor(L,device=device)
-    batch["residue_index"] = torch.arange(end=L, device=device)
-    batch = data_transforms.make_atom14_masks(batch) # <- This will make residx atom14_to_atom37 and atom37_to_atom14 along with atom37_atom_exists and atom14_atom_exists
-    batch["all_atom_positions"], batch["all_atom_mask"], batch["seq_mask"] = sidechainnet_to_atom37(sc_protein, device)
-    batch = data_transforms.make_atom14_positions(batch) # <- Makes atom14_gt_positions, atom14_gt_exists, atom14_alt_gt_exists, atom14_alt_gt_positions, atom14_atom_is_ambiguous
-    batch = data_transforms.atom37_to_frames(batch) # <- Gets input for sidechain FAPE loss 
-    batch = data_transforms.get_backbone_frames(batch) # <- Gets input for backbone FAPE loss
-    batch = data_transforms.atom37_to_torsion_angles("")(batch) # <- Prepares us for chi angles
-    batch = data_transforms.get_chi_angles(batch) # <- Everything for supervised chi loss
-    batch["resolution"] = torch.tensor(sc_protein.resolution if sc_protein.resolution is not None else 0.0, device=device) # <- Used in pLDDT loss
-    batch = data_transforms.make_pseudo_beta("")(batch) # <- Preparation for Distorgram Loss, pTM loss
-
-    batch = {
-        k: v.unsqueeze(0) for k, v in batch.items() 
-    }
-
     batch["adj"] = distance_matrix(target_positions).detach()
-    out["final_atom_positions"] = atom14_to_atom37(out["sm"]["positions"][-1], batch)
+
+
+def pre_loss_conversion(
+    esm_out: EsmForProteinFoldingOutput,
+    sc_protein: SCNProtein,
+    *,
+    device: torch.device,
+    loss_config,
+    tda_atom: SideChainAtom = SideChainAtom.CB,
+):
+    req = _loss_field_requirements(loss_config)
+    batch = _base_batch(sc_protein, device)
+    out: dict = {}
+
+    if req["openfold_batch"]:
+        batch = data_transforms.make_atom14_masks(batch)
+        batch["all_atom_positions"], batch["all_atom_mask"], batch["seq_mask"] = sidechainnet_to_atom37(
+            sc_protein, device
+        )
+        batch = data_transforms.make_atom14_positions(batch)
+        if req["needs_fape_frames_batch"]:
+            batch = data_transforms.atom37_to_frames(batch)
+            batch = data_transforms.get_backbone_frames(batch)
+        if req["needs_chi_batch"]:
+            batch = data_transforms.atom37_to_torsion_angles("")(batch)
+            batch = data_transforms.get_chi_angles(batch)
+        if req["needs_resolution"]:
+            batch["resolution"] = torch.tensor(
+                sc_protein.resolution if sc_protein.resolution is not None else 0.0,
+                device=device,
+            )
+        if req["needs_pseudo_beta"]:
+            batch = data_transforms.make_pseudo_beta("")(batch)
+
+        batch = {key: value.unsqueeze(0) for key, value in batch.items()}
+
+        if req["needs_sm_positions"] or req["needs_sm_frames"] or req["needs_sm_angles"]:
+            out["sm"] = {}
+            if req["needs_sm_positions"]:
+                out["sm"]["positions"] = esm_out.positions
+            if req["needs_sm_frames"]:
+                out["sm"]["frames"] = esm_out.frames
+                out["sm"]["sidechain_frames"] = esm_out.sidechain_frames
+                out["final_affine_tensor"] = esm_out.frames[-1]
+            if req["needs_sm_angles"]:
+                out["sm"]["angles"] = esm_out.angles
+                out["sm"]["unnormalized_angles"] = esm_out.unnormalized_angles
+
+        if req["distogram"]:
+            out["distogram_logits"] = esm_out.distogram_logits
+        if req["plddt"]:
+            out["lddt_logits"] = esm_out.lddt_head[-1, :, :, 1, :]
+        if req["tm"]:
+            out["tm_logits"] = esm_out.ptm_logits
+        if req["needs_final_atom_positions"]:
+            out["final_atom_positions"] = atom14_to_atom37(out["sm"]["positions"][-1], batch)
+    else:
+        batch = {key: value.unsqueeze(0) for key, value in batch.items()}
+
+    if req["tda"]:
+        _add_tda_fields(out, batch, esm_out, sc_protein, device=device, tda_atom=tda_atom)
 
     return out, batch

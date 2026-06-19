@@ -85,24 +85,38 @@ class ESMFoldLoss(AlphaFoldLoss):
             **cfg.chain_center_of_mass,
         ))
 
-        target_diags = pd_from_graph(batch["adj"], **cfg.pd)
-        pred_diags = pd_from_graph(out["adj"], **cfg.pd)
-        wasserstein_terms = wasserstein_loss(
-            pred_diags=pred_diags,
-            target_diags=target_diags,
-            hom_dim=cfg.pd.hom_dim,
+        needs_diags = (
+            cfg.wasserstein_h0.enabled
+            or cfg.wasserstein_h1.enabled
+            or cfg.vpd_h0.enabled
+            or cfg.vpd_h1.enabled
         )
 
-        add("wasserstein_h0", lambda: wasserstein_terms["h0"])
-        add("wasserstein_h1", lambda: wasserstein_terms["h1"])
-        
-        if cfg.vpd_h0.enabled and self.h0rff is None:
-            raise ValueError("vpd_h0 loss is enabled but h0rff was not provided")
-        if cfg.vpd_h1.enabled and self.h1rff is None:
-            raise ValueError("vpd_h1 loss is enabled but h1rff was not provided")
+        if needs_diags:
+            target_diags = pd_from_graph(batch["adj"], **cfg.pd)
+            pred_diags = pd_from_graph(out["adj"], **cfg.pd)
 
-        add("vpd_h0", lambda: self.h0rff.vpd_loss(pred_diags[0], target_diags[0]))
-        add("vpd_h1", lambda: self.h1rff.vpd_loss(pred_diags[1], target_diags[1]))
+        if cfg.wasserstein_h0.enabled or cfg.wasserstein_h1.enabled:
+            wasserstein_terms = wasserstein_loss(
+                pred_diags=pred_diags,
+                target_diags=target_diags,
+                hom_dim=cfg.pd.hom_dim,
+            )
+
+            if cfg.wasserstein_h0.enabled:
+                add("wasserstein_h0", lambda: wasserstein_terms["h0"])
+            if cfg.wasserstein_h1.enabled:
+                add("wasserstein_h1", lambda: wasserstein_terms["h1"])
+
+        if cfg.vpd_h0.enabled:
+            if self.h0rff is None:
+                raise ValueError("vpd_h0 loss is enabled but h0rff was not provided")
+            add("vpd_h0", lambda: self.h0rff.vpd_loss(pred_diags[0], target_diags[0]))
+
+        if cfg.vpd_h1.enabled:
+            if self.h1rff is None:
+                raise ValueError("vpd_h1 loss is enabled but h1rff was not provided")
+            add("vpd_h1", lambda: self.h1rff.vpd_loss(pred_diags[1], target_diags[1]))
 
         return loss_fns
 
@@ -114,7 +128,7 @@ class ESMFoldLoss(AlphaFoldLoss):
                 **self.config.violation,
             )
 
-        if "renamed_atom14_gt_positions" not in out:
+        if self.config.fape.enabled and "renamed_atom14_gt_positions" not in batch:
             batch.update(
                 compute_renamed_ground_truth(
                     batch,
