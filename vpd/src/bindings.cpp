@@ -21,9 +21,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def_property_readonly("completed_ops", &Heat_KernelBuilder::completed_ops)
     .def_property_readonly("total_ops", &Heat_KernelBuilder::total_ops)
     .def_property_readonly("thetas_completed", &Heat_KernelBuilder::thetas_completed)
-    .def_property_readonly("weights_completed", &Heat_KernelBuilder::weights_completed)
+    .def_property_readonly("lambdas_completed", &Heat_KernelBuilder::lambdas_completed)
     .def_property_readonly("total_thetas", &Heat_KernelBuilder::total_thetas)
-    .def_property_readonly("total_weights", &Heat_KernelBuilder::total_weights)
+    .def_property_readonly("total_lambdas", &Heat_KernelBuilder::total_lambdas)
     .def_property_readonly("fraction", &Heat_KernelBuilder::fraction)
     .def_property_readonly("done", &Heat_KernelBuilder::done)
     .def_property_readonly("phase", &Heat_KernelBuilder::phase);
@@ -45,8 +45,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("R"),
         py::arg("tau"),
         py::arg("thetas"),
-        py::arg("weights"))
+        py::arg("lambdas"))
     .def_property_readonly("thetas", &Heat_Kernel::get_thetas)
+    .def_property_readonly("lambdas", &Heat_Kernel::get_lambdas)
     .def_property_readonly("weights", &Heat_Kernel::get_weights);
 
   py::class_<VPD>(m, "VPD")
@@ -61,5 +62,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def("get_vpd", &VPD::get_vpd,
         py::arg("pd"))
     .def_property_readonly("thetas", &VPD::get_thetas)
+    .def_property_readonly("lambdas", &VPD::get_lambdas)
     .def_property_readonly("weights", &VPD::get_weights);
 }

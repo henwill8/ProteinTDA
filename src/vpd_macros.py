@@ -15,8 +15,8 @@ from vpd import _cpp
 _CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "heat_rff"
 
 
-def _heat_rff_cache_path(n, axis_dim, resolution, R, tau, mask, seed):
-    key = repr((n, axis_dim, resolution, R, tau, mask, seed))
+def _heat_rff_cache_path(n, axis_dim, resolution, R, mask, seed):
+    key = repr((n, axis_dim, resolution, R, mask, seed))
     digest = hashlib.sha256(key.encode()).hexdigest()[:32]
     return _CACHE_DIR / f"{digest}.pt"
 
@@ -44,9 +44,9 @@ def _update_kernel_progress(pbar: tqdm, builder) -> int:
     if builder.phase == "thetas":
         done = _format_count_pair(builder.thetas_completed, builder.total_thetas)
         pbar.set_postfix(phase="thetas", done=done, refresh=False)
-    elif builder.phase == "weights":
-        done = _format_count_pair(builder.weights_completed, builder.total_weights)
-        pbar.set_postfix(phase="weights", done=done, refresh=False)
+    elif builder.phase == "lambdas":
+        done = _format_count_pair(builder.lambdas_completed, builder.total_lambdas)
+        pbar.set_postfix(phase="lambdas", done=done, refresh=False)
     else:
         pbar.set_postfix(phase=builder.phase, refresh=False)
     return completed
@@ -98,11 +98,11 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, lab
 def create_heat_random_fourier_features(
     n, axis_dim, resolution, R=100, tau=1, mask=None, seed=42, show_progress=True, progress_batch=100,
 ):
-    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, tau, mask, seed)
+    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, mask, seed)
     if cache_path.is_file():
         cached = torch.load(cache_path, weights_only=False)
         kernel = _cpp.Heat_Kernel(
-            n, axis_dim, resolution, R, tau, cached["thetas"], cached["weights"]
+            n, axis_dim, resolution, R, tau, cached["thetas"], cached["lambdas"]
         )
         return _cpp.VPD(kernel)
 
@@ -122,11 +122,10 @@ def create_heat_random_fourier_features(
             "axis_dim": axis_dim,
             "resolution": resolution,
             "R": R,
-            "tau": tau,
             "mask": mask,
             "seed": seed,
             "thetas": vpd.thetas,
-            "weights": vpd.weights,
+            "lambdas": vpd.lambdas,
         },
         cache_path,
     )

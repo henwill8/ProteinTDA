@@ -118,18 +118,24 @@ std::vector<double> Heat_Kernel::generate_random_thetas(Heat_KernelBuilder* buil
     return thetas;
 }
 
-std::vector<double> Heat_Kernel::compute_theta_weights(Heat_KernelBuilder* builder) {
-    std::vector<double> weights(this->R);
+std::vector<double> Heat_Kernel::compute_lambdas(Heat_KernelBuilder* builder) {
+    std::vector<double> result(this->R);
 
     for (int r = 0; r < this->R; ++r) {
         const double* current_theta = this->thetas.data() + r * this->dim;
-        const double lambda = laplacian_symbol(current_theta, this->dim, builder);
-        weights[r] = std::exp(-this->tau * lambda);
+        result[r] = laplacian_symbol(current_theta, this->dim, builder);
         if (builder != nullptr) {
-            builder->add_weight_completed(1);
+            builder->add_lambda_completed(1);
         }
     }
-    return weights;
+    return result;
+}
+
+void Heat_Kernel::apply_tau() {
+    this->weights.resize(this->lambdas.size());
+    for (size_t r = 0; r < this->lambdas.size(); ++r) {
+        this->weights[r] = std::exp(-this->tau * this->lambdas[r]);
+    }
 }
 
 void Heat_Kernel::init_dim() {
@@ -156,11 +162,13 @@ void Heat_Kernel::init_base(int n, int axis_dim, double resolution, int R, doubl
 Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask, std::optional<uint32_t> seed) {
     init_base(n, axis_dim, resolution, R, tau, seed.value_or(42));
     this->thetas = generate_random_thetas();
-    this->weights = compute_theta_weights();
+    this->lambdas = compute_lambdas();
+    apply_tau();
 }
 
-Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights) {
+Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& lambdas) {
     init_base(n, axis_dim, resolution, R, tau, 0);
     this->thetas = thetas;
-    this->weights = weights;
+    this->lambdas = lambdas;
+    apply_tau();
 }

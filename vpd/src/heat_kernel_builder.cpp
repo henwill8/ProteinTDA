@@ -21,12 +21,12 @@ Heat_KernelBuilder::Heat_KernelBuilder(
 
 void Heat_KernelBuilder::reset_progress(int dim) {
     total_thetas_ = this->R * dim;
-    total_weights_ = this->R;
-    ops_per_weight_ = static_cast<int64_t>(dim) * (dim - 1) / 2;
-    total_ops_ = static_cast<int64_t>(total_thetas_) + static_cast<int64_t>(total_weights_) * ops_per_weight_;
+    total_lambdas_ = this->R;
+    ops_per_lambda_ = static_cast<int64_t>(dim) * (dim - 1) / 2;
+    total_ops_ = static_cast<int64_t>(total_thetas_) + static_cast<int64_t>(total_lambdas_) * ops_per_lambda_;
     completed_ops_.store(0, std::memory_order_relaxed);
     thetas_completed_.store(0, std::memory_order_relaxed);
-    weights_completed_.store(0, std::memory_order_relaxed);
+    lambdas_completed_.store(0, std::memory_order_relaxed);
     phase_.store(Phase::Init, std::memory_order_relaxed);
 }
 
@@ -43,8 +43,8 @@ void Heat_KernelBuilder::add_laplacian_ops(int count) {
     completed_ops_.fetch_add(count, std::memory_order_relaxed);
 }
 
-void Heat_KernelBuilder::add_weight_completed(int count) {
-    weights_completed_.fetch_add(count, std::memory_order_relaxed);
+void Heat_KernelBuilder::add_lambda_completed(int count) {
+    lambdas_completed_.fetch_add(count, std::memory_order_relaxed);
 }
 
 int64_t Heat_KernelBuilder::completed_ops() const {
@@ -55,8 +55,8 @@ int Heat_KernelBuilder::thetas_completed() const {
     return thetas_completed_.load(std::memory_order_relaxed);
 }
 
-int Heat_KernelBuilder::weights_completed() const {
-    return weights_completed_.load(std::memory_order_relaxed);
+int Heat_KernelBuilder::lambdas_completed() const {
+    return lambdas_completed_.load(std::memory_order_relaxed);
 }
 
 double Heat_KernelBuilder::fraction() const {
@@ -74,8 +74,8 @@ std::string Heat_KernelBuilder::phase() const {
     switch (phase_.load(std::memory_order_relaxed)) {
         case Phase::Thetas:
             return "thetas";
-        case Phase::Weights:
-            return "weights";
+        case Phase::Lambdas:
+            return "lambdas";
         case Phase::Done:
             return "done";
         case Phase::Init:
@@ -92,12 +92,13 @@ void Heat_KernelBuilder::build() {
     this->set_phase(Phase::Thetas);
     built->thetas = built->generate_random_thetas(this);
 
-    this->set_phase(Phase::Weights);
-    built->weights = built->compute_theta_weights(this);
+    this->set_phase(Phase::Lambdas);
+    built->lambdas = built->compute_lambdas(this);
+    built->apply_tau();
 
     this->set_phase(Phase::Done);
     this->thetas_completed_.store(this->total_thetas_, std::memory_order_relaxed);
-    this->weights_completed_.store(this->total_weights_, std::memory_order_relaxed);
+    this->lambdas_completed_.store(this->total_lambdas_, std::memory_order_relaxed);
     this->completed_ops_.store(this->total_ops_, std::memory_order_relaxed);
     this->kernel_ = std::move(built);
 }
