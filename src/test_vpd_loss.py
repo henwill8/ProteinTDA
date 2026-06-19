@@ -17,8 +17,8 @@ def run_case(name: str, rff, pd1: torch.Tensor, pd2: torch.Tensor) -> None:
     loss = rff.vpd_loss(pd1, pd2)
     vec = rff.vpd_loss_vector(pd1, pd2)
     print(f"vpd_loss: {loss.item():.6f}")
-    print(f"vpd_loss_vector: {vec}")
-    print(f"pd_difference: {rff.get_vpd(pd1) - rff.get_vpd(pd2)}")
+    # print(f"vpd_loss_vector: {vec}")
+    # print(f"pd_difference: {rff.get_vpd(pd1) - rff.get_vpd(pd2)}")
 
 
 def main() -> None:
