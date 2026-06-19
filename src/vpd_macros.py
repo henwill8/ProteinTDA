@@ -130,3 +130,18 @@ def create_heat_random_fourier_features(
         cache_path,
     )
     return vpd
+
+
+def create_vpd_kernels(loss_config, heat_rff_config):
+    """Create VPD heat kernels only when the corresponding loss term is enabled."""
+    h0rff = (
+        create_heat_random_fourier_features(**heat_rff_config["h0rff"])
+        if loss_config.vpd_h0.enabled
+        else None
+    )
+    h1rff = (
+        create_heat_random_fourier_features(**heat_rff_config["h1rff"])
+        if loss_config.vpd_h1.enabled
+        else None
+    )
+    return h0rff, h1rff

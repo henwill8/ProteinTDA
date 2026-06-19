@@ -32,7 +32,7 @@ def wasserstein_loss(
 class ESMFoldLoss(AlphaFoldLoss):
     """AlphaFoldLoss without masked MSA or experimentally-resolved terms."""
 
-    def __init__(self, config, h0rff, h1rff):
+    def __init__(self, config, h0rff=None, h1rff=None):
         super().__init__(config)
         self.original_fape_config = config.fape
         self.h0rff = h0rff
@@ -95,6 +95,12 @@ class ESMFoldLoss(AlphaFoldLoss):
 
         add("wasserstein_h0", lambda: wasserstein_terms["h0"])
         add("wasserstein_h1", lambda: wasserstein_terms["h1"])
+        
+        if cfg.vpd_h0.enabled and self.h0rff is None:
+            raise ValueError("vpd_h0 loss is enabled but h0rff was not provided")
+        if cfg.vpd_h1.enabled and self.h1rff is None:
+            raise ValueError("vpd_h1 loss is enabled but h1rff was not provided")
+
         add("vpd_h0", lambda: self.h0rff.vpd_loss(pred_diags[0], target_diags[0]))
         add("vpd_h1", lambda: self.h1rff.vpd_loss(pred_diags[1], target_diags[1]))
 

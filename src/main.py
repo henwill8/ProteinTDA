@@ -20,7 +20,7 @@ from esmfold_finetune import (
 )
 from loss import ESMFoldLoss
 from config import HEAT_RFF_CONFIG, LOSS_CONFIG
-from vpd_macros import create_heat_random_fourier_features 
+from vpd_macros import create_vpd_kernels
 
 
 def set_seed(seed: int = 42) -> None:
@@ -57,8 +57,7 @@ def main(argv: list[str] | None = None) -> int:
 
     set_seed(seed=42)
 
-    h0rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h0rff"])
-    h1rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h1rff"])
+    h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
 
     print(f"Loading tokenizer for {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
@@ -74,9 +73,9 @@ def main(argv: list[str] | None = None) -> int:
         complete_structures_only = not args.allow_incomplete,
     )
 
-    # if len(dataset) > 1000:
-    #     dataset = dataset[-1000:]
-    dataset = dataset[-5:]
+    if len(dataset) > 1000:
+        dataset = dataset[-1000:]
+    # dataset = dataset[:5]
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
     fold_plddt_scores: list[float] = []
