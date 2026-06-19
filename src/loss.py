@@ -143,16 +143,20 @@ class ESMFoldLoss(AlphaFoldLoss):
             self.config.fape = self.original_fape_config
 
         loss_fns = self._build_loss_fns(out, batch)
+        if not loss_fns:
+            raise ValueError("No loss terms are enabled in LOSS_CONFIG")
 
-        cum_loss = 0.0
+        cum_loss = None
         losses = {}
         for loss_name, loss_fn in loss_fns.items():
             weight = self.config[loss_name].weight
             loss = loss_fn()
+            
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"{loss_name} loss is NaN. Skipping...")
                 loss = loss.new_tensor(0.0, requires_grad=True)
-            cum_loss = cum_loss + weight * loss
+            term = weight * loss
+            cum_loss = term if cum_loss is None else cum_loss + term
             losses[loss_name] = loss.detach().clone()
         losses["unscaled_loss"] = cum_loss.detach().clone()
 
