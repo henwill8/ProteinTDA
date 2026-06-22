@@ -157,7 +157,7 @@ def compute_losses(
         if outputs.positions is None:
             raise RuntimeError("ESMFold did not return positions.")
 
-        out, batch = pre_loss_conversion(outputs, protein, device=device)
+        out, batch = pre_loss_conversion(outputs, protein, device=device, loss_config=loss_fn.config)
         total, breakdown = loss_fn(out, batch, _return_breakdown=True)
 
     return {

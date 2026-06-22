@@ -19,7 +19,8 @@ from esmfold_finetune import (
     trainable_parameter_count,
 )
 from loss import ESMFoldLoss
-from model_config import LOSS_CONFIG
+from config import HEAT_RFF_CONFIG, LOSS_CONFIG
+from vpd_macros import create_vpd_kernels
 
 
 def set_seed(seed: int = 42) -> None:
@@ -33,7 +34,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--casp-version", default="debug")
     parser.add_argument("--casp-thinning", type=int, default=30)
     parser.add_argument("--allow-incomplete", type=bool, default=False)
-    parser.add_argument("--scn-dir", type=Path, default=Path("sidechainnet_data"))
+    parser.add_argument("--scn-dir", type=Path, default=Path("data/sidechainnet"))
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-5)
@@ -56,6 +57,8 @@ def main(argv: list[str] | None = None) -> int:
 
     set_seed(seed=42)
 
+    h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
+
     print(f"Loading tokenizer for {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -70,9 +73,9 @@ def main(argv: list[str] | None = None) -> int:
         complete_structures_only = not args.allow_incomplete,
     )
 
-    # if len(dataset) > 1000:
-    #     dataset = dataset[-1000:]
-    dataset = dataset[-5:]
+    if len(dataset) > 1000:
+        dataset = dataset[-1000:]
+    # dataset = dataset[:5]
 
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
     fold_plddt_scores: list[float] = []
@@ -135,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
                 train_loader,
                 optimizer,
                 device,
-                loss_fn=ESMFoldLoss(config=LOSS_CONFIG),
+                loss_fn=ESMFoldLoss(config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff),
                 unfreeze_esm_layers=args.unfreeze_esm_layers,
                 unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
                 unfreeze_structure_module=args.unfreeze_structure_module,

@@ -1,13 +1,31 @@
-"""
-Local OpenFold loss config for ESMFold fine-tuning.
-
-Copied from ``openfold.config`` with Wasserstein TDA loss sections added.
-"""
-
 import ml_collections as mlc
 
 _EPS = 1e-8
 
+HEAT_RFF_CONFIG = mlc.ConfigDict(
+    {
+        "h0rff": {
+            "n": 1,
+            "axis_dim": 10,
+            "resolution": 1000,
+            "R": 1000,
+            "tau": 0.00001,
+            "mask": None,
+            "seed": 42
+        },
+        "h1rff": {
+            "n": 2,
+            "axis_dim": 10,
+            "resolution": 100,
+            "R": 1000,
+            "tau": 0.00001,
+            "mask": None,
+            "seed": 42
+        }
+    }
+)
+
+# Copied from openfold.config
 LOSS_CONFIG = mlc.ConfigDict(
     {
         "distogram": {
@@ -16,6 +34,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             "no_bins": 64,
             "eps": _EPS,
             "weight": 0.3,
+            "enabled": True,
         },
         "fape": {
             "backbone": {
@@ -32,6 +51,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             },
             "eps": 1e-4,
             "weight": 1.0,
+            "enabled": True,
         },
         "plddt_loss": {
             "min_resolution": 0.1,
@@ -40,17 +60,20 @@ LOSS_CONFIG = mlc.ConfigDict(
             "no_bins": 50,
             "eps": _EPS,
             "weight": 0.01,
+            "enabled": True,
         },
         "masked_msa": {
             "num_classes": 23,
             "eps": _EPS,
             "weight": 2.0,
+            "enabled": True,
         },
         "supervised_chi": {
             "chi_weight": 0.5,
             "angle_norm_weight": 0.01,
             "eps": _EPS,
             "weight": 1.0,
+            "enabled": True,
         },
         "violation": { # if violation loss is enabled, then stereo_chemical_props.txt must be present in the openfold installation
             "violation_tolerance_factor": 12.0,
@@ -75,7 +98,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             "eps": _EPS,
             "enabled": False,
         },
-        "wasserstein": {
+        "pd": {
             "max_dimension": 2,
             "hom_dim": 2,
         },
@@ -84,6 +107,14 @@ LOSS_CONFIG = mlc.ConfigDict(
             "enabled": True,
         },
         "wasserstein_h1": {
+            "weight": 1.0,
+            "enabled": True,
+        },
+        "vpd_h0": {
+            "weight": 1.0,
+            "enabled": True,
+        },
+        "vpd_h1": {
             "weight": 1.0,
             "enabled": True,
         },
