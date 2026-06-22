@@ -47,7 +47,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--amp", type=bool, default=True)
     parser.add_argument("--optimized-param", type=String, default="tau")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--log-file", type=Path, default=Path("logs/kfold_test_scores.log"))
+    parser.add_argument("--log-file", type=Path, default=Path("out/optuna_output.txt"))
     parser.add_argument("--w-min", type=float, default=0.005)
     parser.add_argument("--w-max", type=float, default=2)
     parser.add_argument("--t-min", type=float, default=1e-25)
@@ -237,13 +237,14 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # The last 5 proteins in the dataset were large enough to  significantly impact memory usage and time complexity.
-    dataset = dataset[:-5]
+    # dataset = dataset[:-5]
+    dataset = dataset[:5]
 
     study = optuna.create_study(
         study_name="TDA Optimizer",
         storage="sqlite:///optuna_tda.db",
         sampler=TPESampler(seed=args.seed),
-        pruner=SuccessiveHalvingPruner()
+        pruner=SuccessiveHalvingPruner(),
         load_if_exists=True
     )
 
