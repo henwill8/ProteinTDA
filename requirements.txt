@@ -11,6 +11,7 @@ scikit-learn
 tmtools
 git+https://github.com/aqlaboratory/openfold.git
 dm-tree
+optuna
 
 # SidechainNet (https://github.com/jonathanking/sidechainnet)
 sidechainnet

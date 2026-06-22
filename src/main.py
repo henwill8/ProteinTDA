@@ -28,32 +28,8 @@ def set_seed(seed: int = 42) -> None:
     np.random.seed(seed)
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fine-tune ESMFold with Wasserstein TDA loss.")
-    parser.add_argument("--model", default="facebook/esmfold_v1")
-    parser.add_argument("--casp-version", default="debug")
-    parser.add_argument("--casp-thinning", type=int, default=30)
-    parser.add_argument("--allow-incomplete", type=bool, default=False)
-    parser.add_argument("--scn-dir", type=Path, default=Path("data/sidechainnet"))
-    parser.add_argument("--epochs", type=int, default=300)
-    parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--unfreeze-trunk-blocks", type=int, default=2)
-    parser.add_argument("--unfreeze-structure-module", type=bool, default=True)
-    parser.add_argument("--unfreeze-esm-layers", type=int, default=0)
-    parser.add_argument("--train-recycles", type=int, default=8)
-    parser.add_argument("--trunk-chunk-size", type=int, default=64)
-    parser.add_argument("--gradient-checkpointing", type=bool, default=True)
-    parser.add_argument("--amp", type=bool, default=True)
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--log-file", type=Path, default=Path("logs/kfold_test_scores.log"))
-    return parser.parse_args(argv)
 
-
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    device = torch.device(args.device)
+def main(device) -> list[float]:
 
     set_seed(seed=42)
 
@@ -192,8 +168,4 @@ def main(argv: list[str] | None = None) -> int:
             f"mean_tm mean={np.mean(fold_tm_scores):.4f} var={np.var(fold_tm_scores):.4f}\n"
         )
 
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    return fold_plddt_scores
