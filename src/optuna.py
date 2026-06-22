@@ -6,7 +6,7 @@ import copy
 from pathlib import Path
 
 import optuna
-from optuna.pruners import 
+from optuna.pruners import SuccessiveHalvingPruner
 from optuna.samplers import TPESampler
 
 import torch
@@ -240,10 +240,10 @@ def main(argv: list[str] | None = None) -> int:
     dataset = dataset[:-5]
 
     study = optuna.create_study(
-        study_name=HENRYCANCHOOSE,
+        study_name="TDA Optimizer",
         storage="sqlite:///optuna_tda.db",
         sampler=TPESampler(seed=args.seed),
-        pruner=#PrunerHere
+        pruner=SuccessiveHalvingPruner()
         load_if_exists=True
     )
 
