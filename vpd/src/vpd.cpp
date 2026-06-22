@@ -42,7 +42,9 @@ torch::Tensor VPD::pd_to_vpd(torch::Tensor pd) const {
 
 torch::Tensor VPD::pd_diff(torch::Tensor pd1, torch::Tensor pd2) const {
     // Map both diagrams into the bounds of the grid using the same scale factor for both pd's
-    torch::Tensor scale = torch::maximum(pd1.max(), pd2.max());
+    torch::Tensor pd1_max = pd1.numel() == 0 ? torch::zeros({}, pd1.options()) : pd1.max();
+    torch::Tensor pd2_max = pd2.numel() == 0 ? torch::zeros({}, pd2.options()) : pd2.max();
+    torch::Tensor scale = torch::maximum(pd1_max, pd2_max);
     scale = torch::clamp(scale, 1e-8);
     // subtract 1 from points_per_axis as x starts at 0 and y starts at 1
     const double grid_max = static_cast<double>(this->kernel->points_per_axis() - 1) / this->kernel->resolution;
