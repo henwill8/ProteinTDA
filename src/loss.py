@@ -111,12 +111,24 @@ class ESMFoldLoss(AlphaFoldLoss):
         if cfg.vpd_h0.enabled:
             if self.h0rff is None:
                 raise ValueError("vpd_h0 loss is enabled but h0rff was not provided")
-            add("vpd_h0", lambda: self.h0rff.vpd_loss(pred_diags[0], target_diags[0]))
+            add(
+                "vpd_h0",
+                lambda: self.h0rff.vpd_loss(
+                    pred_diags[0].double(),
+                    target_diags[0].detach().double(),
+                ),
+            )
 
         if cfg.vpd_h1.enabled:
             if self.h1rff is None:
                 raise ValueError("vpd_h1 loss is enabled but h1rff was not provided")
-            add("vpd_h1", lambda: self.h1rff.vpd_loss(pred_diags[1], target_diags[1]))
+            add(
+                "vpd_h1",
+                lambda: self.h1rff.vpd_loss(
+                    pred_diags[1].double(),
+                    target_diags[1].detach().double(),
+                ),
+            )
 
         return loss_fns
 

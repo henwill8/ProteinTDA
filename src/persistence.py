@@ -12,7 +12,7 @@ def pd_from_graph(adj_tensor: torch.Tensor, max_dimension: int, hom_dim: int = 2
     ``adj_tensor`` is a symmetric distance matrix (diagonal zero).
     """
     diagrams: list[torch.Tensor] = []
-    adj_matrix = adj_tensor.detach().cpu().numpy()
+    adj_matrix = adj_tensor.detach().float().cpu().numpy()
 
     rips_complex = gd.RipsComplex(distance_matrix=adj_matrix)
     st = rips_complex.create_simplex_tree(max_dimension=max_dimension)
