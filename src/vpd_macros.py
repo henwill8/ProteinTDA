@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from config import LOSS_CONFIG, HEAT_RFF_CONFIG
 from vpd import _cpp
 
 _CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "heat_rff"
@@ -166,3 +167,6 @@ def create_vpd_kernels(loss_config, heat_rff_config):
         else None
     )
     return h0rff, h1rff
+
+if __name__ == "__main__":
+    create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG);

@@ -99,7 +99,7 @@ std::vector<double> Heat_Kernel::generate_random_thetas(Heat_KernelBuilder* buil
         std::uniform_real_distribution<double> theta_dist(0.0, TWO_PI);
         std::uniform_real_distribution<double> acceptance_dist(0.0, 1.0);
 
-        std::vector<double> theta(this->dim)
+        std::vector<double> theta(this->dim);
         int local_completed = 0;
 
 #pragma omp for schedule(dynamic)
@@ -109,12 +109,12 @@ std::vector<double> Heat_Kernel::generate_random_thetas(Heat_KernelBuilder* buil
               theta[j] = theta_dist(gen);
             }
 
-            lambda = laplacian_symbol(theta, this->dim, builder);
-            weight = std::exp(-this->tau * lambda);
-            if (accept_dim(gen) <= weight) break;
+            double lambda = laplacian_symbol(theta.data(), this->dim, builder);
+            double weight = std::exp(-this->tau * lambda);
+            if (acceptance_dist(gen) <= weight) break;
           }
 
-          std::copy(theta.start(), theta.end(), thetas.begin() + r * this->dim);
+          std::copy(theta.begin(), theta.end(), thetas.begin() + r * this->dim);
 
           if (builder != nullptr) {
                 ++local_completed;
@@ -123,6 +123,7 @@ std::vector<double> Heat_Kernel::generate_random_thetas(Heat_KernelBuilder* buil
                     local_completed = 0;
                 }
             }
+        }
 
         if (builder != nullptr && local_completed > 0) {
             builder->add_theta_ops(local_completed);
