@@ -96,20 +96,33 @@ std::vector<double> Heat_Kernel::generate_random_thetas(Heat_KernelBuilder* buil
         const int tid = 0;
 #endif
         std::mt19937 gen(static_cast<uint32_t>(this->seed + tid)); // each thread needs a different generator
-        std::uniform_real_distribution<double> dist(0.0, TWO_PI);
+        std::uniform_real_distribution<double> theta_dist(0.0, TWO_PI);
+        std::uniform_real_distribution<double> acceptance_dist(0.0, 1.0);
+
+        std::vector<double> theta(this->dim)
         int local_completed = 0;
 
 #pragma omp for schedule(dynamic)
-        for (int i = 0; i < total; ++i) {
-            thetas[i] = dist(gen);
-            if (builder != nullptr) {
+        for (int r = 0; r < this->R; ++r) {
+          for (;;) {
+            for (int j = 0; j < this->dim; ++j) {
+              theta[j] = theta_dist(gen);
+            }
+
+            lambda = laplacian_symbol(theta, this->dim, builder);
+            weight = std::exp(-this->tau * lambda);
+            if (accept_dim(gen) <= weight) break;
+          }
+
+          std::copy(theta.start(), theta.end(), thetas.begin() + r * this->dim);
+
+          if (builder != nullptr) {
                 ++local_completed;
                 if (local_completed >= progress_batch) {
                     builder->add_theta_ops(local_completed);
                     local_completed = 0;
                 }
             }
-        }
 
         if (builder != nullptr && local_completed > 0) {
             builder->add_theta_ops(local_completed);
