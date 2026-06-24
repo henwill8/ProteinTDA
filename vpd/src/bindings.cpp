@@ -45,9 +45,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("R"),
         py::arg("tau"),
         py::arg("thetas"),
-        py::arg("lambdas"))
+        py::arg("weights"))
     .def_property_readonly("thetas", &Heat_Kernel::get_thetas)
-    .def_property_readonly("lambdas", &Heat_Kernel::get_lambdas)
     .def_property_readonly("weights", &Heat_Kernel::get_weights);
 
   py::class_<VPD>(m, "VPD")
@@ -62,6 +61,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def("get_vpd", &VPD::get_vpd,
         py::arg("pd"))
     .def_property_readonly("thetas", &VPD::get_thetas)
-    .def_property_readonly("lambdas", &VPD::get_lambdas)
     .def_property_readonly("weights", &VPD::get_weights);
 }

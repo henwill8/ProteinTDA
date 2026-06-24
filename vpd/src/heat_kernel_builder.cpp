@@ -90,11 +90,7 @@ void Heat_KernelBuilder::build() {
     this->reset_progress(built->dim);
 
     this->set_phase(Phase::Thetas);
-    built->thetas = built->generate_random_thetas(this);
-
-    this->set_phase(Phase::Lambdas);
-    built->lambdas = built->compute_lambdas(this);
-    built->apply_tau();
+    built->generate_thetas(this);
 
     this->set_phase(Phase::Done);
     this->thetas_completed_.store(this->total_thetas_, std::memory_order_relaxed);

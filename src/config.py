@@ -16,7 +16,7 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
         "h1rff": {
             "n": 2,
             "axis_dim": 10,
-            "resolution": 100,
+            "resolution": 10,
             "R": 1000,
             "tau": 0.00001,
             "mask": None,

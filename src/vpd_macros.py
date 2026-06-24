@@ -22,8 +22,8 @@ def _mask_cache_label(mask) -> str:
     return "mask-" + "-".join(str(i) for i in mask)
 
 
-def _heat_rff_cache_path(n, axis_dim, resolution, R, mask, seed):
-    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_R-{R}_seed-{seed}_{_mask_cache_label(mask)}.pt")
+def _heat_rff_cache_path(n, axis_dim, resolution, R, tau, mask, seed):
+    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_tau-{tau}-R-{R}_seed-{seed}_{_mask_cache_label(mask)}.pt")
 
 
 def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, mask, seed) -> None:
@@ -118,13 +118,13 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, lab
 def create_heat_random_fourier_features(
     n, axis_dim, resolution, R=100, tau=1, mask=None, seed=42, show_progress=True, progress_batch=100,
 ):
-    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, mask, seed)
+    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, tau, mask, seed)
     if cache_path.is_file():
         cached = torch.load(cache_path, weights_only=False)
         _validate_cached_kernel(
             cached, n=n, axis_dim=axis_dim, resolution=resolution, R=R, mask=mask, seed=seed
         )
-        kernel = _cpp.Heat_Kernel(            n, axis_dim, resolution, R, tau, cached["thetas"], cached["lambdas"]
+        kernel = _cpp.Heat_Kernel(            n, axis_dim, resolution, R, tau, cached["thetas"], cached["weights"]
         )
         return _cpp.VPD(kernel)
 
@@ -147,7 +147,7 @@ def create_heat_random_fourier_features(
             "mask": mask,
             "seed": seed,
             "thetas": vpd.thetas,
-            "lambdas": vpd.lambdas,
+            "weights": vpd.weights,
         },
         cache_path,
     )
@@ -169,4 +169,5 @@ def create_vpd_kernels(loss_config, heat_rff_config):
     return h0rff, h1rff
 
 if __name__ == "__main__":
+    print("Crreating VPD Kernels");
     create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG);

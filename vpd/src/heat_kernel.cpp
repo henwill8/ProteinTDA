@@ -81,12 +81,12 @@ double Heat_Kernel::laplacian_symbol(const double* theta, int n, Heat_KernelBuil
     return result;
 }
 
-// Returns theta of given dimension
-std::vector<double> Heat_Kernel::generate_random_thetas(Heat_KernelBuilder* builder) {
+void Heat_Kernel::generate_thetas(Heat_KernelBuilder* builder) {
     const double TWO_PI = 2.0 * std::numbers::pi;
     const int total = this->R * this->dim;
     const int progress_batch = builder != nullptr ? builder->progress_batch_ : Heat_KernelBuilder::DEFAULT_PROGRESS_BATCH;
     std::vector<double> thetas(total);
+    std::vector<double> weights(this->R);
 
 #pragma omp parallel
     {
@@ -111,7 +111,10 @@ std::vector<double> Heat_Kernel::generate_random_thetas(Heat_KernelBuilder* buil
 
             double lambda = laplacian_symbol(theta.data(), this->dim, builder);
             double weight = std::exp(-this->tau * lambda);
-            if (acceptance_dist(gen) <= weight) break;
+            if (acceptance_dist(gen) <= weight){
+              weights[r] = weight;  
+              break;
+            };
           }
 
           std::copy(theta.begin(), theta.end(), thetas.begin() + r * this->dim);
@@ -129,27 +132,8 @@ std::vector<double> Heat_Kernel::generate_random_thetas(Heat_KernelBuilder* buil
             builder->add_theta_ops(local_completed);
         }
     }
-    return thetas;
-}
-
-std::vector<double> Heat_Kernel::compute_lambdas(Heat_KernelBuilder* builder) {
-    std::vector<double> result(this->R);
-
-    for (int r = 0; r < this->R; ++r) {
-        const double* current_theta = this->thetas.data() + r * this->dim;
-        result[r] = laplacian_symbol(current_theta, this->dim, builder);
-        if (builder != nullptr) {
-            builder->add_lambda_completed(1);
-        }
-    }
-    return result;
-}
-
-void Heat_Kernel::apply_tau() {
-    this->weights.resize(this->lambdas.size());
-    for (size_t r = 0; r < this->lambdas.size(); ++r) {
-        this->weights[r] = std::exp(-this->tau * this->lambdas[r]);
-    }
+  this->thetas = thetas;
+  this->weights = weights;
 }
 
 void Heat_Kernel::init_dim() {
@@ -175,14 +159,11 @@ void Heat_Kernel::init_base(int n, int axis_dim, double resolution, int R, doubl
 
 Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask, std::optional<uint32_t> seed) {
     init_base(n, axis_dim, resolution, R, tau, seed.value_or(42));
-    this->thetas = generate_random_thetas();
-    this->lambdas = compute_lambdas();
-    apply_tau();
+    generate_thetas();
 }
 
-Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& lambdas) {
+Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights) {
     init_base(n, axis_dim, resolution, R, tau, 0);
     this->thetas = thetas;
-    this->lambdas = lambdas;
-    apply_tau();
+    this->weights = weights;
 }
