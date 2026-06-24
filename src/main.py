@@ -1,23 +1,23 @@
-"""Entry point for ESMFold fine-tuning with TDA Wasserstein loss."""
-
 import sys
 import argparse
 from pathlib import Path
+
 import numpy as np
 from sklearn.model_selection import KFold, train_test_split
 
 import sidechainnet as scn
-
 import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 
 from esmfold_finetune import (
     build_model,
+    prepare_esm_cache,
     train_one_epoch,
     test_model,
     trainable_parameter_count,
 )
+from esm_cache import ESMEmbeddingCache
 from loss import ESMFoldLoss
 from config import HEAT_RFF_CONFIG, LOSS_CONFIG
 from vpd_macros import create_vpd_kernels
@@ -37,161 +37,204 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scn-dir", type=Path, default=Path("data/sidechainnet"))
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--unfreeze-trunk-blocks", type=int, default=2)
     parser.add_argument("--unfreeze-structure-module", type=bool, default=True)
-    parser.add_argument("--unfreeze-esm-layers", type=int, default=0)
     parser.add_argument("--train-recycles", type=int, default=8)
-    parser.add_argument("--trunk-chunk-size", type=int, default=64)
+    parser.add_argument("--trunk-chunk-size", type=int, default=16)
+    # gradient checkpointing only works for the esm encoder
     parser.add_argument("--gradient-checkpointing", type=bool, default=True)
     parser.add_argument("--amp", type=bool, default=True)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--log-file", type=Path, default=Path("logs/kfold_test_scores.log"))
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--use-esm-cache", type=bool, default=True)
+    # not sure if we need the option to change which cache we use, maybe remove and turn into a constant
+    parser.add_argument("--esm-cache-dir", type=Path, default=Path("cache/esm_embeddings"))
     return parser.parse_args(argv)
+
+# For lower memory usage, try batch size 1, chunk size 1 or 2? (would be really slow), recycles 1
+
+def load_dataset(args: argparse.Namespace) -> list:
+    print("Loading SidechainNet...")
+    dataset = scn.load(
+        casp_version=args.casp_version,
+        casp_thinning=args.casp_thinning,
+        scn_dataset=True,
+        scn_dir=str(args.scn_dir),
+        force_download=False,
+        complete_structures_only=not args.allow_incomplete,
+    )
+    # if len(dataset) > 1000:
+        # dataset = dataset[-1000:]
+    dataset = dataset[:5]
+    return dataset
+
+
+def make_loader(proteins: list, batch_size: int, shuffle: bool) -> DataLoader:
+    return DataLoader(
+        dataset=proteins,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        collate_fn=lambda x: x,
+    )
+
+
+def run_fold(
+    fold: int,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    dataset: list,
+    args: argparse.Namespace,
+    device: torch.device,
+    tokenizer: AutoTokenizer,
+    loss_fn: ESMFoldLoss,
+    esm_cache: ESMEmbeddingCache | None,
+    n_splits: int,
+) -> tuple[float, float]:
+    set_seed(args.seed + fold)
+
+    print(f"Fold {fold + 1}/{n_splits}: loading fresh model on {device}...")
+    model = build_model(
+        args.model,
+        device,
+        unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
+        unfreeze_structure_module=args.unfreeze_structure_module,
+        trunk_chunk_size=args.trunk_chunk_size,
+        gradient_checkpointing=args.gradient_checkpointing,
+        load_esm=not args.use_esm_cache,
+    )
+    trainable, total = trainable_parameter_count(model)
+    print(f"Trainable parameters: {trainable:,} / {total:,}")
+
+    train_idx, val_idx = train_test_split(train_idx, test_size=0.25)
+    train_loader = make_loader([dataset[i] for i in train_idx], args.batch_size, shuffle=True)
+    val_loader = make_loader([dataset[i] for i in val_idx], args.batch_size, shuffle=False)
+    test_loader = make_loader([dataset[i] for i in test_idx], args.batch_size, shuffle=False)
+
+    optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
+    best_model_weights = None
+    max_val_tm = 0.0
+    patience = 0
+
+    for epoch in range(args.epochs):
+        metrics = train_one_epoch(
+            model,
+            tokenizer,
+            train_loader,
+            optimizer,
+            device,
+            loss_fn=loss_fn,
+            unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
+            unfreeze_structure_module=args.unfreeze_structure_module,
+            train_recycles=args.train_recycles,
+            use_amp=args.amp,
+            esm_cache=esm_cache,
+        )
+        val_plddt_score, val_tm_score = test_model(
+            model,
+            tokenizer,
+            val_loader,
+            device,
+            esm_cache=esm_cache,
+        )
+        if val_tm_score > max_val_tm:
+            max_val_tm = val_tm_score
+            patience = 0
+            best_model_weights = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+        else:
+            patience += 1
+
+        metrics["val_tm"] = val_tm_score
+        metrics["val_plddt"] = val_plddt_score
+
+        print(
+            f"epoch {epoch + 1}/{args.epochs}"
+            + "\n" + "  ".join(f"{key}={value:.4f}" for key, value in metrics.items())
+            + f"\nfold {fold + 1}/{n_splits}"
+        )
+
+        if patience > args.patience:
+            print(f"Early stopping at epoch {epoch + 1}")
+            break
+
+    if best_model_weights is not None:
+        model.load_state_dict({k: v.to(device) for k, v in best_model_weights.items()})
+
+    plddt_score, tm_score = test_model(
+        model,
+        tokenizer,
+        test_loader,
+        device,
+        esm_cache=esm_cache,
+    )
+    print(f"fold {fold + 1}/{n_splits}  mean_plddt={plddt_score:.4f}  mean_tm={tm_score:.4f}")
+    return plddt_score, tm_score
+
+
+def write_log_file(
+    log_file: Path,
+    fold_plddt_scores: list[float],
+    fold_tm_scores: list[float],
+) -> None:
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("w", encoding="utf-8") as handle:
+        for fold_idx, (plddt, tm) in enumerate(zip(fold_plddt_scores, fold_tm_scores), start=1):
+            handle.write(f"fold {fold_idx}: mean_plddt={plddt:.4f} mean_tm={tm:.4f}\n")
+        handle.write(
+            f"mean_plddt mean={np.mean(fold_plddt_scores):.4f} var={np.var(fold_plddt_scores):.4f}\n"
+        )
+        handle.write(
+            f"mean_tm mean={np.mean(fold_tm_scores):.4f} var={np.var(fold_tm_scores):.4f}\n"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     device = torch.device(args.device)
-
-    set_seed(seed=42)
+    set_seed(args.seed)
 
     h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
+    loss_fn = ESMFoldLoss(config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
 
-    print(f"Loading tokenizer for {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    print("Loading SidechainNet...")
-    dataset = scn.load(
-        casp_version = args.casp_version,
-        casp_thinning = args.casp_thinning,
-        scn_dataset = True,
-        scn_dir = str(args.scn_dir),
-        force_download = False,
-        complete_structures_only = not args.allow_incomplete,
-    )
+    proteins = load_dataset(args)
 
-    if len(dataset) > 1000:
-        dataset = dataset[-1000:]
-    # dataset = dataset[:5]
+    esm_cache: ESMEmbeddingCache | None = None
+    if args.use_esm_cache:
+        esm_cache = prepare_esm_cache(
+            args.esm_cache_dir,
+            proteins,
+            args.model,
+            tokenizer,
+            device,
+            trunk_chunk_size=args.trunk_chunk_size,
+        )
 
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    kf = KFold(n_splits=5, shuffle=True, random_state=args.seed)
     fold_plddt_scores: list[float] = []
     fold_tm_scores: list[float] = []
 
-    for fold, (train_idx, test_idx) in enumerate(kf.split(dataset)):
-        set_seed(42 + fold)
-
-        print(f"Fold {fold + 1}/{kf.n_splits}: loading fresh model on {device}...")
-        model = build_model(
-            args.model,
+    for fold, (train_idx, test_idx) in enumerate(kf.split(proteins)):
+        plddt, tm = run_fold(
+            fold,
+            train_idx,
+            test_idx,
+            proteins,
+            args,
             device,
-            unfreeze_esm_layers=args.unfreeze_esm_layers,
-            unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
-            unfreeze_structure_module=args.unfreeze_structure_module,
-            trunk_chunk_size=args.trunk_chunk_size,
-            gradient_checkpointing=args.gradient_checkpointing,
-        )
-        trainable, total = trainable_parameter_count(model)
-        print(f"Trainable parameters: {trainable:,} / {total:,}")
-        
-        # This will give us a 60/20/20 split
-        train_idx, val_idx = train_test_split(train_idx, test_size=0.25)
-
-        train_dataset = [dataset[i] for i in train_idx]
-        val_dataset = [dataset[i] for i in val_idx]
-        test_dataset = [dataset[i] for i in test_idx]
-
-        train_loader = DataLoader(
-            dataset = train_dataset,
-            batch_size = args.batch_size,
-            shuffle = True,
-            collate_fn = lambda x: x,
-        )
-
-        val_loader = DataLoader(
-            dataset = val_dataset,
-            batch_size = args.batch_size,
-            shuffle = False,
-            collate_fn = lambda x: x,
-        )
-
-        test_loader = DataLoader(
-            dataset = test_dataset,
-            batch_size = args.batch_size,
-            shuffle = False,
-            collate_fn = lambda x: x,
-        )
-
-        optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
-
-        best_model_weights = None
-        max_val_tm = 0.0 
-        patience = 0
-
-        for epoch in range(args.epochs):
-            metrics = train_one_epoch(
-                model,
-                tokenizer,
-                train_loader,
-                optimizer,
-                device,
-                loss_fn=ESMFoldLoss(config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff),
-                unfreeze_esm_layers=args.unfreeze_esm_layers,
-                unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
-                unfreeze_structure_module=args.unfreeze_structure_module,
-                train_recycles=args.train_recycles,
-                use_amp=args.amp,
-            )
-            _, val_tm_score = test_model(
-                model,
-                tokenizer,
-                val_loader,
-                device,
-            )
-            if val_tm_score > max_val_tm:
-                max_val_tm = val_tm_score
-                patience = 0
-                best_model_weights = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-            else:
-                patience += 1
-
-            print(
-                f"epoch {epoch + 1}/{args.epochs}"
-                + "\n" + "  ".join(f"{key}={value:.4f}" for key, value in metrics.items())
-                + f"\nfold {fold + 1}/{kf.n_splits}"
-            )
-
-            if patience > args.patience:
-                print(f"Early stoppping at epoch {epoch}")
-                break
-
-        if best_model_weights is not None:
-            model.load_state_dict({k: v.to(device) for k, v in best_model_weights.items()})
-
-        plddt_score, tm_score = test_model(
-            model,
             tokenizer,
-            test_loader,
-            device,
+            loss_fn,
+            esm_cache,
+            kf.n_splits,
         )
-        print(f"fold {fold + 1}/{kf.n_splits}  mean_plddt={plddt_score:.4f}  mean_tm={tm_score:.4f}")
-        fold_plddt_scores.append(plddt_score)
-        fold_tm_scores.append(tm_score)
+        fold_plddt_scores.append(plddt)
+        fold_tm_scores.append(tm)
 
-    args.log_file.parent.mkdir(parents=True, exist_ok=True)
-    with args.log_file.open("w", encoding="utf-8") as log_file:
-        for fold_idx, (plddt, tm) in enumerate(zip(fold_plddt_scores, fold_tm_scores), start=1):
-            log_file.write(f"fold {fold_idx}: mean_plddt={plddt:.4f} mean_tm={tm:.4f}\n")
-        log_file.write(
-            f"mean_plddt mean={np.mean(fold_plddt_scores):.4f} var={np.var(fold_plddt_scores):.4f}\n"
-        )
-        log_file.write(
-            f"mean_tm mean={np.mean(fold_tm_scores):.4f} var={np.var(fold_tm_scores):.4f}\n"
-        )
-
+    write_log_file(args.log_file, fold_plddt_scores, fold_tm_scores)
     return 0
 
 

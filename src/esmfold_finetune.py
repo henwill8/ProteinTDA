@@ -7,12 +7,15 @@ Model: https://huggingface.co/facebook/esmfold_v1
 
 import random
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import torch
+from sidechainnet.dataloaders.SCNProtein import SCNProtein
 from tmtools import tm_align
 from tqdm import tqdm
-from transformers import EsmForProteinFolding
+from transformers import AutoTokenizer, EsmForProteinFolding
+from transformers.models.esm.modeling_esmfold import EsmForProteinFoldingOutput
 
 from data_conversions import (
     Atom14,
@@ -21,23 +24,26 @@ from data_conversions import (
     pre_loss_conversion,
     SideChainAtom,
 )
+from esm_cache import ESMEmbeddingCache
 from loss import ESMFoldLoss
+
+
+def drop_esm_encoder(model: EsmForProteinFolding) -> None:
+    for name in ("esm", "esm_s_mlp", "esm_s_combine", "embedding", "af2_to_esm"):
+        if hasattr(model, name):
+            delattr(model, name)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def configure_finetuning(
     model: EsmForProteinFolding,
     *,
-    unfreeze_esm_layers: int = 0,
     unfreeze_trunk_blocks: int = 2,
     unfreeze_structure_module: bool = False,
 ) -> None:
     for param in model.parameters():
         param.requires_grad = False
-
-    if unfreeze_esm_layers > 0:
-        for layer in model.esm.encoder.layer[-unfreeze_esm_layers:]:
-            for param in layer.parameters():
-                param.requires_grad = True
 
     if unfreeze_trunk_blocks > 0:
         for block in model.trunk.blocks[-unfreeze_trunk_blocks:]:
@@ -57,27 +63,26 @@ def build_model(
     model_name: str,
     device: torch.device,
     *,
-    unfreeze_esm_layers: int = 0,
     unfreeze_trunk_blocks: int = 2,
     unfreeze_structure_module: bool = False,
     trunk_chunk_size: int = 4,
     esm_half: bool = True,
     gradient_checkpointing: bool = True,
+    load_esm: bool = True,
 ) -> EsmForProteinFolding:
     model = EsmForProteinFolding.from_pretrained(model_name, low_cpu_mem_usage=True).to(device)
-    if esm_half:
-        # potentially remove this or have trainable layers be fp32 if training is not stable
-        model.esm = model.esm.half()
+    if load_esm:
+        if esm_half:
+            model.esm = model.esm.half()
+    else:
+        drop_esm_encoder(model)
     configure_finetuning(
         model,
-        unfreeze_esm_layers=unfreeze_esm_layers,
         unfreeze_trunk_blocks=unfreeze_trunk_blocks,
         unfreeze_structure_module=unfreeze_structure_module,
     )
-    if gradient_checkpointing:
-        # Can pass in gradient_checkpointing_kwargs
+    if gradient_checkpointing and load_esm: # if esm is not loaded, gradient checkpointing is not supported
         model.gradient_checkpointing_enable()
-        print(model.is_gradient_checkpointing)
     model.trunk.set_chunk_size(trunk_chunk_size)
     return model
 
@@ -85,25 +90,20 @@ def build_model(
 def apply_training_mode(
     model: EsmForProteinFolding,
     *,
-    unfreeze_esm_layers: int = 0,
     unfreeze_trunk_blocks: int = 2,
     unfreeze_structure_module: bool = False,
     dropout_in_frozen: bool = False,
 ) -> None:
     """
-    If dropout_in_frozen is False, frozen ESM encoder layers and the folding trunk run in eval mode so
-    dropout is disabled there while trainable ESM layers keep it enabled.
+    If dropout_in_frozen is False, frozen trunk blocks run in eval mode so dropout is disabled
+    there while trainable blocks keep it enabled.
     """
     model.train()
     if dropout_in_frozen:
         return
 
-    encoder_layers = model.esm.encoder.layer
-    n_frozen_esm = len(encoder_layers) - max(0, unfreeze_esm_layers)
-    for layer in encoder_layers[:n_frozen_esm]:
-        layer.eval()
-    for layer in encoder_layers[n_frozen_esm:]:
-        layer.train()
+    if getattr(model, "esm", None) is not None:
+        model.esm.eval()
 
     n_frozen_trunk = len(model.trunk.blocks) - max(0, unfreeze_trunk_blocks)
     for block in model.trunk.blocks[:n_frozen_trunk]:
@@ -127,6 +127,76 @@ def trainable_parameter_count(model: torch.nn.Module) -> tuple[int, int]:
     return trainable, total
 
 
+def prepare_esm_cache(
+    cache_dir: Path,
+    proteins: list[SCNProtein],
+    model_name: str,
+    tokenizer: AutoTokenizer,
+    device: torch.device,
+    *,
+    trunk_chunk_size: int,
+) -> ESMEmbeddingCache:
+    cache = ESMEmbeddingCache(cache_dir)
+    missing = cache.missing(proteins)
+    if missing:
+        print(f"Caching {len(missing)} ESM embeddings in {cache_dir}...")
+        cache_model = build_model(
+            model_name,
+            device,
+            unfreeze_trunk_blocks=0,
+            unfreeze_structure_module=False,
+            trunk_chunk_size=trunk_chunk_size,
+            gradient_checkpointing=False,
+        )
+        cache_model.eval()
+        cache.store(missing, cache_model, tokenizer, device)
+        del cache_model
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+    else:
+        print(f"All {len(proteins)} proteins already cached at {cache_dir}.")
+
+    cache.load(proteins, show_progress=True)
+    if cache.missing(proteins):
+        raise RuntimeError(f"Failed to cache all proteins at {cache_dir}.")
+    print(f"Using ESM cache from {cache_dir} ({len(cache)} entries loaded).")
+    return cache
+
+
+def run_esmfold(
+    model: EsmForProteinFolding,
+    protein,
+    device: torch.device,
+    tokenizer,
+    *,
+    num_recycles: int | None = None,
+    esm_cache: ESMEmbeddingCache | None = None,
+    use_amp: bool = False,
+) -> EsmForProteinFoldingOutput:
+    amp_enabled = use_amp and device.type == "cuda"
+    with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=amp_enabled):
+        if esm_cache is not None:
+            outputs = esm_cache.run_trunk_from_cache(
+                model,
+                protein,
+                device,
+                num_recycles=num_recycles,
+            )
+        else:
+            sequence = str(protein.seq)
+            inputs = tokenizer(
+                sequence,
+                return_tensors="pt",
+                add_special_tokens=False,
+            )
+            inputs = {key: value.to(device) for key, value in inputs.items()}
+            outputs = model(**inputs, num_recycles=num_recycles)
+
+    if outputs.positions is None:
+        raise RuntimeError("ESMFold did not return positions.")
+    return outputs
+
+
 def _sample_num_recycles(max_recycles: int) -> int:
     if max_recycles <= 0:
         return 0
@@ -142,23 +212,19 @@ def compute_losses(
     *,
     num_recycles: int | None = None,
     use_amp: bool = False,
+    esm_cache: ESMEmbeddingCache | None = None,
 ) -> dict[str, torch.Tensor]:
-    sequence = str(protein.seq)
-    inputs = tokenizer(
-        sequence,
-        return_tensors="pt",
-        add_special_tokens=False,
+    outputs = run_esmfold(
+        model,
+        protein,
+        device,
+        tokenizer,
+        num_recycles=num_recycles,
+        esm_cache=esm_cache,
+        use_amp=use_amp,
     )
-    inputs = {key: value.to(device) for key, value in inputs.items()}
-
-    amp_enabled = use_amp and device.type == "cuda"
-    with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=amp_enabled):
-        outputs = model(**inputs, num_recycles=num_recycles)
-        if outputs.positions is None:
-            raise RuntimeError("ESMFold did not return positions.")
-
-        out, batch = pre_loss_conversion(outputs, protein, device=device, loss_config=loss_fn.config)
-        total, breakdown = loss_fn(out, batch, _return_breakdown=True)
+    out, batch = pre_loss_conversion(outputs, protein, device=device, loss_config=loss_fn.config)
+    total, breakdown = loss_fn(out, batch, _return_breakdown=True)
 
     return {
         "total": total,
@@ -174,7 +240,6 @@ def train_one_epoch(
     device,
     loss_fn: ESMFoldLoss,
     *,
-    unfreeze_esm_layers: int = 0,
     unfreeze_trunk_blocks: int = 2,
     unfreeze_structure_module: bool = False,
     dropout_in_frozen: bool = False,
@@ -182,10 +247,10 @@ def train_one_epoch(
     randomize_recycles: bool = True,
     use_amp: bool = False,
     grad_clip_norm: float | None = 1.0,
+    esm_cache: ESMEmbeddingCache | None = None,
 ) -> dict[str, float]:
     apply_training_mode(
         model,
-        unfreeze_esm_layers=unfreeze_esm_layers,
         unfreeze_trunk_blocks=unfreeze_trunk_blocks,
         unfreeze_structure_module=unfreeze_structure_module,
         dropout_in_frozen=dropout_in_frozen,
@@ -211,6 +276,7 @@ def train_one_epoch(
                     loss_fn,
                     num_recycles=num_recycles,
                     use_amp=use_amp,
+                    esm_cache=esm_cache,
                 )
             except (ValueError, RuntimeError, torch.cuda.OutOfMemoryError) as e:
                 if isinstance(e, torch.cuda.OutOfMemoryError):
@@ -259,6 +325,7 @@ def test_model(
     device,
     *,
     infer_recycles: int | None = None,
+    esm_cache: ESMEmbeddingCache | None = None,
 ):
     model.eval()
     with torch.no_grad():
@@ -266,29 +333,26 @@ def test_model(
         tm_score_list = []
         for batch in tqdm(loader, desc="test", leave=False):
             for protein in batch:
-                sequence = str(protein.seq)
-                inputs = tokenizer(
-                    sequence,
-                    return_tensors="pt",
-                    add_special_tokens=False,
+                output = run_esmfold(
+                    model,
+                    protein,
+                    device,
+                    tokenizer,
+                    num_recycles=infer_recycles,
+                    esm_cache=esm_cache,
                 )
-                inputs = {key: value.to(device) for key, value in inputs.items()}
-
-                output = model(**inputs, num_recycles=infer_recycles)
-                if output.positions is None:
-                    raise RuntimeError("ESMFold did not return positions.")
 
                 plddt = output.plddt.tolist()
                 protein_mean_plddt = np.mean(plddt)
                 plddt_list.append(protein_mean_plddt)
-               
+
                 # We are using c-alpha atoms to extract
                 atom_exists = output.atom14_atom_exists[0] if output.atom14_atom_exists is not None else None
                 pred_c_alpha = atom_positions_from_atom14(output["positions"][-1][0], Atom14.CA, atom_exists)
 
                 exp_c_alpha = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).cpu().numpy()
 
-                res = tm_align(pred_c_alpha.cpu().numpy(), exp_c_alpha, sequence, sequence)
+                res = tm_align(pred_c_alpha.cpu().numpy(), exp_c_alpha, str(protein.seq), str(protein.seq))
                 tm_score = res.tm_norm_chain2
 
                 tm_score_list.append(tm_score)

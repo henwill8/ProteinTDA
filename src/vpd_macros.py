@@ -7,8 +7,6 @@ from pathlib import Path
 import torch
 from tqdm import tqdm
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from config import LOSS_CONFIG, HEAT_RFF_CONFIG
 from vpd import _cpp
 
@@ -20,7 +18,6 @@ def _mask_cache_label(mask) -> str:
         return "nomask"
     # tbh I don't know what is in mask, if this is a bad way to turn it into a string pls change
     return "mask-" + "-".join(str(i) for i in mask)
-
 
 def _heat_rff_cache_path(n, axis_dim, resolution, R, tau, mask, seed):
     return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_tau-{tau}-R-{R}_seed-{seed}_{_mask_cache_label(mask)}.pt")
