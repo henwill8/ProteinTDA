@@ -199,7 +199,7 @@ def _add_tda_fields(
         esm_out.positions[-1][0],
         atom14_atom,
         atom_exists,
-    ).float()
+    )
     target_positions = atom_positions_from_sidechainnet(
         sc_protein,
         tda_atom,

@@ -1,5 +1,9 @@
 import torch
 import random
+import sys
+
+sys.path.append("../vpd")
+
 from vpd import _cpp
 
 from openfold.utils.loss import (
@@ -30,7 +34,7 @@ def wasserstein_loss(
 
 
 class ESMFoldLoss(AlphaFoldLoss):
-    """AlphaFoldLoss without masked MSA or experimentally-resolved terms."""
+    """AlphaFoldLoss without masked MSA or experimentally-resolved terms. Adds Wasserstein and VPD losses."""
 
     def __init__(self, config, h0rff=None, h1rff=None):
         super().__init__(config)
@@ -114,8 +118,8 @@ class ESMFoldLoss(AlphaFoldLoss):
             add(
                 "vpd_h0",
                 lambda: self.h0rff.vpd_loss(
-                    pred_diags[0].double(),
-                    target_diags[0].detach().double(),
+                    pred_diags[0],
+                    target_diags[0],
                 ),
             )
 
@@ -125,8 +129,8 @@ class ESMFoldLoss(AlphaFoldLoss):
             add(
                 "vpd_h1",
                 lambda: self.h1rff.vpd_loss(
-                    pred_diags[1].double(),
-                    target_diags[1].detach().double(),
+                    pred_diags[1],
+                    target_diags[1],
                 ),
             )
 
@@ -158,17 +162,15 @@ class ESMFoldLoss(AlphaFoldLoss):
         if not loss_fns:
             raise ValueError("No loss terms are enabled in LOSS_CONFIG")
 
-        cum_loss = None
+        cum_loss = 0.0
         losses = {}
         for loss_name, loss_fn in loss_fns.items():
             weight = self.config[loss_name].weight
             loss = loss_fn()
-            
             if torch.isnan(loss) or torch.isinf(loss):
                 print(f"{loss_name} loss is NaN. Skipping...")
                 loss = loss.new_tensor(0.0, requires_grad=True)
-            term = weight * loss
-            cum_loss = term if cum_loss is None else cum_loss + term
+            cum_loss = cum_loss + weight * loss
             losses[loss_name] = loss.detach().clone()
         losses["unscaled_loss"] = cum_loss.detach().clone()
 
