@@ -60,19 +60,6 @@ def _format_acceptance(builder) -> str:
     return rate
 
 
-def _sync_pbar_ops(pbar: tqdm, completed: int, last_ops: int) -> int:
-    delta = completed - last_ops
-    if delta > 0:
-        pbar.update(delta)
-    elif delta < 0:
-        pbar.n = completed
-        # Reset the last print values so next positive delta measures speed from this point
-        pbar.last_print_n = completed
-        pbar.last_print_t = time.time()
-        pbar.refresh()
-    return completed
-
-
 def _update_kernel_progress(pbar: tqdm, builder) -> None:
     pbar.set_postfix_str(
         f"w={builder.weights_completed}/{builder.total_weights}, a={_format_acceptance(builder)}",
@@ -96,7 +83,6 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, pro
     thread.start()
 
     pbar = None
-    last_ops = 0
     bar_format = (
         "{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} est. "
         "[{elapsed}<{remaining}, {rate_fmt}]{postfix}"
@@ -114,11 +100,12 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, pro
                 )
             if pbar is not None:
                 completed = builder.completed_ops
-                total = max(builder.total_ops, completed)
+                total = builder.total_ops
                 if total != pbar.total:
                     pbar.total = total
-                if completed != last_ops:
-                    last_ops = _sync_pbar_ops(pbar, completed, last_ops)
+                delta = completed - pbar.n
+                if delta > 0:
+                    pbar.update(delta)
                 _update_kernel_progress(pbar, builder)
             time.sleep(0.2)
     except KeyboardInterrupt:
@@ -129,10 +116,9 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, pro
     thread.join()
 
     if pbar is not None:
-        remaining = builder.completed_ops - last_ops
-        if remaining > 0:
-            pbar.update(remaining)
-        pbar.n = builder.completed_ops
+        delta = builder.completed_ops - pbar.n
+        if delta > 0:
+            pbar.update(delta)
         pbar.total = builder.total_ops
         pbar.refresh()
         pbar.close()

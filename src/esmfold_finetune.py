@@ -158,7 +158,7 @@ def prepare_esm_cache(
 
     if cache.missing(proteins):
         raise RuntimeError(f"Failed to cache all proteins at {cache_dir}.")
-    print(f"Using ESM cache from {cache_dir} ({cache.cached_count(proteins)} entries on disk.")
+    print(f"Using ESM cache from {cache_dir} ({cache.cached_count(proteins)} entries on disk.)")
     return cache
 
 

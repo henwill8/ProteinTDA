@@ -27,6 +27,7 @@ void Heat_KernelBuilder::reset_progress(int dim) {
     ops_per_theta_sampling_ = dim;
     ops_per_attempt_ = ops_per_theta_sampling_ + ops_per_laplacian_;
     completed_ops_.store(0, std::memory_order_relaxed);
+    committed_ops_.store(0, std::memory_order_relaxed);
     weights_completed_.store(0, std::memory_order_relaxed);
     attempts_completed_.store(0, std::memory_order_relaxed);
 }
@@ -39,14 +40,15 @@ void Heat_KernelBuilder::add_laplacian_ops(int count) {
     completed_ops_.fetch_add(count, std::memory_order_relaxed);
 }
 
-void Heat_KernelBuilder::rollback_attempt() {
-    completed_ops_.fetch_sub(ops_per_attempt_, std::memory_order_relaxed);
+void Heat_KernelBuilder::reject_attempt() {
+    committed_ops_.store(completed_ops_.load(std::memory_order_relaxed), std::memory_order_relaxed);
     attempts_completed_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Heat_KernelBuilder::accept_attempt() {
     weights_completed_.fetch_add(1, std::memory_order_relaxed);
     attempts_completed_.fetch_add(1, std::memory_order_relaxed);
+    committed_ops_.store(completed_ops_.load(std::memory_order_relaxed), std::memory_order_relaxed);
 }
 
 int64_t Heat_KernelBuilder::completed_ops() const {
@@ -54,6 +56,7 @@ int64_t Heat_KernelBuilder::completed_ops() const {
 }
 
 int64_t Heat_KernelBuilder::estimated_total_ops() const {
+    const int64_t committed = committed_ops_.load(std::memory_order_relaxed);
     const int remaining = total_weights_ - weights_completed();
     if (remaining <= 0) {
         return completed_ops();
@@ -61,7 +64,7 @@ int64_t Heat_KernelBuilder::estimated_total_ops() const {
 
     const int attempts = attempts_completed();
     if (attempts <= 0) {
-        return static_cast<int64_t>(total_weights_) * ops_per_attempt_;
+        return committed + static_cast<int64_t>(total_weights_) * ops_per_attempt_;
     }
 
     const double rate = acceptance_rate();
@@ -69,10 +72,8 @@ int64_t Heat_KernelBuilder::estimated_total_ops() const {
         return std::numeric_limits<int64_t>::max();
     }
 
-    const int64_t committed = static_cast<int64_t>(weights_completed()) * ops_per_attempt_;
     const int64_t estimated_remaining = static_cast<int64_t>(std::ceil(
         static_cast<double>(remaining) * static_cast<double>(ops_per_attempt_) / rate));
-
     return committed + estimated_remaining;
 }
 
