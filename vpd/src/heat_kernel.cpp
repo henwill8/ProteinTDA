@@ -19,7 +19,7 @@ double Heat_Kernel::dist_to_diagonal_grid(const std::array<double, 2>& p) const 
     double max_t = points_per_axis() * this->resolution;
 
     // Find closest grid value to (t, t)
-    double d_grid = std::round((t - min_t) / this->resolution) * this->resolution + min_t;
+    double d_grid = std::round((t - min_t) * this->resolution) / this->resolution + min_t;
     // Clamp to grid range
     d_grid = std::clamp(d_grid, min_t, max_t);
 
@@ -40,12 +40,12 @@ double Heat_Kernel::qdist(const std::array<double, 2>& p1, const std::array<doub
 
 std::array<double, 2> Heat_Kernel::node_at(int index) const {
     if (this->n == 1) {
-        return {(index + 1) * this->resolution};
+        return {(index + 1) / this->resolution};
     }
 
     const int iy = static_cast<int>((std::sqrt(8.0 * index + 1.0) - 1.0) / 2.0); // solution to iy(iy + 1) / 2 <= index
     const int ix = index - iy * (iy + 1) / 2; // checks how many nodes were in the previous rows n(n + 1) / 2
-    return {ix * this->resolution, iy * this->resolution};
+    return {ix / this->resolution, iy / this->resolution};
 }
 
 double Heat_Kernel::laplacian_symbol(const double* theta, int n, Heat_KernelBuilder* builder) const {
@@ -58,7 +58,7 @@ double Heat_Kernel::laplacian_symbol(const double* theta, int n, Heat_KernelBuil
 
 #pragma omp for schedule(dynamic)
         for (int i = 0; i < n; ++i) {
-            for (int64_t j = i + 1; j < n; ++j) {
+            for (int64_t j = 0; j < n; ++j) {
                 double edge_weight = qdist(node_at(i), node_at(j));
                 if (edge_weight != 0.0) {
                     double diff = theta[i] - theta[j];
@@ -139,7 +139,17 @@ void Heat_Kernel::init_base(int n, int axis_dim, double resolution, int R, doubl
 
 Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask, std::optional<uint32_t> seed) {
     init_base(n, axis_dim, resolution, R, tau, seed.value_or(42));
-    generate_weights();
+    double qdists = 0.0;
+    double count = 0.0;
+    for (int i = 0; i < resolution * axis_dim; ++i) {
+        for (int64_t j = 0; j < resolution * axis_dim; ++j) {
+          double dist = qdist(node_at(i), node_at(j));
+          qdists += dist;
+          count++;
+        }
+    }
+    std::cout << "AVERAGE qdist" << qdists/count << std::endl;
+    //generate_weights();
 }
 
 Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights) {

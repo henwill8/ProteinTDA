@@ -9,7 +9,7 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "axis_dim": 10,
             "resolution": 1000,
             "R": 1000,
-            "tau": 0.00001,
+            "tau": 0.7e-8,
             "mask": None,
             "seed": 42
         },
@@ -18,7 +18,7 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "axis_dim": 10,
             "resolution": 10,
             "R": 1000,
-            "tau": 0.00001,
+            "tau": 1e-10,
             "mask": None,
             "seed": 42
         }

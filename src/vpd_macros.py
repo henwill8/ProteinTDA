@@ -196,4 +196,4 @@ def create_vpd_kernels(loss_config, heat_rff_config):
 
 if __name__ == "__main__":
     print("Creating VPD Kernels")
-    create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
+    print(create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG))
