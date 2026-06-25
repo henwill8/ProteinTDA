@@ -4,20 +4,12 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <string>
 #include <vector>
 
 #include "heat_kernel.hpp"
 
 class Heat_KernelBuilder {
 public:
-    enum class Phase {
-        Init,
-        Thetas,
-        Lambdas,
-        Done,
-    };
-
     static constexpr int DEFAULT_PROGRESS_BATCH = 100;
 
 private:
@@ -30,22 +22,22 @@ private:
     int progress_batch_;
     std::shared_ptr<Heat_Kernel> kernel_;
 
-    int total_thetas_{0};
-    int total_lambdas_{0};
-    int64_t ops_per_lambda_{0};
-    int64_t total_ops_{0};
+    int total_weights_{0};
+    int64_t ops_per_laplacian_{0};
+    int64_t ops_per_theta_sampling_{0};
+    int64_t ops_per_attempt_{0};
     std::atomic<int64_t> completed_ops_{0};
-    std::atomic<int> thetas_completed_{0};
-    std::atomic<int> lambdas_completed_{0};
-    std::atomic<Phase> phase_{Phase::Init};
+    std::atomic<int> weights_completed_{0};
+    std::atomic<int> attempts_completed_{0};
 
     friend class Heat_Kernel;
 
     void reset_progress(int dim);
-    void set_phase(Phase phase);
-    void add_theta_ops(int count);
+    void add_theta_sampling_ops();
     void add_laplacian_ops(int count);
-    void add_lambda_completed(int count);
+    void rollback_attempt();
+    void accept_attempt();
+    int64_t estimated_total_ops() const;
 
 public:
     Heat_KernelBuilder(
@@ -62,12 +54,9 @@ public:
     std::shared_ptr<Heat_Kernel> kernel() const;
 
     int64_t completed_ops() const;
-    int64_t total_ops() const { return total_ops_; }
-    int thetas_completed() const;
-    int lambdas_completed() const;
-    int total_thetas() const { return total_thetas_; }
-    int total_lambdas() const { return total_lambdas_; }
-    double fraction() const;
-    bool done() const;
-    std::string phase() const;
+    int64_t total_ops() const;
+    int weights_completed() const;
+    int attempts_completed() const;
+    double acceptance_rate() const;
+    int total_weights() const { return total_weights_; }
 };

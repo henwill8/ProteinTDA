@@ -81,11 +81,10 @@ double Heat_Kernel::laplacian_symbol(const double* theta, int n, Heat_KernelBuil
     return result;
 }
 
-void Heat_Kernel::generate_thetas(Heat_KernelBuilder* builder) {
+void Heat_Kernel::generate_weights(Heat_KernelBuilder* builder) {
     const double TWO_PI = 2.0 * std::numbers::pi;
     const int total = this->R * this->dim;
-    const int progress_batch = builder != nullptr ? builder->progress_batch_ : Heat_KernelBuilder::DEFAULT_PROGRESS_BATCH;
-    std::vector<double> thetas(total);
+    std::vector<double> total_thetas(total);
     std::vector<double> weights(this->R);
 
 #pragma omp parallel
@@ -99,41 +98,31 @@ void Heat_Kernel::generate_thetas(Heat_KernelBuilder* builder) {
         std::uniform_real_distribution<double> theta_dist(0.0, TWO_PI);
         std::uniform_real_distribution<double> acceptance_dist(0.0, 1.0);
 
-        std::vector<double> theta(this->dim);
-        int local_completed = 0;
+        std::vector<double> thetas(this->dim);
 
 #pragma omp for schedule(dynamic)
         for (int r = 0; r < this->R; ++r) {
-          for (;;) {
-            for (int j = 0; j < this->dim; ++j) {
-              theta[j] = theta_dist(gen);
-            }
-
-            double lambda = laplacian_symbol(theta.data(), this->dim, builder);
-            double weight = std::exp(-this->tau * lambda);
-            if (acceptance_dist(gen) <= weight){
-              weights[r] = weight;  
-              break;
-            };
-          }
-
-          std::copy(theta.begin(), theta.end(), thetas.begin() + r * this->dim);
-
-          if (builder != nullptr) {
-                ++local_completed;
-                if (local_completed >= progress_batch) {
-                    builder->add_theta_ops(local_completed);
-                    local_completed = 0;
+            for (;;) {
+                for (int j = 0; j < this->dim; ++j) {
+                    thetas[j] = theta_dist(gen);
                 }
-            }
-        }
+                if (builder != nullptr) builder->add_theta_sampling_ops();
 
-        if (builder != nullptr && local_completed > 0) {
-            builder->add_theta_ops(local_completed);
+                double lambda = laplacian_symbol(thetas.data(), this->dim, builder);
+                double weight = std::exp(-this->tau * lambda);
+                if (acceptance_dist(gen) <= weight) {
+                    weights[r] = weight;
+                    if (builder != nullptr) builder->accept_attempt();
+                    break;
+                }
+                if (builder != nullptr) builder->rollback_attempt();
+            }
+
+            std::copy(thetas.begin(), thetas.end(), total_thetas.begin() + r * this->dim);
         }
     }
-  this->thetas = thetas;
-  this->weights = weights;
+    this->thetas = total_thetas;
+    this->weights = weights;
 }
 
 void Heat_Kernel::init_dim() {
@@ -159,7 +148,7 @@ void Heat_Kernel::init_base(int n, int axis_dim, double resolution, int R, doubl
 
 Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask, std::optional<uint32_t> seed) {
     init_base(n, axis_dim, resolution, R, tau, seed.value_or(42));
-    generate_thetas();
+    generate_weights();
 }
 
 Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights) {

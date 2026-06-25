@@ -20,13 +20,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def("kernel", &Heat_KernelBuilder::kernel)
     .def_property_readonly("completed_ops", &Heat_KernelBuilder::completed_ops)
     .def_property_readonly("total_ops", &Heat_KernelBuilder::total_ops)
-    .def_property_readonly("thetas_completed", &Heat_KernelBuilder::thetas_completed)
-    .def_property_readonly("lambdas_completed", &Heat_KernelBuilder::lambdas_completed)
-    .def_property_readonly("total_thetas", &Heat_KernelBuilder::total_thetas)
-    .def_property_readonly("total_lambdas", &Heat_KernelBuilder::total_lambdas)
-    .def_property_readonly("fraction", &Heat_KernelBuilder::fraction)
-    .def_property_readonly("done", &Heat_KernelBuilder::done)
-    .def_property_readonly("phase", &Heat_KernelBuilder::phase);
+    .def_property_readonly("weights_completed", &Heat_KernelBuilder::weights_completed)
+    .def_property_readonly("attempts_completed", &Heat_KernelBuilder::attempts_completed)
+    .def_property_readonly("acceptance_rate", &Heat_KernelBuilder::acceptance_rate)
+    .def_property_readonly("total_weights", &Heat_KernelBuilder::total_weights);
 
   py::class_<Heat_Kernel, std::shared_ptr<Heat_Kernel>>(m, "Heat_Kernel")
     .def(py::init<int, int, double, int, double, const std::optional<std::vector<int>>&, std::optional<uint32_t>>(),

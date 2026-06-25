@@ -43,7 +43,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--unfreeze-structure-module", type=bool, default=True)
     parser.add_argument("--train-recycles", type=int, default=8)
     parser.add_argument("--trunk-chunk-size", type=int, default=16)
-    # gradient checkpointing only works for the esm encoder
+    # gradient checkpointing only works for the esm encoder, if use-esm-cache is enabled, checkpointing is not supported
     parser.add_argument("--gradient-checkpointing", type=bool, default=True)
     parser.add_argument("--amp", type=bool, default=True)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -66,9 +66,9 @@ def load_dataset(args: argparse.Namespace) -> list:
         force_download=False,
         complete_structures_only=not args.allow_incomplete,
     )
-    # if len(dataset) > 1000:
-        # dataset = dataset[-1000:]
-    dataset = dataset[:5]
+    if len(dataset) > 1000:
+        dataset = dataset[-1000:]
+    # dataset = dataset[:5]
     return dataset
 
 

@@ -1,5 +1,7 @@
 #include "heat_kernel_builder.hpp"
 
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 
 Heat_KernelBuilder::Heat_KernelBuilder(
@@ -20,82 +22,80 @@ Heat_KernelBuilder::Heat_KernelBuilder(
       progress_batch_(progress_batch < 1 ? DEFAULT_PROGRESS_BATCH : progress_batch) {}
 
 void Heat_KernelBuilder::reset_progress(int dim) {
-    total_thetas_ = this->R * dim;
-    total_lambdas_ = this->R;
-    ops_per_lambda_ = static_cast<int64_t>(dim) * (dim - 1) / 2;
-    total_ops_ = static_cast<int64_t>(total_thetas_) + static_cast<int64_t>(total_lambdas_) * ops_per_lambda_;
+    total_weights_ = this->R;
+    ops_per_laplacian_ = static_cast<int64_t>(dim) * (dim - 1) / 2;
+    ops_per_theta_sampling_ = dim;
+    ops_per_attempt_ = ops_per_theta_sampling_ + ops_per_laplacian_;
     completed_ops_.store(0, std::memory_order_relaxed);
-    thetas_completed_.store(0, std::memory_order_relaxed);
-    lambdas_completed_.store(0, std::memory_order_relaxed);
-    phase_.store(Phase::Init, std::memory_order_relaxed);
+    weights_completed_.store(0, std::memory_order_relaxed);
+    attempts_completed_.store(0, std::memory_order_relaxed);
 }
 
-void Heat_KernelBuilder::set_phase(Phase phase) {
-    phase_.store(phase, std::memory_order_relaxed);
-}
-
-void Heat_KernelBuilder::add_theta_ops(int count) {
-    thetas_completed_.fetch_add(count, std::memory_order_relaxed);
-    completed_ops_.fetch_add(count, std::memory_order_relaxed);
+void Heat_KernelBuilder::add_theta_sampling_ops() {
+    completed_ops_.fetch_add(ops_per_theta_sampling_, std::memory_order_relaxed);
 }
 
 void Heat_KernelBuilder::add_laplacian_ops(int count) {
     completed_ops_.fetch_add(count, std::memory_order_relaxed);
 }
 
-void Heat_KernelBuilder::add_lambda_completed(int count) {
-    lambdas_completed_.fetch_add(count, std::memory_order_relaxed);
+void Heat_KernelBuilder::rollback_attempt() {
+    completed_ops_.fetch_sub(ops_per_attempt_, std::memory_order_relaxed);
+    attempts_completed_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void Heat_KernelBuilder::accept_attempt() {
+    weights_completed_.fetch_add(1, std::memory_order_relaxed);
+    attempts_completed_.fetch_add(1, std::memory_order_relaxed);
 }
 
 int64_t Heat_KernelBuilder::completed_ops() const {
     return completed_ops_.load(std::memory_order_relaxed);
 }
 
-int Heat_KernelBuilder::thetas_completed() const {
-    return thetas_completed_.load(std::memory_order_relaxed);
-}
-
-int Heat_KernelBuilder::lambdas_completed() const {
-    return lambdas_completed_.load(std::memory_order_relaxed);
-}
-
-double Heat_KernelBuilder::fraction() const {
-    if (total_ops_ <= 0) {
-        return 1.0;
+int64_t Heat_KernelBuilder::estimated_total_ops() const {
+    const int remaining = total_weights_ - weights_completed();
+    if (remaining <= 0) {
+        return completed_ops();
     }
-    return static_cast<double>(completed_ops()) / static_cast<double>(total_ops_);
-}
 
-bool Heat_KernelBuilder::done() const {
-    return completed_ops() >= total_ops_;
-}
-
-std::string Heat_KernelBuilder::phase() const {
-    switch (phase_.load(std::memory_order_relaxed)) {
-        case Phase::Thetas:
-            return "thetas";
-        case Phase::Lambdas:
-            return "lambdas";
-        case Phase::Done:
-            return "done";
-        case Phase::Init:
-        default:
-            return "init";
+    const double rate = acceptance_rate();
+    if (rate <= 0.0) {
+        return std::numeric_limits<int64_t>::max();
     }
+
+    const int64_t committed = static_cast<int64_t>(weights_completed()) * ops_per_attempt_;
+    const int64_t estimated_remaining = static_cast<int64_t>(std::ceil(
+        static_cast<double>(remaining) * static_cast<double>(ops_per_attempt_) / rate));
+
+    return committed + estimated_remaining;
+}
+
+int64_t Heat_KernelBuilder::total_ops() const {
+    return estimated_total_ops();
+}
+
+int Heat_KernelBuilder::weights_completed() const {
+    return weights_completed_.load(std::memory_order_relaxed);
+}
+
+int Heat_KernelBuilder::attempts_completed() const {
+    return attempts_completed_.load(std::memory_order_relaxed);
+}
+
+double Heat_KernelBuilder::acceptance_rate() const {
+    const int attempts = attempts_completed();
+    if (attempts <= 0) {
+        return 0.0;
+    }
+    return static_cast<double>(weights_completed()) / static_cast<double>(attempts);
 }
 
 void Heat_KernelBuilder::build() {
     auto built = std::shared_ptr<Heat_Kernel>(new Heat_Kernel());
     built->init_base(this->n, this->axis_dim, this->resolution, this->R, this->tau, this->seed);
     this->reset_progress(built->dim);
-
-    this->set_phase(Phase::Thetas);
-    built->generate_thetas(this);
-
-    this->set_phase(Phase::Done);
-    this->thetas_completed_.store(this->total_thetas_, std::memory_order_relaxed);
-    this->lambdas_completed_.store(this->total_lambdas_, std::memory_order_relaxed);
-    this->completed_ops_.store(this->total_ops_, std::memory_order_relaxed);
+    built->generate_weights(this);
     this->kernel_ = std::move(built);
 }
 

@@ -1,5 +1,4 @@
 import sys
-import os
 import time
 import threading
 from pathlib import Path
@@ -18,6 +17,7 @@ def _mask_cache_label(mask) -> str:
         return "nomask"
     # tbh I don't know what is in mask, if this is a bad way to turn it into a string pls change
     return "mask-" + "-".join(str(i) for i in mask)
+
 
 def _heat_rff_cache_path(n, axis_dim, resolution, R, tau, mask, seed):
     return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_tau-{tau}-R-{R}_seed-{seed}_{_mask_cache_label(mask)}.pt")
@@ -38,38 +38,49 @@ def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, mask, s
                 f"Heat kernel cache {key} mismatch: file has {cached.get(key)}, expected {value}"
             )
 
-def _count_scale(value: int) -> tuple[float, str]:
-    abs_value = abs(value)
-    if abs_value >= 1_000_000_000:
-        return 1_000_000_000, "B"
-    if abs_value >= 1_000_000:
-        return 1_000_000, "M"
-    if abs_value >= 1_000:
-        return 1_000, "K"
-    return 1, ""
+
+def _format_kernel_config(n, axis_dim, resolution, R, tau, mask, seed) -> str:
+    parts = [
+        f"n={n}",
+        f"R={R}",
+        f"axis_dim={axis_dim}",
+        f"resolution={resolution}",
+        f"tau={tau}",
+        f"seed={seed}",
+    ]
+    if mask is not None:
+        parts.append(f"mask={mask}")
+    return ", ".join(parts)
 
 
-def _format_count_pair(completed: int, total: int) -> str:
-    scale, suffix = _count_scale(max(completed, total))
-    if scale == 1:
-        return f"{completed}/{total}"
-    return f"{completed / scale:.2f}{suffix}/{total / scale:.2f}{suffix}"
+def _format_acceptance(builder) -> str:
+    if builder.attempts_completed <= 0:
+        return "n/a"
+    rate = f"{builder.acceptance_rate * 100:.1f}%"
+    return rate
 
 
-def _update_kernel_progress(pbar: tqdm, builder) -> int:
-    completed = builder.completed_ops
-    if builder.phase == "thetas":
-        done = _format_count_pair(builder.thetas_completed, builder.total_thetas)
-        pbar.set_postfix(phase="thetas", done=done, refresh=False)
-    elif builder.phase == "lambdas":
-        done = _format_count_pair(builder.lambdas_completed, builder.total_lambdas)
-        pbar.set_postfix(phase="lambdas", done=done, refresh=False)
-    else:
-        pbar.set_postfix(phase=builder.phase, refresh=False)
+def _sync_pbar_ops(pbar: tqdm, completed: int, last_ops: int) -> int:
+    delta = completed - last_ops
+    if delta > 0:
+        pbar.update(delta)
+    elif delta < 0:
+        pbar.n = completed
+        # Reset the last print values so next positive delta measures speed from this point
+        pbar.last_print_n = completed
+        pbar.last_print_t = time.time()
+        pbar.refresh()
     return completed
 
 
-def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, label: str, progress_batch: int = 100):
+def _update_kernel_progress(pbar: tqdm, builder) -> None:
+    pbar.set_postfix_str(
+        f"w={builder.weights_completed}/{builder.total_weights}, a={_format_acceptance(builder)}",
+        refresh=False,
+    )
+
+
+def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, progress_batch):
     builder = _cpp.Heat_KernelBuilder(n, axis_dim, resolution, R, tau, mask, seed, progress_batch)
     error = {"exc": None}
 
@@ -79,20 +90,36 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, lab
         except Exception as exc:
             error["exc"] = exc
 
+    print(_format_kernel_config(n, axis_dim, resolution, R, tau, mask, seed))
+
     thread = threading.Thread(target=run_build, daemon=True)
     thread.start()
 
     pbar = None
     last_ops = 0
+    bar_format = (
+        "{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} est. "
+        "[{elapsed}<{remaining}, {rate_fmt}]{postfix}"
+    )
     try:
         while thread.is_alive():
             if builder.total_ops > 0 and pbar is None:
-                pbar = tqdm(total=builder.total_ops, desc=label, unit="op", unit_scale=True)
+                pbar = tqdm(
+                    total=builder.total_ops,
+                    desc="heat kernel",
+                    unit="op",
+                    unit_scale=True,
+                    smoothing=0.05,
+                    bar_format=bar_format,
+                )
             if pbar is not None:
-                completed = _update_kernel_progress(pbar, builder)
-                if completed > last_ops:
-                    pbar.update(completed - last_ops)
-                    last_ops = completed
+                completed = builder.completed_ops
+                total = max(builder.total_ops, completed)
+                if total != pbar.total:
+                    pbar.total = total
+                if completed != last_ops:
+                    last_ops = _sync_pbar_ops(pbar, completed, last_ops)
+                _update_kernel_progress(pbar, builder)
             time.sleep(0.2)
     except KeyboardInterrupt:
         if pbar is not None:
@@ -102,9 +129,12 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, lab
     thread.join()
 
     if pbar is not None:
-        remaining = builder.total_ops - last_ops
+        remaining = builder.completed_ops - last_ops
         if remaining > 0:
             pbar.update(remaining)
+        pbar.n = builder.completed_ops
+        pbar.total = builder.total_ops
+        pbar.refresh()
         pbar.close()
 
     if error["exc"] is not None:
@@ -121,14 +151,12 @@ def create_heat_random_fourier_features(
         _validate_cached_kernel(
             cached, n=n, axis_dim=axis_dim, resolution=resolution, R=R, mask=mask, seed=seed
         )
-        kernel = _cpp.Heat_Kernel(            n, axis_dim, resolution, R, tau, cached["thetas"], cached["weights"]
-        )
+        kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, tau, cached["thetas"], cached["weights"])
         return _cpp.VPD(kernel)
 
-    label = f"n={n} R={R} axis_dim={axis_dim} resolution={resolution}"
     if show_progress:
         kernel = _build_kernel_with_progress(
-            n, axis_dim, resolution, R, tau, mask, seed, label, progress_batch,
+            n, axis_dim, resolution, R, tau, mask, seed, progress_batch,
         )
     else:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, tau, mask, seed)
@@ -165,6 +193,7 @@ def create_vpd_kernels(loss_config, heat_rff_config):
     )
     return h0rff, h1rff
 
+
 if __name__ == "__main__":
-    print("Crreating VPD Kernels");
-    create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG);
+    print("Creating VPD Kernels")
+    create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
