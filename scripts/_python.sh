@@ -58,3 +58,7 @@ ensure_venv() {
   echo "Creating virtual environment at $REPO_ROOT/.venv"
   python3 -m venv "$REPO_ROOT/.venv"
 }
+
+bootstrap_pip() {
+  "$1" -m pip install --upgrade pip setuptools wheel
+}
