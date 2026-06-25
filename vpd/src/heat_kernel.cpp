@@ -107,7 +107,7 @@ void Heat_Kernel::generate_weights(Heat_KernelBuilder* builder) {
                 if (builder != nullptr) builder->accept_attempt();
                 break;
             }
-            if (builder != nullptr) builder->rollback_attempt();
+            if (builder != nullptr) builder->reject_attempt();
         }
 
         std::copy(thetas.begin(), thetas.end(), total_thetas.begin() + r * this->dim);

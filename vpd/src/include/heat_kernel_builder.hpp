@@ -27,6 +27,7 @@ private:
     int64_t ops_per_theta_sampling_{0};
     int64_t ops_per_attempt_{0};
     std::atomic<int64_t> completed_ops_{0};
+    std::atomic<int64_t> committed_ops_{0};
     std::atomic<int> weights_completed_{0};
     std::atomic<int> attempts_completed_{0};
 
@@ -35,7 +36,7 @@ private:
     void reset_progress(int dim);
     void add_theta_sampling_ops();
     void add_laplacian_ops(int count);
-    void rollback_attempt();
+    void reject_attempt();
     void accept_attempt();
     int64_t estimated_total_ops() const;
 
