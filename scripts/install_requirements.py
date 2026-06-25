@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Install project requirements (build deps, torch, then requirements.txt)."""
 
-from __future__ import annotations
-
 import subprocess
 import sys
 from pathlib import Path
@@ -11,13 +9,25 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 REQUIREMENTS = REPO_ROOT / "requirements.txt"
 INSTALL_TORCH = Path(__file__).resolve().parent / "install_torch.py"
 
-# Needed by sdist packages when using --no-build-isolation (e.g. tmtools, openfold).
 BUILD_DEPS = ("numpy", "pybind11")
+
+
+def has_torch() -> bool:
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def main() -> None:
     subprocess.check_call([sys.executable, "-m", "pip", "install", *BUILD_DEPS])
-    subprocess.check_call([sys.executable, str(INSTALL_TORCH)])
+
+    if has_torch():
+        print("torch already installed, skipping install_torch.py")
+    else:
+        subprocess.check_call([sys.executable, str(INSTALL_TORCH)])
+
     subprocess.check_call(
         [
             sys.executable,
