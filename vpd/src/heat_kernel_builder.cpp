@@ -59,6 +59,11 @@ int64_t Heat_KernelBuilder::estimated_total_ops() const {
         return completed_ops();
     }
 
+    const int attempts = attempts_completed();
+    if (attempts <= 0) {
+        return static_cast<int64_t>(total_weights_) * ops_per_attempt_;
+    }
+
     const double rate = acceptance_rate();
     if (rate <= 0.0) {
         return std::numeric_limits<int64_t>::max();
