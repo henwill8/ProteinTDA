@@ -137,7 +137,7 @@ void Heat_Kernel::init_base(int n, int axis_dim, double resolution, int R, doubl
     init_dim();
 }
 
-Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask, std::optional<uint32_t> seed) {
+Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, std::optional<uint32_t> seed) {
     init_base(n, axis_dim, resolution, R, tau, seed.value_or(42));
     double qdists = 0.0;
     double count = 0.0;

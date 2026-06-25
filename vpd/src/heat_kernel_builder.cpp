@@ -10,7 +10,6 @@ Heat_KernelBuilder::Heat_KernelBuilder(
     double resolution,
     int R,
     double tau,
-    const std::optional<std::vector<int>>& mask,
     std::optional<uint32_t> seed,
     int progress_batch)
     : n(n),

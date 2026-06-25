@@ -12,24 +12,16 @@ from vpd import _cpp
 _CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "heat_rff"
 
 
-def _mask_cache_label(mask) -> str:
-    if mask is None:
-        return "nomask"
-    # tbh I don't know what is in mask, if this is a bad way to turn it into a string pls change
-    return "mask-" + "-".join(str(i) for i in mask)
+def _heat_rff_cache_path(n, axis_dim, resolution, R, tau, seed):
+    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_tau-{tau}-R-{R}_seed-{seed}.pt")
 
 
-def _heat_rff_cache_path(n, axis_dim, resolution, R, tau, mask, seed):
-    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_tau-{tau}-R-{R}_seed-{seed}_{_mask_cache_label(mask)}.pt")
-
-
-def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, mask, seed) -> None:
+def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed) -> None:
     expected = {
         "n": n,
         "axis_dim": axis_dim,
         "resolution": resolution,
         "R": R,
-        "mask": mask,
         "seed": seed,
     }
     for key, value in expected.items():
@@ -39,7 +31,7 @@ def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, mask, s
             )
 
 
-def _format_kernel_config(n, axis_dim, resolution, R, tau, mask, seed) -> str:
+def _format_kernel_config(n, axis_dim, resolution, R, tau, seed) -> str:
     parts = [
         f"n={n}",
         f"R={R}",
@@ -48,8 +40,6 @@ def _format_kernel_config(n, axis_dim, resolution, R, tau, mask, seed) -> str:
         f"tau={tau}",
         f"seed={seed}",
     ]
-    if mask is not None:
-        parts.append(f"mask={mask}")
     return ", ".join(parts)
 
 
@@ -67,8 +57,8 @@ def _update_kernel_progress(pbar: tqdm, builder) -> None:
     )
 
 
-def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, progress_batch):
-    builder = _cpp.Heat_KernelBuilder(n, axis_dim, resolution, R, tau, mask, seed, progress_batch)
+def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, seed, progress_batch):
+    builder = _cpp.Heat_KernelBuilder(n, axis_dim, resolution, R, tau, seed, progress_batch)
     error = {"exc": None}
 
     def run_build() -> None:
@@ -77,7 +67,7 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, pro
         except Exception as exc:
             error["exc"] = exc
 
-    print(_format_kernel_config(n, axis_dim, resolution, R, tau, mask, seed))
+    print(_format_kernel_config(n, axis_dim, resolution, R, tau, seed))
 
     thread = threading.Thread(target=run_build, daemon=True)
     thread.start()
@@ -129,23 +119,23 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, mask, seed, pro
 
 
 def create_heat_random_fourier_features(
-    n, axis_dim, resolution, R=100, tau=1, mask=None, seed=42, show_progress=True, progress_batch=100,
+    n, axis_dim, resolution, R=100, tau=1, seed=42, show_progress=True, progress_batch=100,
 ):
-    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, tau, mask, seed)
+    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, tau, seed)
     if cache_path.is_file():
         cached = torch.load(cache_path, weights_only=False)
         _validate_cached_kernel(
-            cached, n=n, axis_dim=axis_dim, resolution=resolution, R=R, mask=mask, seed=seed
+            cached, n=n, axis_dim=axis_dim, resolution=resolution, R=R, seed=seed
         )
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, tau, cached["thetas"], cached["weights"])
         return _cpp.VPD(kernel)
 
     if show_progress:
         kernel = _build_kernel_with_progress(
-            n, axis_dim, resolution, R, tau, mask, seed, progress_batch,
+            n, axis_dim, resolution, R, tau, seed, progress_batch,
         )
     else:
-        kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, tau, mask, seed)
+        kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, tau, seed)
 
     vpd = _cpp.VPD(kernel)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -155,7 +145,6 @@ def create_heat_random_fourier_features(
             "axis_dim": axis_dim,
             "resolution": resolution,
             "R": R,
-            "mask": mask,
             "seed": seed,
             "thetas": vpd.thetas,
             "weights": vpd.weights,

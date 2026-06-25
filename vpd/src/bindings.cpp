@@ -7,13 +7,12 @@ namespace py = pybind11;
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   py::class_<Heat_KernelBuilder>(m, "Heat_KernelBuilder")
-    .def(py::init<int, int, double, int, double, const std::optional<std::vector<int>>&, std::optional<uint32_t>, int>(),
+    .def(py::init<int, int, double, int, double, std::optional<uint32_t>, int>(),
         py::arg("n"),
         py::arg("axis_dim"),
         py::arg("resolution"),
         py::arg("R"),
         py::arg("tau"),
-        py::arg("mask") = py::none(),
         py::arg("seed") = py::none(),
         py::arg("progress_batch") = Heat_KernelBuilder::DEFAULT_PROGRESS_BATCH)
     .def("build", &Heat_KernelBuilder::build, py::call_guard<py::gil_scoped_release>())
@@ -26,13 +25,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def_property_readonly("total_weights", &Heat_KernelBuilder::total_weights);
 
   py::class_<Heat_Kernel, std::shared_ptr<Heat_Kernel>>(m, "Heat_Kernel")
-    .def(py::init<int, int, double, int, double, const std::optional<std::vector<int>>&, std::optional<uint32_t>>(),
+    .def(py::init<int, int, double, int, double, std::optional<uint32_t>>(),
         py::arg("n"),
         py::arg("axis_dim"),
         py::arg("resolution"),
         py::arg("R"),
         py::arg("tau"),
-        py::arg("mask") = py::none(),
         py::arg("seed") = py::none(),
         py::call_guard<py::gil_scoped_release>())
     .def(py::init<int, int, double, int, double, const std::vector<double>&, const std::vector<double>&>(),

@@ -50,10 +50,9 @@ public:
      * @param[in] resolution The number of points between any two integers on a axis of our grid.
      * @param[in] R The number of samples to take.
      * @param[in] tau The temperature value to use for the heat kernel computations
-     * @param[in] mask (optional) A mask to make some of the edges 0
      * @param[in] seed (optional) A seed for reproducible randomness. Defaults to 42.
     */
-    Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::optional<std::vector<int>>& mask = std::nullopt, std::optional<uint32_t> seed = std::nullopt);
+    Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, std::optional<uint32_t> seed = std::nullopt);
     Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights);
     const std::vector<double>& get_thetas() const { return thetas; }
     const std::vector<double>& get_weights() const { return weights; }

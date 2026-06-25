@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <vector>
 
 #include "heat_kernel.hpp"
 
@@ -47,7 +46,6 @@ public:
         double resolution,
         int R,
         double tau,
-        const std::optional<std::vector<int>>& mask = std::nullopt,
         std::optional<uint32_t> seed = std::nullopt,
         int progress_batch = DEFAULT_PROGRESS_BATCH);
 
