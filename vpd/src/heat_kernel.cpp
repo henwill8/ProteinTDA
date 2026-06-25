@@ -87,39 +87,30 @@ void Heat_Kernel::generate_weights(Heat_KernelBuilder* builder) {
     std::vector<double> total_thetas(total);
     std::vector<double> weights(this->R);
 
-#pragma omp parallel
-    {
-#ifdef _OPENMP
-        const int tid = omp_get_thread_num();
-#else
-        const int tid = 0;
-#endif
-        std::mt19937 gen(static_cast<uint32_t>(this->seed + tid)); // each thread needs a different generator
-        std::uniform_real_distribution<double> theta_dist(0.0, TWO_PI);
-        std::uniform_real_distribution<double> acceptance_dist(0.0, 1.0);
+    std::mt19937 gen(static_cast<uint32_t>(this->seed));
+    std::uniform_real_distribution<double> theta_dist(0.0, TWO_PI);
+    std::uniform_real_distribution<double> acceptance_dist(0.0, 1.0);
 
-        std::vector<double> thetas(this->dim);
+    std::vector<double> thetas(this->dim);
 
-#pragma omp for schedule(dynamic)
-        for (int r = 0; r < this->R; ++r) {
-            for (;;) {
-                for (int j = 0; j < this->dim; ++j) {
-                    thetas[j] = theta_dist(gen);
-                }
-                if (builder != nullptr) builder->add_theta_sampling_ops();
-
-                double lambda = laplacian_symbol(thetas.data(), this->dim, builder);
-                double weight = std::exp(-this->tau * lambda);
-                if (acceptance_dist(gen) <= weight) {
-                    weights[r] = weight;
-                    if (builder != nullptr) builder->accept_attempt();
-                    break;
-                }
-                if (builder != nullptr) builder->rollback_attempt();
+    for (int r = 0; r < this->R; ++r) {
+        for (;;) {
+            for (int j = 0; j < this->dim; ++j) {
+                thetas[j] = theta_dist(gen);
             }
+            if (builder != nullptr) builder->add_theta_sampling_ops();
 
-            std::copy(thetas.begin(), thetas.end(), total_thetas.begin() + r * this->dim);
+            double lambda = laplacian_symbol(thetas.data(), this->dim, builder);
+            double weight = std::exp(-this->tau * lambda);
+            if (acceptance_dist(gen) <= weight) {
+                weights[r] = weight;
+                if (builder != nullptr) builder->accept_attempt();
+                break;
+            }
+            if (builder != nullptr) builder->rollback_attempt();
         }
+
+        std::copy(thetas.begin(), thetas.end(), total_thetas.begin() + r * this->dim);
     }
     this->thetas = total_thetas;
     this->weights = weights;
