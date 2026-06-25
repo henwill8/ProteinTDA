@@ -156,10 +156,9 @@ def prepare_esm_cache(
     else:
         print(f"All {len(proteins)} proteins already cached at {cache_dir}.")
 
-    cache.load(proteins, show_progress=True)
     if cache.missing(proteins):
         raise RuntimeError(f"Failed to cache all proteins at {cache_dir}.")
-    print(f"Using ESM cache from {cache_dir} ({len(cache)} entries loaded).")
+    print(f"Using ESM cache from {cache_dir} ({cache.cached_count(proteins)} entries on disk.")
     return cache
 
 

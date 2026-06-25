@@ -25,11 +25,29 @@ def _cache_path(cache_dir: Path, sequence: str) -> Path:
     return cache_dir / f"{digest}.pt"
 
 
+def _entry_to_cpu(entry: dict) -> dict:
+    """Keep cached trunk inputs on CPU to save VRAM."""
+    return {
+        "sequence": entry["sequence"],
+        "pairwise_state_dim": entry["pairwise_state_dim"],
+        **{
+            key: entry[key].detach().cpu()
+            for key in ("s_s_0", "aa", "attention_mask", "position_ids")
+        },
+    }
+
+
+def _load_entry(path: Path, *, sequence: str) -> dict:
+    entry = torch.load(path, map_location="cpu", weights_only=False)
+    _validate_entry(entry, sequence=sequence)
+    return _entry_to_cpu(entry)
+
+
 def _trunk_inputs_from_entry(entry: dict, device: torch.device) -> tuple[torch.Tensor, ...]:
-    s_s_0 = entry["s_s_0"].to(device)
-    aa = entry["aa"].to(device)
-    attention_mask = entry["attention_mask"].to(device)
-    position_ids = entry["position_ids"].to(device)
+    s_s_0 = entry["s_s_0"].to(device, non_blocking=device.type == "cuda")
+    aa = entry["aa"].to(device, non_blocking=device.type == "cuda")
+    attention_mask = entry["attention_mask"].to(device, non_blocking=device.type == "cuda")
+    position_ids = entry["position_ids"].to(device, non_blocking=device.type == "cuda")
     batch_size, length = aa.shape
     pairwise_state_dim = entry["pairwise_state_dim"]
     s_z_0 = s_s_0.new_zeros(batch_size, length, length, pairwise_state_dim)
@@ -120,8 +138,11 @@ class ESMEmbeddingCache:
             return True
         return _cache_path(self.cache_dir, sequence).is_file()
 
+    def cached_count(self, proteins: list[SCNProtein]) -> int:
+        return sum(1 for protein in proteins if protein in self)
+
     def missing(self, proteins: list[SCNProtein]) -> list[SCNProtein]:
-        """Return dataset proteins with no in-memory entry and no file on disk."""
+        """Return dataset proteins with no file on disk."""
         return [protein for protein in proteins if protein not in self]
 
     @torch.no_grad()
@@ -159,14 +180,19 @@ class ESMEmbeddingCache:
         if cfg.embed_aa:
             s_s_0 = s_s_0 + model.embedding(aa)
 
-        return {
-            "sequence": sequence,
-            "s_s_0": s_s_0.detach().cpu(),
-            "aa": aa.detach().cpu(),
-            "attention_mask": attention_mask.detach().cpu(),
-            "position_ids": position_ids.detach().cpu(),
-            "pairwise_state_dim": cfg.trunk.pairwise_state_dim,
-        }
+        entry = _entry_to_cpu(
+            {
+                "sequence": sequence,
+                "s_s_0": s_s_0,
+                "aa": aa,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+                "pairwise_state_dim": cfg.trunk.pairwise_state_dim,
+            }
+        )
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        return entry
 
     def store(
         self,
@@ -177,9 +203,7 @@ class ESMEmbeddingCache:
         *,
         show_progress: bool = True,
     ) -> None:
-        """
-        Compute and write any missing entries to disk.
-        """
+        """Compute and write any missing entries to disk."""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         iterator = proteins
         if show_progress:
@@ -194,26 +218,6 @@ class ESMEmbeddingCache:
 
             entry = self.compute_trunk_inputs(model, tokenizer, protein, device)
             torch.save(entry, path)
-            self._entries[sequence] = entry
-
-    def load(self, proteins: list[SCNProtein], *, show_progress: bool = False) -> None:
-        """Load cached entries from disk into memory."""
-        iterator = proteins
-        if show_progress:
-            iterator = tqdm(proteins, desc="loading esm embeddings", leave=False)
-
-        for protein in iterator:
-            sequence = _sequence(protein)
-            if sequence in self._entries:
-                continue
-
-            path = _cache_path(self.cache_dir, sequence)
-            if not path.is_file():
-                continue
-
-            entry = torch.load(path, weights_only=False)
-            _validate_entry(entry, sequence=sequence)
-            self._entries[sequence] = entry
 
     def get(self, protein: SCNProtein) -> dict:
         """Return cached trunk inputs for a protein."""
@@ -222,9 +226,7 @@ class ESMEmbeddingCache:
             path = _cache_path(self.cache_dir, sequence)
             if not path.is_file():
                 raise KeyError(f"No cached ESM embedding for sequence of length {len(sequence)}")
-            entry = torch.load(path, weights_only=False)
-            _validate_entry(entry, sequence=sequence)
-            self._entries[sequence] = entry
+            self._entries[sequence] = _load_entry(path, sequence=sequence)
         return self._entries[sequence]
 
     def run_trunk_from_cache(
