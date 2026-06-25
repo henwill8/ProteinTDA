@@ -29,30 +29,40 @@ def set_seed(seed: int = 42) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fine-tune ESMFold with Wasserstein TDA loss.")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--baseline", type=bool, default=False)
     parser.add_argument("--model", default="facebook/esmfold_v1")
     parser.add_argument("--casp-version", default="debug")
     parser.add_argument("--casp-thinning", type=int, default=30)
     parser.add_argument("--allow-incomplete", type=bool, default=False)
     parser.add_argument("--scn-dir", type=Path, default=Path("data/sidechainnet"))
     parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--unfreeze-trunk-blocks", type=int, default=1)
     parser.add_argument("--unfreeze-structure-module", type=bool, default=False)
     parser.add_argument("--train-recycles", type=int, default=1)
+    parser.add_argument("--infer-recycles", type=int, default=None)
     parser.add_argument("--trunk-chunk-size", type=int, default=1)
     # gradient checkpointing only works for the esm encoder, if use-esm-cache is enabled, checkpointing is not supported
     parser.add_argument("--gradient-checkpointing", type=bool, default=True)
     parser.add_argument("--amp", type=bool, default=True)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--log-file", type=Path, default=Path("logs/kfold_test_scores.log"))
+    parser.add_argument("--log-file", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--use-esm-cache", type=bool, default=True)
     # not sure if we need the option to change which cache we use, maybe remove and turn into a constant
     parser.add_argument("--esm-cache-dir", type=Path, default=Path("cache/esm_embeddings"))
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.log_file is None:
+        args.log_file = (
+            Path("logs/esmfold_baseline.log")
+            if args.baseline
+            else Path("logs/kfold_test_scores.log")
+        )
+    return args
 
 # For lower memory usage, try batch size 1, chunk size 1 or 2? (would be really slow), recycles 1
 
@@ -66,9 +76,9 @@ def load_dataset(args: argparse.Namespace) -> list:
         force_download=False,
         complete_structures_only=not args.allow_incomplete,
     )
-    # if len(dataset) > 1000:
-    #     dataset = dataset[-1000:]
-    dataset = dataset[-5:]
+    if len(dataset) > 1000:
+        dataset = dataset[-1000:]
+    # dataset = dataset[-5:]
     return dataset
 
 
@@ -79,6 +89,68 @@ def make_loader(proteins: list, batch_size: int, shuffle: bool) -> DataLoader:
         shuffle=shuffle,
         collate_fn=lambda x: x,
     )
+
+
+
+def write_log_file(
+    log_file: Path,
+    fold_plddt_scores: list[float],
+    fold_tm_scores: list[float],
+) -> None:
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("w", encoding="utf-8") as handle:
+        for fold_idx, (plddt, tm) in enumerate(zip(fold_plddt_scores, fold_tm_scores), start=1):
+            handle.write(f"fold {fold_idx}: mean_plddt={plddt:.4f} mean_tm={tm:.4f}\n")
+        handle.write(
+            f"mean_plddt mean={np.mean(fold_plddt_scores):.4f} var={np.var(fold_plddt_scores):.4f}\n"
+        )
+        handle.write(
+            f"mean_tm mean={np.mean(fold_tm_scores):.4f} var={np.var(fold_tm_scores):.4f}\n"
+        )
+
+
+def run_baseline(
+    args: argparse.Namespace,
+    proteins: list,
+    device: torch.device,
+    tokenizer: AutoTokenizer,
+    esm_cache: ESMEmbeddingCache | None,
+) -> tuple[list[float], list[float]]:
+    print(f"Loading pretrained {args.model} on {device}...")
+    model = build_model(
+        args.model,
+        device,
+        unfreeze_trunk_blocks=0,
+        unfreeze_structure_module=False,
+        trunk_chunk_size=args.trunk_chunk_size,
+        gradient_checkpointing=False,
+        load_esm=not args.use_esm_cache,
+    )
+    model.eval()
+
+    kf = KFold(n_splits=args.n_splits, shuffle=True, random_state=args.seed)
+    fold_plddt_scores: list[float] = []
+    fold_tm_scores: list[float] = []
+
+    for fold, (_, test_idx) in enumerate(kf.split(proteins)):
+        test_loader = make_loader(
+            [proteins[i] for i in test_idx],
+            args.batch_size,
+            shuffle=False,
+        )
+        plddt, tm = test_model(
+            model,
+            tokenizer,
+            test_loader,
+            device,
+            infer_recycles=args.infer_recycles,
+            esm_cache=esm_cache,
+        )
+        print(f"fold {fold + 1}/{args.n_splits}  mean_plddt={plddt:.4f}  mean_tm={tm:.4f}")
+        fold_plddt_scores.append(plddt)
+        fold_tm_scores.append(tm)
+
+    return fold_plddt_scores, fold_tm_scores
 
 
 def run_fold(
@@ -137,6 +209,7 @@ def run_fold(
             tokenizer,
             val_loader,
             device,
+            infer_recycles=args.infer_recycles,
             esm_cache=esm_cache,
         )
         if val_tm_score > max_val_tm:
@@ -167,74 +240,60 @@ def run_fold(
         tokenizer,
         test_loader,
         device,
+        infer_recycles=args.infer_recycles,
         esm_cache=esm_cache,
     )
     print(f"fold {fold + 1}/{n_splits}  mean_plddt={plddt_score:.4f}  mean_tm={tm_score:.4f}")
     return plddt_score, tm_score
 
 
-def write_log_file(
-    log_file: Path,
-    fold_plddt_scores: list[float],
-    fold_tm_scores: list[float],
-) -> None:
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    with log_file.open("w", encoding="utf-8") as handle:
-        for fold_idx, (plddt, tm) in enumerate(zip(fold_plddt_scores, fold_tm_scores), start=1):
-            handle.write(f"fold {fold_idx}: mean_plddt={plddt:.4f} mean_tm={tm:.4f}\n")
-        handle.write(
-            f"mean_plddt mean={np.mean(fold_plddt_scores):.4f} var={np.var(fold_plddt_scores):.4f}\n"
-        )
-        handle.write(
-            f"mean_tm mean={np.mean(fold_tm_scores):.4f} var={np.var(fold_tm_scores):.4f}\n"
-        )
-
-
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     device = torch.device(args.device)
     set_seed(args.seed)
-
-    h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
-    loss_fn = ESMFoldLoss(config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
-
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
     torch.backends.cuda.matmul.allow_tf32 = True
 
     proteins = load_dataset(args)
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    esm_cache = prepare_esm_cache(
+        args.esm_cache_dir,
+        proteins,
+        args.model,
+        tokenizer,
+        device,
+        trunk_chunk_size=args.trunk_chunk_size,
+    )
 
-    esm_cache: ESMEmbeddingCache | None = None
-    if args.use_esm_cache:
-        esm_cache = prepare_esm_cache(
-            args.esm_cache_dir,
-            proteins,
-            args.model,
-            tokenizer,
-            device,
-            trunk_chunk_size=args.trunk_chunk_size,
+    if args.baseline:
+        fold_plddt_scores, fold_tm_scores = run_baseline(
+            args, proteins, device, tokenizer, esm_cache,
         )
+    else:
+        h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
+        loss_fn = ESMFoldLoss(config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
 
-    kf = KFold(n_splits=5, shuffle=True, random_state=args.seed)
-    fold_plddt_scores: list[float] = []
-    fold_tm_scores: list[float] = []
+        kf = KFold(n_splits=args.n_splits, shuffle=True, random_state=args.seed)
+        fold_plddt_scores: list[float] = []
+        fold_tm_scores: list[float] = []
 
-    for fold, (train_idx, test_idx) in enumerate(kf.split(proteins)):
-        plddt, tm = run_fold(
-            fold,
-            train_idx,
-            test_idx,
-            proteins,
-            args,
-            device,
-            tokenizer,
-            loss_fn,
-            esm_cache,
-            kf.n_splits,
-        )
-        fold_plddt_scores.append(plddt)
-        fold_tm_scores.append(tm)
+        for fold, (train_idx, test_idx) in enumerate(kf.split(proteins)):
+            plddt, tm = run_fold(
+                fold,
+                train_idx,
+                test_idx,
+                proteins,
+                args,
+                device,
+                tokenizer,
+                loss_fn,
+                esm_cache,
+                kf.n_splits,
+            )
+            fold_plddt_scores.append(plddt)
+            fold_tm_scores.append(tm)
 
     write_log_file(args.log_file, fold_plddt_scores, fold_tm_scores)
+    print(f"Wrote results to {args.log_file}")
     return 0
 
 
