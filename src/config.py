@@ -37,7 +37,8 @@ RUN_CONFIG = mlc.ConfigDict(
     }
 )
 
-HEAT_RFF_CONFIG = mlc.ConfigDict(    {
+HEAT_RFF_CONFIG = mlc.ConfigDict(
+    {
         "h0rff": {
             "n": 1,
             "axis_dim": 10,
@@ -135,20 +136,20 @@ LOSS_CONFIG = mlc.ConfigDict(
             "hom_dim": 2,
         },
         "wasserstein_h0": {
-            "weight": 1.0,
+            "weight": 0.05,
             "enabled": True,
         },
         "wasserstein_h1": {
-            "weight": 1.0,
+            "weight": 1.5,
             "enabled": True,
         },
         "vpd_h0": {
             "weight": 1.0,
-            "enabled": True,
+            "enabled": False,
         },
         "vpd_h1": {
             "weight": 1.0,
-            "enabled": True,
+            "enabled": False,
         },
         "eps": _EPS,
     }

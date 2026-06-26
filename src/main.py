@@ -32,6 +32,7 @@ def set_seed(seed: int = 42) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # I have the options that we change most frequently arbitrarily chosen to be args instead of in config
+    # I like the convenience of being able to change options without editing the config file but it splits up where everything is defined
     parser = argparse.ArgumentParser(description="Fine-tune ESMFold with TDA loss functions.")
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--lr", type=float, default=1e-4)
