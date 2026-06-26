@@ -62,11 +62,23 @@ def load_dataset() -> list:
     max_proteins = data.max_proteins
     if not data.allow_incomplete:
         before = len(dataset)
-        dataset = [protein for protein in dataset if "-" not in str(protein.mask)]
+        bad = [
+            protein
+            for protein in dataset
+            if len(protein.seq) != len(protein.mask)
+            or str(protein.mask) != "+" * len(protein.mask)
+        ]
+        for protein in bad[:]:
+            mask = str(protein.mask)
+            non_plus = {char for char in mask if char != "+"}
+            print(
+                f"  excluding {protein.id}: len(seq)={len(protein.seq)}, len(mask)={len(mask)}, non_plus={non_plus or None}"
+            )
+        dataset = [protein for protein in dataset if protein not in bad]
         removed = before - len(dataset)
         if removed:
-            print(f"Removed {removed} proteins with '-' in mask.")
-        
+            print(f"Removed {removed} proteins with incomplete or misaligned masks.")
+
     if max_proteins is not None and len(dataset) > max_proteins:
         dataset = dataset[-max_proteins:]
     # dataset = dataset[5:]
