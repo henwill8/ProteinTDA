@@ -57,7 +57,16 @@ def load_dataset() -> list:
         force_download=False,
         complete_structures_only=not data.allow_incomplete,
     )
+
+    # seems maybe sidechainnet failed to filter out all incomplete proteins?
     max_proteins = data.max_proteins
+    if not data.allow_incomplete:
+        before = len(dataset)
+        dataset = [protein for protein in dataset if "-" not in str(protein.mask)]
+        removed = before - len(dataset)
+        if removed:
+            print(f"Removed {removed} proteins with '-' in mask.")
+        
     if max_proteins is not None and len(dataset) > max_proteins:
         dataset = dataset[-max_proteins:]
     # dataset = dataset[5:]
