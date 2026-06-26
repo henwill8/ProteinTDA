@@ -2,8 +2,41 @@ import ml_collections as mlc
 
 _EPS = 1e-8
 
-HEAT_RFF_CONFIG = mlc.ConfigDict(
+RUN_CONFIG = mlc.ConfigDict(
     {
+        "data": {
+            "casp_version": "debug",
+            "casp_thinning": 30,
+            "allow_incomplete": False,
+            "scn_dir": "data/sidechainnet",
+            "max_proteins": 1000,
+        },
+        "model": {
+            "name": "facebook/esmfold_v1",
+        },
+        "runtime": {
+            "use_esm_cache": True,
+            "esm_cache_dir": "cache/esm_embeddings",
+            "gradient_checkpointing": True,
+            "amp": True,
+            "infer_recycles": None,
+        },
+        "kfold": {
+            "n_splits": 5,
+        },
+        "training": {
+            "seed": 42,
+            "epochs": 300,
+            "patience": 5,
+        },
+        "logging": {
+            "baseline_log_file": "logs/esmfold_baseline.log",
+            "finetune_log_file": "logs/kfold_test_scores.log",
+        },
+    }
+)
+
+HEAT_RFF_CONFIG = mlc.ConfigDict(    {
         "h0rff": {
             "n": 1,
             "axis_dim": 10,

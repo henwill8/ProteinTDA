@@ -19,7 +19,7 @@ from esmfold_finetune import (
 )
 from esm_cache import ESMEmbeddingCache
 from loss import ESMFoldLoss
-from config import HEAT_RFF_CONFIG, LOSS_CONFIG
+from config import HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG
 from vpd_macros import create_vpd_kernels
 
 
@@ -29,56 +29,36 @@ def set_seed(seed: int = 42) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--baseline", type=bool, default=False)
-    parser.add_argument("--model", default="facebook/esmfold_v1")
-    parser.add_argument("--casp-version", default="debug")
-    parser.add_argument("--casp-thinning", type=int, default=30)
-    parser.add_argument("--allow-incomplete", type=bool, default=False)
-    parser.add_argument("--scn-dir", type=Path, default=Path("data/sidechainnet"))
-    parser.add_argument("--epochs", type=int, default=300)
-    parser.add_argument("--n-splits", type=int, default=5)
-    parser.add_argument("--patience", type=int, default=5)
+    # I have the options that we change most frequently arbitrarily chosen to be args instead of in config
+    parser = argparse.ArgumentParser(description="Fine-tune ESMFold with TDA loss functions.")
+    parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--unfreeze-trunk-blocks", type=int, default=1)
-    parser.add_argument("--unfreeze-structure-module", type=bool, default=False)
+    parser.add_argument("--unfreeze-structure-module", action="store_true")
     parser.add_argument("--train-recycles", type=int, default=1)
-    parser.add_argument("--infer-recycles", type=int, default=None)
     parser.add_argument("--trunk-chunk-size", type=int, default=1)
-    # gradient checkpointing only works for the esm encoder, if use-esm-cache is enabled, checkpointing is not supported
-    parser.add_argument("--gradient-checkpointing", type=bool, default=True)
-    parser.add_argument("--amp", type=bool, default=True)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--log-file", type=Path, default=None)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--use-esm-cache", type=bool, default=True)
-    # not sure if we need the option to change which cache we use, maybe remove and turn into a constant
-    parser.add_argument("--esm-cache-dir", type=Path, default=Path("cache/esm_embeddings"))
-    args = parser.parse_args(argv)
-    if args.log_file is None:
-        args.log_file = (
-            Path("logs/esmfold_baseline.log")
-            if args.baseline
-            else Path("logs/kfold_test_scores.log")
-        )
-    return args
+    return parser.parse_args(argv)
 
 # For lower memory usage, try batch size 1, chunk size 1 or 2? (would be really slow), recycles 1
 
-def load_dataset(args: argparse.Namespace) -> list:
+def load_dataset() -> list:
+    data = RUN_CONFIG.data
     print("Loading SidechainNet...")
     dataset = scn.load(
-        casp_version=args.casp_version,
-        casp_thinning=args.casp_thinning,
+        casp_version=data.casp_version,
+        casp_thinning=data.casp_thinning,
         scn_dataset=True,
-        scn_dir=str(args.scn_dir),
+        scn_dir=data.scn_dir,
         force_download=False,
-        complete_structures_only=not args.allow_incomplete,
+        complete_structures_only=not data.allow_incomplete,
     )
-    if len(dataset) > 1000:
-        dataset = dataset[-1000:]
-    # dataset = dataset[-5:]
+    max_proteins = data.max_proteins
+    if max_proteins is not None and len(dataset) > max_proteins:
+        dataset = dataset[-max_proteins:]
+    # dataset = dataset[5:]
+    print(f"Loaded {len(dataset)} proteins.")
     return dataset
 
 
@@ -89,7 +69,6 @@ def make_loader(proteins: list, batch_size: int, shuffle: bool) -> DataLoader:
         shuffle=shuffle,
         collate_fn=lambda x: x,
     )
-
 
 
 def write_log_file(
@@ -116,19 +95,21 @@ def run_baseline(
     tokenizer: AutoTokenizer,
     esm_cache: ESMEmbeddingCache | None,
 ) -> tuple[list[float], list[float]]:
-    print(f"Loading pretrained {args.model} on {device}...")
+    runtime = RUN_CONFIG.runtime
+    training = RUN_CONFIG.training
+    print(f"Loading pretrained {RUN_CONFIG.model.name} on {device}...")
     model = build_model(
-        args.model,
+        RUN_CONFIG.model.name,
         device,
         unfreeze_trunk_blocks=0,
         unfreeze_structure_module=False,
         trunk_chunk_size=args.trunk_chunk_size,
         gradient_checkpointing=False,
-        load_esm=not args.use_esm_cache,
+        load_esm=not runtime.use_esm_cache,
     )
     model.eval()
 
-    kf = KFold(n_splits=args.n_splits, shuffle=True, random_state=args.seed)
+    kf = KFold(n_splits=RUN_CONFIG.kfold.n_splits, shuffle=True, random_state=training.seed)
     fold_plddt_scores: list[float] = []
     fold_tm_scores: list[float] = []
 
@@ -143,10 +124,10 @@ def run_baseline(
             tokenizer,
             test_loader,
             device,
-            infer_recycles=args.infer_recycles,
+            infer_recycles=runtime.infer_recycles,
             esm_cache=esm_cache,
         )
-        print(f"fold {fold + 1}/{args.n_splits}  mean_plddt={plddt:.4f}  mean_tm={tm:.4f}")
+        print(f"fold {fold + 1}/{RUN_CONFIG.kfold.n_splits}  mean_plddt={plddt:.4f}  mean_tm={tm:.4f}")
         fold_plddt_scores.append(plddt)
         fold_tm_scores.append(tm)
 
@@ -165,17 +146,19 @@ def run_fold(
     esm_cache: ESMEmbeddingCache | None,
     n_splits: int,
 ) -> tuple[float, float]:
-    set_seed(args.seed + fold)
+    runtime = RUN_CONFIG.runtime
+    training = RUN_CONFIG.training
+    set_seed(training.seed + fold)
 
     print(f"Fold {fold + 1}/{n_splits}: loading fresh model on {device}...")
     model = build_model(
-        args.model,
+        RUN_CONFIG.model.name,
         device,
         unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
         unfreeze_structure_module=args.unfreeze_structure_module,
         trunk_chunk_size=args.trunk_chunk_size,
-        gradient_checkpointing=args.gradient_checkpointing,
-        load_esm=not args.use_esm_cache,
+        gradient_checkpointing=runtime.gradient_checkpointing,
+        load_esm=not runtime.use_esm_cache,
     )
     trainable, total = trainable_parameter_count(model)
     print(f"Trainable parameters: {trainable:,} / {total:,}")
@@ -190,7 +173,7 @@ def run_fold(
     max_val_tm = 0.0
     patience = 0
 
-    for epoch in range(args.epochs):
+    for epoch in range(training.epochs):
         metrics = train_one_epoch(
             model,
             tokenizer,
@@ -201,7 +184,7 @@ def run_fold(
             unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
             unfreeze_structure_module=args.unfreeze_structure_module,
             train_recycles=args.train_recycles,
-            use_amp=args.amp,
+            use_amp=runtime.amp,
             esm_cache=esm_cache,
         )
         val_plddt_score, val_tm_score = test_model(
@@ -209,7 +192,7 @@ def run_fold(
             tokenizer,
             val_loader,
             device,
-            infer_recycles=args.infer_recycles,
+            infer_recycles=runtime.infer_recycles,
             esm_cache=esm_cache,
         )
         if val_tm_score > max_val_tm:
@@ -223,12 +206,12 @@ def run_fold(
         metrics["val_plddt"] = val_plddt_score
 
         print(
-            f"epoch {epoch + 1}/{args.epochs}"
+            f"epoch {epoch + 1}/{training.epochs}"
             + "\n" + "  ".join(f"{key}={value:.4f}" for key, value in metrics.items())
             + f"\nfold {fold + 1}/{n_splits}"
         )
 
-        if patience > args.patience:
+        if patience > training.patience:
             print(f"Early stopping at epoch {epoch + 1}")
             break
 
@@ -240,7 +223,7 @@ def run_fold(
         tokenizer,
         test_loader,
         device,
-        infer_recycles=args.infer_recycles,
+        infer_recycles=runtime.infer_recycles,
         esm_cache=esm_cache,
     )
     print(f"fold {fold + 1}/{n_splits}  mean_plddt={plddt_score:.4f}  mean_tm={tm_score:.4f}")
@@ -250,19 +233,24 @@ def run_fold(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     device = torch.device(args.device)
-    set_seed(args.seed)
+    runtime = RUN_CONFIG.runtime
+    training = RUN_CONFIG.training
+    set_seed(training.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    proteins = load_dataset(args)
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    esm_cache = prepare_esm_cache(
-        args.esm_cache_dir,
-        proteins,
-        args.model,
-        tokenizer,
-        device,
-        trunk_chunk_size=args.trunk_chunk_size,
-    )
+    proteins = load_dataset()
+    tokenizer = AutoTokenizer.from_pretrained(RUN_CONFIG.model.name)
+
+    esm_cache = None
+    if runtime.use_esm_cache:
+        esm_cache = prepare_esm_cache(
+            Path(runtime.esm_cache_dir),
+            proteins,
+            RUN_CONFIG.model.name,
+            tokenizer,
+            device,
+            trunk_chunk_size=args.trunk_chunk_size,
+        )
 
     if args.baseline:
         fold_plddt_scores, fold_tm_scores = run_baseline(
@@ -272,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
         loss_fn = ESMFoldLoss(config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
 
-        kf = KFold(n_splits=args.n_splits, shuffle=True, random_state=args.seed)
+        kf = KFold(n_splits=RUN_CONFIG.kfold.n_splits, shuffle=True, random_state=training.seed)
         fold_plddt_scores: list[float] = []
         fold_tm_scores: list[float] = []
 
@@ -292,8 +280,11 @@ def main(argv: list[str] | None = None) -> int:
             fold_plddt_scores.append(plddt)
             fold_tm_scores.append(tm)
 
-    write_log_file(args.log_file, fold_plddt_scores, fold_tm_scores)
-    print(f"Wrote results to {args.log_file}")
+    logging = RUN_CONFIG.logging
+    log_path = logging.baseline_log_file if args.baseline else logging.finetune_log_file
+    log_file = Path(log_path)
+    write_log_file(log_file, fold_plddt_scores, fold_tm_scores)
+    print(f"Wrote results to {log_file}")
     return 0
 
 
