@@ -115,7 +115,7 @@ def run_fold(
         unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
         unfreeze_structure_module=args.unfreeze_structure_module,
         trunk_chunk_size=args.trunk_chunk_size,
-        gradient_checkpointing=runtime.gradient_checkpointing,
+        gradient_checkpointing=training.gradient_checkpointing,
         load_esm=not runtime.use_esm_cache,
     )
     trainable, total = trainable_parameter_count(model)
@@ -142,7 +142,7 @@ def run_fold(
             unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
             unfreeze_structure_module=args.unfreeze_structure_module,
             train_recycles=args.train_recycles,
-            use_amp=runtime.amp,
+            use_amp=training.amp,
             esm_cache=esm_cache,
         )
         val_plddt_score, val_tm_score = test_model(
@@ -150,7 +150,7 @@ def run_fold(
             tokenizer,
             val_loader,
             device,
-            infer_recycles=runtime.infer_recycles,
+            infer_recycles=training.infer_recycles,
             esm_cache=esm_cache,
         )
         if val_tm_score > max_val_tm:
@@ -181,7 +181,7 @@ def run_fold(
         tokenizer,
         test_loader,
         device,
-        infer_recycles=runtime.infer_recycles,
+        infer_recycles=training.infer_recycles,
         esm_cache=esm_cache,
     )
     print(f"fold {fold + 1}/{n_splits}  mean_plddt={plddt_score:.4f}  mean_tm={tm_score:.4f}")
@@ -200,7 +200,7 @@ def run_baseline_fold(
     tokenizer: AutoTokenizer,
     esm_cache: ESMEmbeddingCache | None,
 ) -> tuple[float, float]:
-    runtime = RUN_CONFIG.runtime
+    training = RUN_CONFIG.training
     n_splits = RUN_CONFIG.kfold.n_splits
     test_loader = make_loader(
         [proteins[i] for i in test_idx],
@@ -212,7 +212,7 @@ def run_baseline_fold(
         tokenizer,
         test_loader,
         device,
-        infer_recycles=runtime.infer_recycles,
+        infer_recycles=training.infer_recycles,
         esm_cache=esm_cache,
     )
     print(f"fold {fold + 1}/{n_splits}  mean_plddt={plddt:.4f}  mean_tm={tm:.4f}")

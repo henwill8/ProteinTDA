@@ -17,9 +17,6 @@ RUN_CONFIG = mlc.ConfigDict(
         "runtime": {
             "use_esm_cache": True,
             "esm_cache_dir": "cache/esm_embeddings",
-            "gradient_checkpointing": True,
-            "amp": True,
-            "infer_recycles": None,
         },
         "kfold": {
             "n_splits": 5,
@@ -29,6 +26,9 @@ RUN_CONFIG = mlc.ConfigDict(
             "seed": 42,
             "epochs": 300,
             "patience": 5,
+            "gradient_checkpointing": True,
+            "amp": True,
+            "infer_recycles": None,
         },
         "logging": {
             "baseline_log_file": "logs/esmfold_baseline.log",
