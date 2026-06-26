@@ -1,9 +1,10 @@
 import sys
 import argparse
+from functools import partial
 from pathlib import Path
 
 import numpy as np
-from sklearn.model_selection import KFold, train_test_split
+from sklearn.model_selection import train_test_split
 
 import sidechainnet as scn
 import torch
@@ -18,6 +19,7 @@ from esmfold_finetune import (
     trainable_parameter_count,
 )
 from esm_cache import ESMEmbeddingCache
+from kfold_runner import KFoldRunner
 from loss import ESMFoldLoss
 from config import HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG
 from vpd_macros import create_vpd_kernels
@@ -88,56 +90,11 @@ def write_log_file(
         )
 
 
-def run_baseline(
-    args: argparse.Namespace,
-    proteins: list,
-    device: torch.device,
-    tokenizer: AutoTokenizer,
-    esm_cache: ESMEmbeddingCache | None,
-) -> tuple[list[float], list[float]]:
-    runtime = RUN_CONFIG.runtime
-    training = RUN_CONFIG.training
-    print(f"Loading pretrained {RUN_CONFIG.model.name} on {device}...")
-    model = build_model(
-        RUN_CONFIG.model.name,
-        device,
-        unfreeze_trunk_blocks=0,
-        unfreeze_structure_module=False,
-        trunk_chunk_size=args.trunk_chunk_size,
-        gradient_checkpointing=False,
-        load_esm=not runtime.use_esm_cache,
-    )
-    model.eval()
-
-    kf = KFold(n_splits=RUN_CONFIG.kfold.n_splits, shuffle=True, random_state=training.seed)
-    fold_plddt_scores: list[float] = []
-    fold_tm_scores: list[float] = []
-
-    for fold, (_, test_idx) in enumerate(kf.split(proteins)):
-        test_loader = make_loader(
-            [proteins[i] for i in test_idx],
-            args.batch_size,
-            shuffle=False,
-        )
-        plddt, tm = test_model(
-            model,
-            tokenizer,
-            test_loader,
-            device,
-            infer_recycles=runtime.infer_recycles,
-            esm_cache=esm_cache,
-        )
-        print(f"fold {fold + 1}/{RUN_CONFIG.kfold.n_splits}  mean_plddt={plddt:.4f}  mean_tm={tm:.4f}")
-        fold_plddt_scores.append(plddt)
-        fold_tm_scores.append(tm)
-
-    return fold_plddt_scores, fold_tm_scores
-
-
 def run_fold(
     fold: int,
     train_idx: np.ndarray,
     test_idx: np.ndarray,
+    *,
     dataset: list,
     args: argparse.Namespace,
     device: torch.device,
@@ -151,6 +108,7 @@ def run_fold(
     set_seed(training.seed + fold)
 
     print(f"Fold {fold + 1}/{n_splits}: loading fresh model on {device}...")
+    # build new model each fold to get pre-finetuned weights
     model = build_model(
         RUN_CONFIG.model.name,
         device,
@@ -230,6 +188,37 @@ def run_fold(
     return plddt_score, tm_score
 
 
+def run_baseline_fold(
+    fold: int,
+    _train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    *,
+    model,
+    args: argparse.Namespace,
+    proteins: list,
+    device: torch.device,
+    tokenizer: AutoTokenizer,
+    esm_cache: ESMEmbeddingCache | None,
+) -> tuple[float, float]:
+    runtime = RUN_CONFIG.runtime
+    n_splits = RUN_CONFIG.kfold.n_splits
+    test_loader = make_loader(
+        [proteins[i] for i in test_idx],
+        args.batch_size,
+        shuffle=False,
+    )
+    plddt, tm = test_model(
+        model,
+        tokenizer,
+        test_loader,
+        device,
+        infer_recycles=runtime.infer_recycles,
+        esm_cache=esm_cache,
+    )
+    print(f"fold {fold + 1}/{n_splits}  mean_plddt={plddt:.4f}  mean_tm={tm:.4f}")
+    return plddt, tm
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     device = torch.device(args.device)
@@ -252,33 +241,44 @@ def main(argv: list[str] | None = None) -> int:
             trunk_chunk_size=args.trunk_chunk_size,
         )
 
+    runner = KFoldRunner(proteins, baseline=args.baseline)
+
     if args.baseline:
-        fold_plddt_scores, fold_tm_scores = run_baseline(
-            args, proteins, device, tokenizer, esm_cache,
+        print(f"Loading pretrained {RUN_CONFIG.model.name} on {device}...")
+        model = build_model(
+            RUN_CONFIG.model.name,
+            device,
+            unfreeze_trunk_blocks=0,
+            unfreeze_structure_module=False,
+            trunk_chunk_size=args.trunk_chunk_size,
+            gradient_checkpointing=False,
+            load_esm=not runtime.use_esm_cache,
+        )
+        model.eval()
+        fold_fn = partial(
+            run_baseline_fold,
+            model=model,
+            args=args,
+            proteins=proteins,
+            device=device,
+            tokenizer=tokenizer,
+            esm_cache=esm_cache,
         )
     else:
         h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
         loss_fn = ESMFoldLoss(config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
+        fold_fn = partial(
+            run_fold,
+            dataset=proteins,
+            args=args,
+            device=device,
+            tokenizer=tokenizer,
+            loss_fn=loss_fn,
+            esm_cache=esm_cache,
+            n_splits=RUN_CONFIG.kfold.n_splits,
+        )
 
-        kf = KFold(n_splits=RUN_CONFIG.kfold.n_splits, shuffle=True, random_state=training.seed)
-        fold_plddt_scores: list[float] = []
-        fold_tm_scores: list[float] = []
-
-        for fold, (train_idx, test_idx) in enumerate(kf.split(proteins)):
-            plddt, tm = run_fold(
-                fold,
-                train_idx,
-                test_idx,
-                proteins,
-                args,
-                device,
-                tokenizer,
-                loss_fn,
-                esm_cache,
-                kf.n_splits,
-            )
-            fold_plddt_scores.append(plddt)
-            fold_tm_scores.append(tm)
+    fold_plddt_scores, fold_tm_scores = runner.run(fold_fn)
 
     logging = RUN_CONFIG.logging
     log_path = logging.baseline_log_file if args.baseline else logging.finetune_log_file

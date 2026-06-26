@@ -23,6 +23,7 @@ RUN_CONFIG = mlc.ConfigDict(
         },
         "kfold": {
             "n_splits": 5,
+            "checkpoint_dir": "logs/kfold",
         },
         "training": {
             "seed": 42,
