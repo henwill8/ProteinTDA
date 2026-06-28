@@ -9,6 +9,7 @@ Heat_KernelBuilder::Heat_KernelBuilder(
     int axis_dim,
     double resolution,
     int R,
+    double s,
     double tau,
     std::optional<uint32_t> seed,
     int progress_batch)
@@ -16,6 +17,7 @@ Heat_KernelBuilder::Heat_KernelBuilder(
       axis_dim(axis_dim),
       resolution(resolution),
       R(R),
+      s(s),
       tau(tau),
       seed(static_cast<int>(seed.value_or(42))),
       progress_batch_(progress_batch < 1 ? DEFAULT_PROGRESS_BATCH : progress_batch) {}
@@ -98,9 +100,9 @@ double Heat_KernelBuilder::acceptance_rate() const {
 
 void Heat_KernelBuilder::build() {
     auto built = std::shared_ptr<Heat_Kernel>(new Heat_Kernel());
-    built->init_base(this->n, this->axis_dim, this->resolution, this->R, this->tau, this->seed);
+    built->init_base(this->n, this->axis_dim, this->resolution, this->R, this->s, this->tau, this->seed);
     this->reset_progress(built->dim);
-    built->generate_weights(this);
+    built->generate_weights(SamplingMethod::Rejection, this);
     this->kernel_ = std::move(built);
 }
 

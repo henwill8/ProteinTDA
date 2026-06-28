@@ -16,6 +16,7 @@ private:
     int axis_dim;
     double resolution;
     int R;
+    double s;
     double tau;
     int seed;
     int progress_batch_;
@@ -45,6 +46,7 @@ public:
         int axis_dim,
         double resolution,
         int R,
+        double s,
         double tau,
         std::optional<uint32_t> seed = std::nullopt,
         int progress_batch = DEFAULT_PROGRESS_BATCH);

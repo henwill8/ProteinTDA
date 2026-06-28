@@ -1,5 +1,7 @@
 #include "heat_kernel.hpp"
 #include "heat_kernel_builder.hpp"
+#include "include/heat_kernel.hpp"
+#include <random>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -72,6 +74,8 @@ double Heat_Kernel::laplacian_symbol(const double* theta, int n, Heat_KernelBuil
                     }
                 }
             }
+            double edge_weight = dist_to_diagonal_grid(node_at(i));
+            result += edge_weight * (1.0 - std::cos(theta[i]));
         }
 
         if (builder != nullptr && local_completed > 0) {
@@ -81,7 +85,25 @@ double Heat_Kernel::laplacian_symbol(const double* theta, int n, Heat_KernelBuil
     return result;
 }
 
-void Heat_Kernel::generate_weights(Heat_KernelBuilder* builder) {
+double Heat_Kernel::delta_laplacian_symbol(const double* theta, int k, double proposed_val) const {
+  const auto k_node = node_at(k);
+  double current_val = theta[k];
+  double delta = 0;
+
+  for (int i = 0; i < this->dim; ++i) {
+    if (i == k) continue;
+    double weight = qdist(k_node, node_at(i));
+    if (weight == 0) continue;
+    delta += 2 * weight * (std::cos(current_val - theta[k]) - std::cos(proposed_val - theta[k]));
+  }
+
+  double weight = dist_to_diagonal_grid(k_node);
+  delta += weight * (std::cos(current_val) - std::cos(proposed_val));
+
+  return delta;
+}
+
+void Heat_Kernel::generate_weights_rejection(Heat_KernelBuilder* builder) {
     const double TWO_PI = 2.0 * std::numbers::pi;
     const int total = this->R * this->dim;
     std::vector<double> total_thetas(total);
@@ -101,7 +123,7 @@ void Heat_Kernel::generate_weights(Heat_KernelBuilder* builder) {
             if (builder != nullptr) builder->add_theta_sampling_ops();
 
             double lambda = laplacian_symbol(thetas.data(), this->dim, builder);
-            double weight = std::exp(-this->tau * lambda);
+            double weight = std::exp(-this->tau * lambda) * (1 - std::exp(-this->s * lambda));
             if (acceptance_dist(gen) <= weight) {
                 weights[r] = weight;
                 if (builder != nullptr) builder->accept_attempt();
@@ -116,6 +138,66 @@ void Heat_Kernel::generate_weights(Heat_KernelBuilder* builder) {
     this->weights = weights;
 }
 
+void Heat_Kernel::generate_weights_metropolis_hastings(Heat_KernelBuilder* builder) {
+  const double TWO_PI = 2.0 * std::numbers::pi;
+  const int total = this->R * this->dim;
+
+  std::mt19937 gen(static_cast<uint32_t>(this->seed));
+  std::uniform_real_distribution<double> theta_dist(0.0, TWO_PI);
+  std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
+
+  std::vector<double> theta(this->dim);
+  for (int j = 0; j < this->dim; ++j) {
+    theta[j] = theta_dist(gen);
+  }
+
+  double curr_lambda = laplacian_symbol(theta.data(), this->dim, builder);
+
+  std::vector<double> total_thetas(total);
+  std::vector<double> weights(this->R, 1.0);
+
+  auto mcmc_pass = [&]() {
+    for (int k = 0; k < this->dim; ++k) {
+      double prop = theta[k] + this->mcmc_sigma * (2 * uniform_dist(gen) - 1);
+      prop = std::fmod(prop, TWO_PI);
+      if (prop < 0.0) {
+        prop += TWO_PI;
+      }
+
+      const double dL = delta_laplacian_symbol(theta.data(), k, prop);
+      double next_lambda = curr_lambda + dL;
+
+      double log_diff = -this->tau * dL + std::log1p(std::exp(-this->s * next_lambda)) - std::log1p(std::exp(-this->s * curr_lambda));
+      if (std::log(uniform_dist(gen) > log_diff)) {
+        theta[k] = prop;
+        curr_lambda = next_lambda;
+      }
+    }
+  };
+
+  for (int s = 0; s < this->mcmc_burn_in; ++s) mcmc_pass();
+
+  for (int r = 0; r < this->R; ++r) { 
+    for (int s = 0; s < this->mcmc_iter; ++s) mcmc_pass();
+    std::copy(theta.begin(), theta.end(), total_thetas.begin() + r * this->dim);
+  }
+  this->thetas = total_thetas;
+  this->weights = weights;
+}
+
+void Heat_Kernel::generate_weights(SamplingMethod method, Heat_KernelBuilder* builder) {
+  switch(method) {
+    case SamplingMethod::Rejection:
+      generate_weights_rejection(builder);
+      break;
+    case SamplingMethod::Metropolis_Hastings:
+      generate_weights_metropolis_hastings(builder);
+      break;
+    case SamplingMethod::MALA:
+      break;
+  }
+}
+
 void Heat_Kernel::init_dim() {
     const int ppa = points_per_axis();
     if (this->n == 1) {
@@ -127,9 +209,10 @@ void Heat_Kernel::init_dim() {
     }
 }
 
-void Heat_Kernel::init_base(int n, int axis_dim, double resolution, int R, double tau, int seed) {
+void Heat_Kernel::init_base(int n, int axis_dim, double resolution, int R, double s, double tau, int seed) {
     this->n = n;
     this->R = R;
+    this->s = s;
     this->tau = tau;
     this->resolution = resolution;
     this->axis_dim = axis_dim;
@@ -137,8 +220,8 @@ void Heat_Kernel::init_base(int n, int axis_dim, double resolution, int R, doubl
     init_dim();
 }
 
-Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, std::optional<uint32_t> seed) {
-    init_base(n, axis_dim, resolution, R, tau, seed.value_or(42));
+Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double s, double tau, std::optional<uint32_t> seed) {
+    init_base(n, axis_dim, resolution, R, s, tau, seed.value_or(42));
     double qdists = 0.0;
     double count = 0.0;
     for (int i = 0; i < resolution * axis_dim; ++i) {
@@ -149,11 +232,20 @@ Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double t
         }
     }
     std::cout << "AVERAGE qdist" << qdists/count << std::endl;
-    //generate_weights();
+    generate_weights(SamplingMethod::Rejection);
 }
 
-Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double tau, const std::vector<double>& thetas, const std::vector<double>& weights) {
-    init_base(n, axis_dim, resolution, R, tau, 0);
+Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double s, double tau, double mcmc_sigma, int mcmc_burn_in, int mcmc_iter, std::optional<uint32_t> seed)
+{
+    init_base(n, axis_dim, resolution, s, R, tau, seed.value_or(42));
+    this->mcmc_sigma = mcmc_sigma;
+    this->mcmc_burn_in = mcmc_burn_in;
+    this->mcmc_iter = mcmc_iter;
+    generate_weights(SamplingMethod::Metropolis_Hastings);
+}
+
+Heat_Kernel::Heat_Kernel(int n, int axis_dim, double resolution, int R, double s, double tau, const std::vector<double>& thetas, const std::vector<double>& weights) {
+    init_base(n, axis_dim, resolution, R, s, tau, 0);
     this->thetas = thetas;
     this->weights = weights;
 }
