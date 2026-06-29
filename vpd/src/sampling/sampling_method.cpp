@@ -76,7 +76,7 @@ double SamplingMethod::laplacian_symbol(const double* theta) {
                 }
             }
             double edge_weight = dist_to_diagonal_grid(node_at(i));
-            result += edge_weight * (1.0 - std::cos(theta[i]));
+            result += 2 * edge_weight * (1.0 - std::cos(theta[i]));
         }
 
         if (local_completed > 0) {
@@ -105,7 +105,7 @@ double SamplingMethod::delta_laplacian_symbol(const double* theta, int k, double
     }
 
     double weight = dist_to_diagonal_grid(k_node);
-    delta += weight * (std::cos(current_val) - std::cos(proposed_val));
+    delta += 2 * weight * (std::cos(current_val) - std::cos(proposed_val));
     
     ++local_completed;
     add_ops(local_completed);
