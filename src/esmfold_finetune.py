@@ -11,7 +11,6 @@ from collections import defaultdict
 import numpy as np
 import torch
 from tmtools import tm_align
-from tqdm import tqdm
 from transformers import EsmForProteinFolding
 
 from data_conversions import (
@@ -194,7 +193,7 @@ def train_one_epoch(
     totals = defaultdict(lambda: 0.0)
     n = 0
 
-    for batch in tqdm(loader, desc="train", leave=False):
+    for batch in loader:
         for protein in batch:
             optimizer.zero_grad(set_to_none=True)
             if randomize_recycles and train_recycles > 1:
@@ -264,7 +263,7 @@ def test_model(
     with torch.no_grad():
         plddt_list = []
         tm_score_list = []
-        for batch in tqdm(loader, desc="test", leave=False):
+        for batch in loader:
             for protein in batch:
                 sequence = str(protein.seq)
                 inputs = tokenizer(

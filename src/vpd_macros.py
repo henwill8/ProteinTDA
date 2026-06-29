@@ -1,4 +1,3 @@
-import hashlib
 import sys
 import os
 import time
@@ -15,11 +14,31 @@ from vpd import _cpp
 _CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "heat_rff"
 
 
-def _heat_rff_cache_path(n, axis_dim, resolution, R, mask, seed):
-    key = repr((n, axis_dim, resolution, R, mask, seed))
-    digest = hashlib.sha256(key.encode()).hexdigest()[:32]
-    return _CACHE_DIR / f"{digest}.pt"
+def _mask_cache_label(mask) -> str:
+    if mask is None:
+        return "nomask"
+    # tbh I don't know what is in mask, if this is a bad way to turn it into a string pls change
+    return "mask-" + "-".join(str(i) for i in mask)
 
+
+def _heat_rff_cache_path(n, axis_dim, resolution, R, mask, seed):
+    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_R-{R}_seed-{seed}_{_mask_cache_label(mask)}.pt")
+
+
+def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, mask, seed) -> None:
+    expected = {
+        "n": n,
+        "axis_dim": axis_dim,
+        "resolution": resolution,
+        "R": R,
+        "mask": mask,
+        "seed": seed,
+    }
+    for key, value in expected.items():
+        if cached.get(key) != value:
+            raise ValueError(
+                f"Heat kernel cache {key} mismatch: file has {cached.get(key)}, expected {value}"
+            )
 
 def _count_scale(value: int) -> tuple[float, str]:
     abs_value = abs(value)
@@ -101,8 +120,10 @@ def create_heat_random_fourier_features(
     cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, mask, seed)
     if cache_path.is_file():
         cached = torch.load(cache_path, weights_only=False)
-        kernel = _cpp.Heat_Kernel(
-            n, axis_dim, resolution, R, tau, cached["thetas"], cached["lambdas"]
+        _validate_cached_kernel(
+            cached, n=n, axis_dim=axis_dim, resolution=resolution, R=R, mask=mask, seed=seed
+        )
+        kernel = _cpp.Heat_Kernel(            n, axis_dim, resolution, R, tau, cached["thetas"], cached["lambdas"]
         )
         return _cpp.VPD(kernel)
 

@@ -1,15 +1,27 @@
 from sklearn.model_selection import KFold, train_test_split
 
+import os, warnings
+warnings.filterwarnings("ignore")
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+
+import transformers
+transformers.logging.set_verbosity_error()       
+transformers.utils.logging.disable_progress_bar() 
+
 import argparse
 import sys
 import copy
 from pathlib import Path
+
+import sidechainnet as scn
 
 import optuna
 from optuna.pruners import SuccessiveHalvingPruner
 from optuna.samplers import TPESampler
 
 import torch
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer 
 import numpy as np
 
@@ -45,24 +57,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--trunk-chunk-size", type=int, default=64)
     parser.add_argument("--gradient-checkpointing", type=bool, default=True)
     parser.add_argument("--amp", type=bool, default=True)
-    parser.add_argument("--optimized-param", type=String, default="tau")
+    parser.add_argument("--optimized-param", type=str, default="tau")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--log-file", type=Path, default=Path("out/optuna_output.txt"))
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--w-min", type=float, default=0.005)
     parser.add_argument("--w-max", type=float, default=2)
     parser.add_argument("--t-min", type=float, default=1e-25)
     parser.add_argument("--t-max", type=float, default=1e-5)
-    parser.add_argument("--n-folds", type=float, default=2)
+    parser.add_argument("--n-folds", type=int, default=2)
+    parser.add_argument("--n-trials", type=int, default=2)
     return parser.parse_args(argv)
 
 def suggest_params(trial: optuna.Trial, args) -> dict:
     params = {
             "w_wasserstein_h0": trial.suggest_float("w_wasserstein_h0", args.w_min, args.w_max, log=True),
             "w_wasserstein_h1": trial.suggest_float("w_wasserstein_h1", args.w_min, args.w_max, log=True),
-            "w_vpd_h0": trial.suggest_float("w_vpd_h0", args.w_min, args.w_max, log=True),
-            "w_vpd_h1": trial.suggest_float("w_vpd_h1", args.w_min, args.w_max, log=True),
-            "tau_h0": trial.suggest_float("tau_h0", args.t_min, args.t_max, log=True),
-            "tau_h1": trial.suggest_float("tau_h1", args.t_min, args.t_max, log=True)
+            #"w_vpd_h0": trial.suggest_float("w_vpd_h0", args.w_min, args.w_max, log=True),
+            #"w_vpd_h1": trial.suggest_float("w_vpd_h1", args.w_min, args.w_max, log=True),
+            #"tau_h0": trial.suggest_float("tau_h0", args.t_min, args.t_max, log=True),
+            #"tau_h1": trial.suggest_float("tau_h1", args.t_min, args.t_max, log=True)
     }
     return params
 
@@ -72,20 +86,13 @@ def build_params(params:dict):
 
     loss_cfg.wasserstein_h0.weight = params["w_wasserstein_h0"]
     loss_cfg.wasserstein_h1.weight = params["w_wasserstein_h1"]
-    loss_cfg.vpd_h0.weight = params["w_vpd_h0"]
-    loss_cfg.vpd_h1.weight = params["w_vpd_h1"]
+    #loss_cfg.vpd_h0.weight = params["w_vpd_h0"]
+    #loss_cfg.vpd_h1.weight = params["w_vpd_h1"]
 
-    heat_cfg.tau_h0.weight = params["tau_h0"]
-    heat_cfg.tau_h1.weight = params["tau_h1"]
+    #heat_cfg.h0rff.tau = params["tau_h0"]
+    #heat_cfg.h1rff.tau = params["tau_h1"]
 
     return loss_cfg, heat_cfg
-
-
-def optimize_tau():
-    print("Optimizing")
-
-def optimize_weights():
-    print("Optimizing")
 
 def create_obj_function(args, device, tokenizer, dataset):
     def objective(trial: optuna.Trial) -> float:
@@ -101,7 +108,6 @@ def create_obj_function(args, device, tokenizer, dataset):
                 break
             set_seed(42 + fold)
         
-            print(f"Fold {fold + 1}/{kf.n_splits}: loading fresh model on {device}...")
             model = build_model(
                 args.model,
                 device,
@@ -112,7 +118,6 @@ def create_obj_function(args, device, tokenizer, dataset):
                 gradient_checkpointing=args.gradient_checkpointing,
             )
             trainable, total = trainable_parameter_count(model)
-            print(f"Trainable parameters: {trainable:,} / {total:,}")
         
             train_idx, val_idx = train_test_split(train_idx, test_size=0.25)
 
@@ -188,12 +193,6 @@ def create_obj_function(args, device, tokenizer, dataset):
                 else:
                     patience += 1
 
-                print(
-                    f"epoch {epoch + 1}/{args.epochs}"
-                    + "\n" + "  ".join(f"{key}={value:.4f}" for key, value in metrics.items())
-                    + f"\nfold {fold + 1}/{kf.n_splits}"
-                )
-
                 if patience > args.patience:
                     print(f"Early stoppping at epoch {epoch}")
                     break
@@ -207,26 +206,26 @@ def create_obj_function(args, device, tokenizer, dataset):
                 test_loader,
                 device,
             )
-            print(f"fold {fold + 1}/{kf.n_splits}  mean_plddt={plddt_score:.4f}  mean_tm={tm_score:.4f}")
             fold_tm_scores.append(tm_score)
 
         del model
         if device.type == "cuda":
             torch.cuda.empty_cache()
+        print(fold_tm_scores)
         return (np.mean(fold_tm_scores)) if fold_tm_scores else 0.0
 
     return objective
 
 
 def main(argv: list[str] | None = None) -> int:
+    optuna.logging.set_verbosity(optuna.logging.INFO)
+
     args = parse_args(argv)
     device = torch.device(args.device)
 
-    print(f"Loading tokenizer for {args.model}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    print("Loading SidechainNet...")
     dataset = scn.load(
         casp_version = args.casp_version,
         casp_thinning = args.casp_thinning,
@@ -237,20 +236,20 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # The last 5 proteins in the dataset were large enough to  significantly impact memory usage and time complexity.
-    # dataset = dataset[:-5]
-    dataset = dataset[:5]
+    dataset = dataset[:-5]
 
     study = optuna.create_study(
         study_name="TDA Optimizer",
         storage="sqlite:///optuna_tda.db",
         sampler=TPESampler(seed=args.seed),
         pruner=SuccessiveHalvingPruner(),
+        direction="maximize",
         load_if_exists=True
     )
 
-    study.optimize(make_objective(args, device, tokenizer, dataset), n_trials=args.n_trials)
+    study.optimize(create_obj_function(args, device, tokenizer, dataset), show_progress_bar=True, n_trials=args.n_trials)
 
-    args.log_file.parent.mkdir(parents=True, exists_ok=True)
+    args.log_file.parent.mkdir(parents=True, exist_ok=True)
     with args.log_file.open("a") as f:
         f.write("==================== New Study Results ====================\n")
         f.write("========== Best Values= =========\n")
@@ -258,9 +257,9 @@ def main(argv: list[str] | None = None) -> int:
         for k, v in study.best_params.items():
             f.write(f"{k}={v:.8g}\n")
         f.write("========== Parameter Importances ==========\n")
-        f.write(optuna.importances.get_param_importances(study))
+        f.write(str(optuna.importance.get_param_importances(study)))
 
     return 0
 
 if __name__ == "__main__":
-    sys.exit(main)
+    sys.exit(main())
