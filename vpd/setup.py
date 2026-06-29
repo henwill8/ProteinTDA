@@ -7,11 +7,14 @@ USE_OPENMP = True
 
 cwd = os.getcwd()
 include_dir = os.path.join(cwd, "src", "include")
+sampling_dir = os.path.join(cwd, "src", "sampling")
 
 sources = [
     os.path.join("src", "straight_through.cpp"),
     os.path.join("src", "heat_kernel.cpp"),
-    os.path.join("src", "heat_kernel_builder.cpp"),
+    os.path.join("src", "sampling", "sampling_method.cpp"),
+    os.path.join("src", "sampling", "rejection_sampling.cpp"),
+    os.path.join("src", "sampling", "metropolis_hastings_sampling.cpp"),
     os.path.join("src", "vpd.cpp"),
     os.path.join("src", "bindings.cpp"),
 ]
@@ -39,7 +42,7 @@ setup(
         CppExtension(
             name="vpd._cpp",
             sources=sources,
-            include_dirs=[include_dir],
+            include_dirs=[include_dir, sampling_dir],
             extra_compile_args=extra_compile_args,
             extra_link_args=extra_link_args,
         ),

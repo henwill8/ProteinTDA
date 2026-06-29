@@ -12,8 +12,8 @@ from vpd import _cpp
 _CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "heat_rff"
 
 
-def _heat_rff_cache_path(n, axis_dim, resolution, R, tau, seed):
-    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_tau-{tau}-R-{R}_seed-{seed}.pt")
+def _heat_rff_cache_path(n, axis_dim, resolution, R, t, seed):
+    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_t-{t}-R-{R}_seed-{seed}.pt")
 
 
 def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed) -> None:
@@ -31,43 +31,33 @@ def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed) -
             )
 
 
-def _format_kernel_config(n, axis_dim, resolution, R, tau, seed) -> str:
+def _format_kernel_config(n, axis_dim, resolution, R, t, seed) -> str:
     parts = [
         f"n={n}",
         f"R={R}",
         f"axis_dim={axis_dim}",
         f"resolution={resolution}",
-        f"tau={tau}",
+        f"t={t}",
         f"seed={seed}",
     ]
     return ", ".join(parts)
 
 
-def _format_acceptance(builder) -> str:
-    if builder.attempts_completed <= 0:
-        return "n/a"
-    rate = f"{builder.acceptance_rate * 100:.1f}%"
-    return rate
+def _update_sampler_progress(pbar: tqdm, sampler) -> None:
+    pbar.set_postfix_str(sampler.progress_postfix(), refresh=False)
 
 
-def _update_kernel_progress(pbar: tqdm, builder) -> None:
-    pbar.set_postfix_str(
-        f"w={builder.weights_completed}/{builder.total_weights}, a={_format_acceptance(builder)}",
-        refresh=False,
-    )
-
-
-def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, seed, progress_batch):
-    builder = _cpp.Heat_KernelBuilder(n, axis_dim, resolution, R, tau, seed, progress_batch)
+def _build_kernel_with_progress(sampler, config_line: str):
+    result = {"kernel": None}
     error = {"exc": None}
 
     def run_build() -> None:
         try:
-            builder.build()
+            result["kernel"] = sampler.build()
         except Exception as exc:
             error["exc"] = exc
 
-    print(_format_kernel_config(n, axis_dim, resolution, R, tau, seed))
+    print(config_line)
 
     thread = threading.Thread(target=run_build, daemon=True)
     thread.start()
@@ -79,9 +69,9 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, seed, progress_
     )
     try:
         while thread.is_alive():
-            if builder.total_ops > 0 and pbar is None:
+            if sampler.total_ops > 0 and pbar is None:
                 pbar = tqdm(
-                    total=builder.total_ops,
+                    total=sampler.total_ops,
                     desc="heat kernel",
                     unit="op",
                     unit_scale=True,
@@ -89,14 +79,14 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, seed, progress_
                     bar_format=bar_format,
                 )
             if pbar is not None:
-                completed = builder.completed_ops
-                total = builder.total_ops
+                completed = sampler.completed_ops
+                total = sampler.total_ops
                 if total != pbar.total:
                     pbar.total = total
                 delta = completed - pbar.n
                 if delta > 0:
                     pbar.update(delta)
-                _update_kernel_progress(pbar, builder)
+                _update_sampler_progress(pbar, sampler)
             time.sleep(0.2)
     except KeyboardInterrupt:
         if pbar is not None:
@@ -106,36 +96,43 @@ def _build_kernel_with_progress(n, axis_dim, resolution, R, tau, seed, progress_
     thread.join()
 
     if pbar is not None:
-        delta = builder.completed_ops - pbar.n
+        delta = sampler.completed_ops - pbar.n
         if delta > 0:
             pbar.update(delta)
-        pbar.total = builder.total_ops
+        pbar.total = sampler.total_ops
         pbar.refresh()
         pbar.close()
 
     if error["exc"] is not None:
         raise error["exc"]
-    return builder.kernel()
+    return result["kernel"]
 
 
 def create_heat_random_fourier_features(
-    n, axis_dim, resolution, R=100, tau=1, seed=42, show_progress=True, progress_batch=100,
+    n, axis_dim, resolution, R=100, s=1.0, t=1, seed=42, show_progress=True, progress_batch=100,
 ):
-    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, tau, seed)
+    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, t, seed)
     if cache_path.is_file():
         cached = torch.load(cache_path, weights_only=False)
         _validate_cached_kernel(
             cached, n=n, axis_dim=axis_dim, resolution=resolution, R=R, seed=seed
         )
-        kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, tau, cached["thetas"], cached["weights"])
+        kernel = _cpp.Heat_Kernel(
+            n, axis_dim, resolution, R, s, t, cached["thetas"], cached["weights"],
+        )
         return _cpp.VPD(kernel)
 
     if show_progress:
-        kernel = _build_kernel_with_progress(
-            n, axis_dim, resolution, R, tau, seed, progress_batch,
+        kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
+        sampler = _cpp.RejectionSamplingKernel(kernel, seed, progress_batch)
+        _build_kernel_with_progress(
+            sampler,
+            f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, t, seed)}",
         )
     else:
-        kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, tau, seed)
+        kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
+        sampler = _cpp.RejectionSamplingKernel(kernel, seed, progress_batch)
+        sampler.build()
 
     vpd = _cpp.VPD(kernel)
     cache_path.parent.mkdir(parents=True, exist_ok=True)

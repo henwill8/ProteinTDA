@@ -1,63 +1,57 @@
 #include <torch/extension.h>
 #include "heat_kernel.hpp"
-#include "heat_kernel_builder.hpp"
+#include "sampling_method.hpp"
+#include "rejection_sampling.hpp"
+#include "metropolis_hastings_sampling.hpp"
 #include "vpd.hpp"
 
 namespace py = pybind11;
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  py::class_<Heat_KernelBuilder>(m, "Heat_KernelBuilder")
-    .def(py::init<int, int, double, int, double, double, std::optional<uint32_t>, int>(),
-        py::arg("n"),
-        py::arg("axis_dim"),
-        py::arg("resolution"),
-        py::arg("R"),
-        py::arg("s"),
-        py::arg("tau"),
-        py::arg("seed") = py::none(),
-        py::arg("progress_batch") = Heat_KernelBuilder::DEFAULT_PROGRESS_BATCH)
-    .def("build", &Heat_KernelBuilder::build, py::call_guard<py::gil_scoped_release>())
-    .def("kernel", &Heat_KernelBuilder::kernel)
-    .def_property_readonly("completed_ops", &Heat_KernelBuilder::completed_ops)
-    .def_property_readonly("total_ops", &Heat_KernelBuilder::total_ops)
-    .def_property_readonly("weights_completed", &Heat_KernelBuilder::weights_completed)
-    .def_property_readonly("attempts_completed", &Heat_KernelBuilder::attempts_completed)
-    .def_property_readonly("acceptance_rate", &Heat_KernelBuilder::acceptance_rate)
-    .def_property_readonly("total_weights", &Heat_KernelBuilder::total_weights);
-
   py::class_<Heat_Kernel, std::shared_ptr<Heat_Kernel>>(m, "Heat_Kernel")
-    .def(py::init<int, int, double, int, double, double, std::optional<uint32_t>>(),
+    .def(py::init<int, int, double, int, double, double>(),
         py::arg("n"),
         py::arg("axis_dim"),
         py::arg("resolution"),
         py::arg("R"),
         py::arg("s"),
-        py::arg("tau"),
-        py::arg("seed") = py::none(),
-        py::call_guard<py::gil_scoped_release>())
-    .def(py::init<int, int, double, int, double, double, double, int, int, std::optional<uint32_t>>(),
-        py::arg("n"),
-        py::arg("axis_dim"),
-        py::arg("resolution"),
-        py::arg("R"),
-        py::arg("s"),
-        py::arg("tau"),
-        py::arg("sigma"),
-        py::arg("burn_in"),
-        py::arg("iter"),
-        py::arg("seed") = py::none(),
-        py::call_guard<py::gil_scoped_release>())
+        py::arg("t"))
     .def(py::init<int, int, double, int, double, double, const std::vector<double>&, const std::vector<double>&>(),
         py::arg("n"),
         py::arg("axis_dim"),
         py::arg("resolution"),
         py::arg("R"),
         py::arg("s"),
-        py::arg("tau"),
+        py::arg("t"),
         py::arg("thetas"),
         py::arg("weights"))
-    .def_property_readonly("thetas", &Heat_Kernel::get_thetas)
-    .def_property_readonly("weights", &Heat_Kernel::get_weights);
+    .def_readonly("thetas", &Heat_Kernel::thetas)
+    .def_readonly("weights", &Heat_Kernel::weights);
+
+  py::class_<SamplingMethod, std::shared_ptr<SamplingMethod>>(m, "SamplingMethod")
+    .def("build", &SamplingMethod::build, py::call_guard<py::gil_scoped_release>())
+    .def_property_readonly("completed_ops", &SamplingMethod::completed_ops)
+    .def_property_readonly("total_ops", &SamplingMethod::total_ops)
+    .def_property_readonly("weights_completed", &SamplingMethod::weights_completed)
+    .def_property_readonly("total_weights", &SamplingMethod::total_weights)
+    .def("progress_postfix", &SamplingMethod::progress_postfix);
+
+  py::class_<RejectionSampling, SamplingMethod, std::shared_ptr<RejectionSampling>>(m, "RejectionSamplingKernel")
+    .def(py::init<std::shared_ptr<Heat_Kernel>, std::optional<uint32_t>, int>(),
+        py::arg("kernel"),
+        py::arg("seed") = std::nullopt,
+        py::arg("progress_batch") = SamplingMethod::DEFAULT_PROGRESS_BATCH)
+    .def_property_readonly("attempts_completed", &RejectionSampling::attempts_completed)
+    .def_property_readonly("acceptance_rate", &RejectionSampling::acceptance_rate);
+
+  py::class_<MetropolisHastingsSampling, SamplingMethod, std::shared_ptr<MetropolisHastingsSampling>>(m, "MetropolisHastingsSamplingKernel")
+    .def(py::init<std::shared_ptr<Heat_Kernel>, double, int, int, std::optional<uint32_t>, int>(),
+        py::arg("kernel"),
+        py::arg("sigma"),
+        py::arg("burn_in"),
+        py::arg("iter"),
+        py::arg("seed") = std::nullopt,
+        py::arg("progress_batch") = SamplingMethod::DEFAULT_PROGRESS_BATCH);
 
   py::class_<VPD>(m, "VPD")
     .def(py::init<std::shared_ptr<Heat_Kernel>>(), py::arg("kernel"))
