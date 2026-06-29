@@ -13,12 +13,9 @@
 
 class SamplingMethod {
 public:
-    static constexpr int DEFAULT_PROGRESS_BATCH = 100;
-
 protected:
     std::shared_ptr<Heat_Kernel> kernel;
     int seed;
-    int progress_batch_{DEFAULT_PROGRESS_BATCH};
 
     int total_weights_{0};
     int64_t ops_per_laplacian_{0};
@@ -34,18 +31,16 @@ protected:
     double delta_laplacian_symbol(const double* theta, int k, double proposed_val);
 
     virtual void reset_progress();
-    void add_ops(int64_t count);
+    void add_op();
     void set_total_ops(int64_t value);
 
     void sample_thetas(std::vector<double>& thetas, std::mt19937& gen);
 
-    virtual void on_progress_update() {}
     virtual void sample() = 0;
 
     SamplingMethod(
         std::shared_ptr<Heat_Kernel> kernel,
-        int seed,
-        int progress_batch);
+        int seed);
 
 public:
     virtual ~SamplingMethod() = default;

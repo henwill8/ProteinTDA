@@ -54,8 +54,10 @@ void MetropolisHastingsSampling::sample() {
     for (int r = 0; r < kernel->R; ++r) {
         for (int step = 0; step < this->mcmc_iter; ++step) mcmc_pass();
         std::copy(curr_thetas.begin(), curr_thetas.end(), total_thetas.begin() + r * kernel->dim);
+		double lambda = laplacian_symbol(curr_thetas.data());
+		double weight = std::exp(-kernel->t * lambda) * (1 - std::exp(-kernel->s * lambda));
+		weights[r] = weight;
         weights_completed_.fetch_add(1, std::memory_order_relaxed);
-        on_progress_update();
     }
 
     kernel->thetas = std::move(total_thetas);
@@ -67,12 +69,10 @@ MetropolisHastingsSampling::MetropolisHastingsSampling(
     double mcmc_sigma,
     int mcmc_burn_in,
     int mcmc_iter,
-    std::optional<uint32_t> seed,
-    int progress_batch)
+    std::optional<uint32_t> seed)
     : SamplingMethod(
         std::move(kernel),
-        static_cast<int>(seed.value_or(42)),
-        progress_batch),
+        static_cast<int>(seed.value_or(42))),
       mcmc_sigma(mcmc_sigma),
       mcmc_burn_in(mcmc_burn_in),
       mcmc_iter(mcmc_iter) {}

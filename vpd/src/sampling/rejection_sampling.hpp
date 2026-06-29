@@ -12,7 +12,6 @@ private:
     std::atomic<int> attempts_completed_{0};
 
     void reset_progress() override;
-    void on_progress_update() override;
     void sample() override;
     void update_total_ops();
     void reject_attempt();
@@ -24,12 +23,10 @@ public:
      *
      * @param[in] kernel The heat kernel to sample thetas and compute weights for.
      * @param[in] seed (optional) A seed for reproducible randomness. Defaults to 42.
-     * @param[in] progress_batch Batch size for weight creation progress updates.
      */
     RejectionSampling(
         std::shared_ptr<Heat_Kernel> kernel,
-        std::optional<uint32_t> seed = std::nullopt,
-        int progress_batch = DEFAULT_PROGRESS_BATCH);
+        std::optional<uint32_t> seed = std::nullopt);
 
     int attempts_completed() const;
     double acceptance_rate() const;

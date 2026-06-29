@@ -42,11 +42,10 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
         "h0rff": {
             "n": 1,
             "axis_dim": 10,
-            "resolution": 10,
+            "resolution": 1000,
             "R": 1000,
             "t": 7e-9,
             "s": 1.0,
-            "mask": None,
             "seed": 42
         },
         "h1rff": {
@@ -56,7 +55,6 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "R": 1000,
             "t": 1e-10,
             "s": 1.0,
-            "mask": None,
             "seed": 42
         }
     }
@@ -149,11 +147,11 @@ LOSS_CONFIG = mlc.ConfigDict(
         },
         "vpd_h0": {
             "weight": 1.0,
-            "enabled": False,
+            "enabled": True,
         },
         "vpd_h1": {
             "weight": 1.0,
-            "enabled": False,
+            "enabled": True,
         },
         "eps": _EPS,
     }

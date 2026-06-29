@@ -14,21 +14,17 @@ void RejectionSampling::reset_progress() {
     update_total_ops();
 }
 
-void RejectionSampling::on_progress_update() {
-    update_total_ops();
-}
-
 void RejectionSampling::reject_attempt() {
     committed_ops_.store(completed_ops(), std::memory_order_relaxed);
     attempts_completed_.fetch_add(1, std::memory_order_relaxed);
-    on_progress_update();
+    update_total_ops();
 }
 
 void RejectionSampling::accept_attempt() {
     weights_completed_.fetch_add(1, std::memory_order_relaxed);
     attempts_completed_.fetch_add(1, std::memory_order_relaxed);
     committed_ops_.store(completed_ops(), std::memory_order_relaxed);
-    on_progress_update();
+    update_total_ops();
 }
 
 void RejectionSampling::update_total_ops() {
@@ -89,12 +85,10 @@ void RejectionSampling::sample() {
 
 RejectionSampling::RejectionSampling(
     std::shared_ptr<Heat_Kernel> kernel,
-    std::optional<uint32_t> seed,
-    int progress_batch)
+    std::optional<uint32_t> seed)
     : SamplingMethod(
         std::move(kernel),
-        static_cast<int>(seed.value_or(42)),
-        progress_batch) {}
+        static_cast<int>(seed.value_or(42))) {}
 
 int RejectionSampling::attempts_completed() const {
     return attempts_completed_.load(std::memory_order_relaxed);

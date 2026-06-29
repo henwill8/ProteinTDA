@@ -23,13 +23,11 @@ public:
      * @param[in] mcmc_burn_in The amount of unused iterations for Metropolis-Hastings sampling.
      * @param[in] mcmc_iter The amount of regular iterations used for Metropolis-Hastings sampling.
      * @param[in] seed (optional) A seed for reproducible randomness. Defaults to 42.
-     * @param[in] progress_batch Batch size for weight creation progress updates.
      */
     MetropolisHastingsSampling(
         std::shared_ptr<Heat_Kernel> kernel,
         double mcmc_sigma,
         int mcmc_burn_in,
         int mcmc_iter,
-        std::optional<uint32_t> seed = std::nullopt,
-        int progress_batch = DEFAULT_PROGRESS_BATCH);
+        std::optional<uint32_t> seed = std::nullopt);
 };

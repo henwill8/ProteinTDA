@@ -11,11 +11,9 @@
 
 SamplingMethod::SamplingMethod(
     std::shared_ptr<Heat_Kernel> kernel,
-    int seed,
-    int progress_batch)
+    int seed)
     : kernel(std::move(kernel)),
-      seed(seed),
-      progress_batch_(progress_batch < 1 ? DEFAULT_PROGRESS_BATCH : progress_batch) {}
+      seed(seed) {}
 
 double SamplingMethod::dist_to_diagonal_grid(const std::array<double, 2>& p) const {
     // Project p onto the diagonal (t, t)
@@ -53,34 +51,37 @@ std::array<double, 2> SamplingMethod::node_at(int index) const {
     return {ix / kernel->resolution, iy / kernel->resolution};
 }
 
+void SamplingMethod::sample_thetas(std::vector<double>& thetas, std::mt19937& gen) {
+    const double TWO_PI = 2.0 * std::numbers::pi;
+    std::uniform_real_distribution<double> theta_dist(0.0, TWO_PI);
+    thetas.resize(kernel->dim);
+    for (int j = 0; j < kernel->dim; ++j) {
+        thetas[j] = theta_dist(gen);
+        add_op();
+    }
+}
+
 double SamplingMethod::laplacian_symbol(const double* theta) {
     double result = 0.0;
     const int n = kernel->dim;
 
 #pragma omp parallel reduction(+ : result)
     {
-        int local_completed = 0;
-
 #pragma omp for schedule(dynamic)
         for (int i = 0; i < n; ++i) {
-            for (int64_t j = 0; j < n; ++j) {
+            for (int64_t j = i + 1; j < n; ++j) {
+                // TODO: we need to make sure the average distance in n=2 is correct (and double check n=1 again probably)
                 double edge_weight = qdist(node_at(i), node_at(j));
                 if (edge_weight != 0.0) {
                     double diff = theta[i] - theta[j];
-                    result += edge_weight * (1.0 - std::cos(diff));
+                    result += 2 * edge_weight * (1.0 - std::cos(diff));
                 }
-                ++local_completed;
-                if (local_completed >= progress_batch_) {
-                    add_ops(local_completed);
-                    local_completed = 0;
-                }
+                // If adding op everytime to global counter is too slow, switch to batched local counter
+                add_op();
             }
             double edge_weight = dist_to_diagonal_grid(node_at(i));
             result += 2 * edge_weight * (1.0 - std::cos(theta[i]));
-        }
-
-        if (local_completed > 0) {
-            add_ops(local_completed);
+            add_op();
         }
     }
     return result;
@@ -90,61 +91,43 @@ double SamplingMethod::delta_laplacian_symbol(const double* theta, int k, double
     const auto k_node = node_at(k);
     double current_val = theta[k];
     double delta = 0;
-    int local_completed = 0;
 
     for (int i = 0; i < kernel->dim; ++i) {
         if (i == k) continue;
         double weight = qdist(k_node, node_at(i));
         if (weight == 0) continue;
         delta += 2 * weight * (std::cos(current_val - theta[i]) - std::cos(proposed_val - theta[i]));
-        ++local_completed;
-        if (local_completed >= progress_batch_) {
-            add_ops(local_completed);
-            local_completed = 0;
-        }
+        add_op();
     }
 
     double weight = dist_to_diagonal_grid(k_node);
     delta += 2 * weight * (std::cos(current_val) - std::cos(proposed_val));
-    
-    ++local_completed;
-    add_ops(local_completed);
+    add_op();
 
     return delta;
 }
 
 void SamplingMethod::reset_progress() {
     total_weights_ = kernel->R;
-    ops_per_laplacian_ = static_cast<int64_t>(kernel->dim) * (kernel->dim - 1) / 2;
+    ops_per_laplacian_ = static_cast<int64_t>(kernel->dim) * (kernel->dim + 1) / 2;
     ops_per_theta_sampling_ = kernel->dim;
     completed_ops_.store(0, std::memory_order_relaxed);
     weights_completed_.store(0, std::memory_order_relaxed);
     total_ops_.store(0, std::memory_order_relaxed);
 }
 
-void SamplingMethod::set_total_ops(int64_t value) {
-    total_ops_.store(value, std::memory_order_relaxed);
-}
-
-void SamplingMethod::add_ops(int64_t count) {
-    completed_ops_.fetch_add(count, std::memory_order_relaxed);
-    on_progress_update();
-}
-
-void SamplingMethod::sample_thetas(std::vector<double>& thetas, std::mt19937& gen) {
-    const double TWO_PI = 2.0 * std::numbers::pi;
-    std::uniform_real_distribution<double> theta_dist(0.0, TWO_PI);
-    thetas.resize(kernel->dim);
-    for (int j = 0; j < kernel->dim; ++j) {
-        thetas[j] = theta_dist(gen);
-    }
-    add_ops(ops_per_theta_sampling_);
-}
-
 std::shared_ptr<Heat_Kernel> SamplingMethod::build() {
     reset_progress();
     sample();
     return kernel;
+}
+
+void SamplingMethod::set_total_ops(int64_t value) {
+    total_ops_.store(value, std::memory_order_relaxed);
+}
+
+void SamplingMethod::add_op() {
+    completed_ops_.fetch_add(1, std::memory_order_relaxed);
 }
 
 int64_t SamplingMethod::completed_ops() const {

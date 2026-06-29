@@ -109,7 +109,7 @@ def _build_kernel_with_progress(sampler, config_line: str):
 
 
 def create_heat_random_fourier_features(
-    n, axis_dim, resolution, R=100, s=1.0, t=1, seed=42, show_progress=True, progress_batch=100,
+    n, axis_dim, resolution, R=100, s=1.0, t=1, seed=42, show_progress=True,
 ):
     cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, t, seed)
     if cache_path.is_file():
@@ -124,14 +124,14 @@ def create_heat_random_fourier_features(
 
     if show_progress:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
-        sampler = _cpp.RejectionSamplingKernel(kernel, seed, progress_batch)
+        sampler = _cpp.RejectionSamplingKernel(kernel, seed)
         _build_kernel_with_progress(
             sampler,
             f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, t, seed)}",
         )
     else:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
-        sampler = _cpp.RejectionSamplingKernel(kernel, seed, progress_batch)
+        sampler = _cpp.RejectionSamplingKernel(kernel, seed)
         sampler.build()
 
     vpd = _cpp.VPD(kernel)

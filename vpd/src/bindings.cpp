@@ -37,21 +37,19 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def("progress_postfix", &SamplingMethod::progress_postfix);
 
   py::class_<RejectionSampling, SamplingMethod, std::shared_ptr<RejectionSampling>>(m, "RejectionSamplingKernel")
-    .def(py::init<std::shared_ptr<Heat_Kernel>, std::optional<uint32_t>, int>(),
+    .def(py::init<std::shared_ptr<Heat_Kernel>, std::optional<uint32_t>>(),
         py::arg("kernel"),
-        py::arg("seed") = std::nullopt,
-        py::arg("progress_batch") = SamplingMethod::DEFAULT_PROGRESS_BATCH)
+        py::arg("seed") = std::nullopt)
     .def_property_readonly("attempts_completed", &RejectionSampling::attempts_completed)
     .def_property_readonly("acceptance_rate", &RejectionSampling::acceptance_rate);
 
   py::class_<MetropolisHastingsSampling, SamplingMethod, std::shared_ptr<MetropolisHastingsSampling>>(m, "MetropolisHastingsSamplingKernel")
-    .def(py::init<std::shared_ptr<Heat_Kernel>, double, int, int, std::optional<uint32_t>, int>(),
+    .def(py::init<std::shared_ptr<Heat_Kernel>, double, int, int, std::optional<uint32_t>>(),
         py::arg("kernel"),
         py::arg("sigma"),
         py::arg("burn_in"),
         py::arg("iter"),
-        py::arg("seed") = std::nullopt,
-        py::arg("progress_batch") = SamplingMethod::DEFAULT_PROGRESS_BATCH);
+        py::arg("seed") = std::nullopt);
 
   py::class_<VPD>(m, "VPD")
     .def(py::init<std::shared_ptr<Heat_Kernel>>(), py::arg("kernel"))
