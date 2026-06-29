@@ -94,7 +94,7 @@ double Heat_Kernel::delta_laplacian_symbol(const double* theta, int k, double pr
     if (i == k) continue;
     double weight = qdist(k_node, node_at(i));
     if (weight == 0) continue;
-    delta += 2 * weight * (std::cos(current_val - theta[k]) - std::cos(proposed_val - theta[k]));
+    delta += 2 * weight * (std::cos(current_val - theta[i]) - std::cos(proposed_val - theta[i]));
   }
 
   double weight = dist_to_diagonal_grid(k_node);
