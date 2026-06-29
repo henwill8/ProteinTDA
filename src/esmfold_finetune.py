@@ -162,7 +162,13 @@ def prepare_esm_cache(
     return cache
 
 
-def run_esmfold(
+def _smaller_trunk_chunk_size(chunk_size: int) -> int | None:
+    if chunk_size <= 1:
+        return None
+    return max(1, chunk_size // 2)
+
+
+def _esmfold_forward(
     model: EsmForProteinFolding,
     protein,
     device: torch.device,
@@ -196,6 +202,51 @@ def run_esmfold(
     return outputs
 
 
+def run_esmfold(
+    model: EsmForProteinFolding,
+    protein,
+    device: torch.device,
+    tokenizer,
+    *,
+    num_recycles: int | None = None,
+    esm_cache: ESMEmbeddingCache | None = None,
+    use_amp: bool = False,
+) -> EsmForProteinFoldingOutput | None:
+    original_chunk_size = model.trunk.chunk_size
+    chunk_size = original_chunk_size
+    seq_len = len(protein.seq)
+
+    # if OOM, try smaller chunk sizes until it works or we run out of options
+    while True:
+        model.trunk.set_chunk_size(chunk_size)
+        try:
+            return _esmfold_forward(
+                model,
+                protein,
+                device,
+                tokenizer,
+                num_recycles=num_recycles,
+                esm_cache=esm_cache,
+                use_amp=use_amp,
+            )
+        except torch.cuda.OutOfMemoryError:
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+            smaller = _smaller_trunk_chunk_size(chunk_size)
+            if smaller is None:
+                model.trunk.set_chunk_size(original_chunk_size)
+                print(
+                    f"OOM running ESMFold (seq len {seq_len}, trunk chunk_size=1); "
+                    f"skipping protein and restoring chunk_size={original_chunk_size}"
+                )
+                return None
+            print(
+                f"OOM running ESMFold (seq len {seq_len}, trunk chunk_size={chunk_size}); "
+                f"retrying with chunk_size={smaller}"
+            )
+            chunk_size = smaller
+
+
 def _sample_num_recycles(max_recycles: int) -> int:
     if max_recycles <= 0:
         return 0
@@ -212,7 +263,7 @@ def compute_losses(
     num_recycles: int | None = None,
     use_amp: bool = False,
     esm_cache: ESMEmbeddingCache | None = None,
-) -> dict[str, torch.Tensor]:
+) -> dict[str, torch.Tensor] | None:
     outputs = run_esmfold(
         model,
         protein,
@@ -222,6 +273,8 @@ def compute_losses(
         esm_cache=esm_cache,
         use_amp=use_amp,
     )
+    if outputs is None:
+        return None
     out, batch = pre_loss_conversion(outputs, protein, device=device, loss_config=loss_fn.config)
     total, breakdown = loss_fn(out, batch, _return_breakdown=True)
 
@@ -266,24 +319,17 @@ def train_one_epoch(
             else:
                 num_recycles = train_recycles
 
-            try:
-                losses = compute_losses(
-                    model,
-                    tokenizer,
-                    protein,
-                    device,
-                    loss_fn,
-                    num_recycles=num_recycles,
-                    use_amp=use_amp,
-                    esm_cache=esm_cache,
-                )
-            except (ValueError, RuntimeError, torch.cuda.OutOfMemoryError) as e:
-                if isinstance(e, torch.cuda.OutOfMemoryError):
-                    print(f"OOM on seq len {len(protein.seq)}, skipping")
-                    if device.type == "cuda":
-                        torch.cuda.empty_cache()
-                else:
-                    print(e)
+            losses = compute_losses(
+                model,
+                tokenizer,
+                protein,
+                device,
+                loss_fn,
+                num_recycles=num_recycles,
+                use_amp=use_amp,
+                esm_cache=esm_cache,
+            )
+            if losses is None:
                 continue
 
             if scaler.is_enabled():
@@ -340,6 +386,8 @@ def test_model(
                     num_recycles=infer_recycles,
                     esm_cache=esm_cache,
                 )
+                if output is None:
+                    continue
 
                 plddt = output.plddt.tolist()
                 protein_mean_plddt = np.mean(plddt)

@@ -1,6 +1,5 @@
 eagerpy
-numpy
-torch
+# torch and numpy are installed by scripts/install_requirements.py to match cuda version
 transformers
 accelerate
 gudhi
@@ -11,9 +10,8 @@ scikit-learn
 tmtools
 git+https://github.com/aqlaboratory/openfold.git
 dm-tree
-
-# SidechainNet (https://github.com/jonathanking/sidechainnet)
 sidechainnet
+ml_collections
 ProDy
 biopython
 scipy

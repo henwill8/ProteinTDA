@@ -2,7 +2,15 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/venv.sh
+source "$SCRIPT_DIR/lib/venv.sh"
 
-"$REPO_ROOT/scripts/build_vpd.sh"
-"$REPO_ROOT/scripts/download_stereo_chemical_props.sh" && echo "Setup complete"
+ensure_venv
+bootstrap_pip
+
+"$VENV_PY" "$SCRIPTS_DIR/install_requirements.py"
+
+"$SCRIPT_DIR/build_vpd.sh"
+"$VENV_PY" "$SCRIPTS_DIR/download_stereo_chemical_props.py"
+
+echo "Setup complete"
