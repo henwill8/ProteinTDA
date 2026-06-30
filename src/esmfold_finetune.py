@@ -276,13 +276,17 @@ def compute_losses(
     )
     if outputs is None:
         return None
-    out, batch = pre_loss_conversion(outputs, protein, device=device, loss_config=loss_fn.config)
-    total, breakdown = loss_fn(out, batch, _return_breakdown=True)
-
-    return {
-        "total": total,
-        **{key: value for key, value in breakdown.items()},
-    }
+    
+    try:
+        out, batch = pre_loss_conversion(outputs, protein, device=device, loss_config=loss_fn.config)
+        total, breakdown = loss_fn(out, batch, _return_breakdown=True)
+        return {
+            "total": total,
+            **{key: value for key, value in breakdown.items()},
+        }
+    except torch.cuda.OutOfMemoryError:
+        print(f"OOM computing losses; skipping protein.")
+        return None
 
 
 def train_one_epoch(
