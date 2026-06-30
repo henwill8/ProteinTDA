@@ -11,9 +11,25 @@
 
 SamplingMethod::SamplingMethod(
     std::shared_ptr<Heat_Kernel> kernel,
+    bool normalized_lambdas,
     int seed)
     : kernel(std::move(kernel)),
-      seed(seed) {}
+      normalized_lambdas(normalized_lambdas),
+      seed(seed)
+{
+    if (normalized_lambdas) compute_total_weights();
+}
+
+void SamplingMethod::compute_total_edge_weights() {
+  double total = 0;
+  for (int i = 0; i < kernel->dim; ++i) {
+    for (int j = i; i < kernel->dim; ++j) {
+      total += qdist(node_at(i), node_at(j));
+    }
+    total += dist_to_diagonal_grid(node_at(i));
+  }
+  this->edge_weight_total = total;
+}
 
 double SamplingMethod::dist_to_diagonal_grid(const std::array<double, 2>& p) const {
     // Project p onto the diagonal (t, t)
@@ -84,6 +100,7 @@ double SamplingMethod::laplacian_symbol(const double* theta) {
             add_op();
         }
     }
+    if (this->normalized_lambdas) result /= this->edge_weight_total;
     return result;
 }
 

@@ -15,6 +15,8 @@ class SamplingMethod {
 public:
 protected:
     std::shared_ptr<Heat_Kernel> kernel;
+    bool normalized_lambdas;
+    double edge_weight_total;
     int seed;
 
     int total_weights_{0};
@@ -24,6 +26,7 @@ protected:
     std::atomic<int64_t> total_ops_{0};
     std::atomic<int> weights_completed_{0};
 
+    void compute_total_edge_weights();
     std::array<double, 2> node_at(int index) const;
     double dist_to_diagonal_grid(const std::array<double, 2>& p) const;
     double qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2) const;
@@ -40,6 +43,7 @@ protected:
 
     SamplingMethod(
         std::shared_ptr<Heat_Kernel> kernel,
+        bool normalized_lambdas,
         int seed);
 
 public:
