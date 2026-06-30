@@ -62,7 +62,7 @@ void MALASampling::sample() {
             q_bwd += (d - this->mala_sigma * prop_grad[i]) * (d  -this->mala_sigma * prop_grad[i]);
         }
         double alpha_log =  (q_fwd - qwd) / 4*(this->mala_sigma) - kernel->t * (prop_lambda - curr_lambda) + std::log1p(-std::exp(-kernel->s * prop_lambda)) - std::log1p(-std::exp(-kernel->s * curr_lambda));
-        double a = std::min(1, alpha_log);
+        double alpha = std::min(1, std::exp(alpha_log));
         if (std::log(uniform_dist(gen)) < alpha_log) {
             curr_thetas.swap(prop_thetas);
             curr_grad.swap(prop_grad);
@@ -71,7 +71,7 @@ void MALASampling::sample() {
         }
 
         if (tune) {
-            this->mala_sigma *= std::exp(0.05 * (a - OPTIMAL));
+            this->mala_sigma *= std::exp(0.05 * (alpha - OPTIMAL));
             this->mala_sigma = std::clamp(this->mala_sigma, 1e-6, 0.5);
         }
     }
