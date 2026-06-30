@@ -1,5 +1,4 @@
 import sys
-import argparse
 from functools import partial
 from pathlib import Path
 
@@ -30,21 +29,11 @@ def set_seed(seed: int = 42) -> None:
     np.random.seed(seed)
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    # I have the options that we change most frequently arbitrarily chosen to be args instead of in config
-    # I like the convenience of being able to change options without editing the config file but it splits up where everything is defined
-    parser = argparse.ArgumentParser(description="Fine-tune ESMFold with TDA loss functions.")
-    parser.add_argument("--baseline", action="store_true")
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--train-proteins-per-epoch", type=int, default=None)
-    parser.add_argument("--val-proteins-per-epoch", type=int, default=None)
-    parser.add_argument("--unfreeze-trunk-blocks", type=int, default=1)
-    parser.add_argument("--unfreeze-structure-module", action="store_true")
-    parser.add_argument("--train-recycles", type=int, default=1)
-    parser.add_argument("--trunk-chunk-size", type=int, default=1)
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    return parser.parse_args(argv)
+def resolve_device() -> torch.device:
+    device = RUN_CONFIG.runtime.device
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.device(device)
 
 # For lower memory usage, try batch size 1, chunk size 1 or 2? (would be really slow), recycles 1
 
@@ -60,8 +49,7 @@ def load_dataset() -> list:
         complete_structures_only=not data.allow_incomplete,
     )
 
-    # seems maybe sidechainnet failed to filter out all incomplete proteins?
-    max_proteins = data.max_proteins
+    # Sidechainnet includes proteins with '.' in the mask, even when complete_structures_only=True
     if not data.allow_incomplete:
         before = len(dataset)
         bad = [
@@ -81,8 +69,15 @@ def load_dataset() -> list:
         if removed:
             print(f"Removed {removed} proteins with incomplete or misaligned masks.")
 
-    if max_proteins is not None and len(dataset) > max_proteins:
-        dataset = dataset[-max_proteins:]
+    if data.max_protein_length is not None:
+        before = len(dataset)
+        dataset = [protein for protein in dataset if len(protein.seq) <= data.max_protein_length]
+        removed = before - len(dataset)
+        if removed:
+            print(f"Removed {removed} proteins longer than {data.max_protein_length} residues.")
+
+    if data.max_proteins is not None and len(dataset) > data.max_proteins:
+        dataset = dataset[-data.max_proteins:]
     # dataset = dataset[5:]
     print(f"Loaded {len(dataset)} proteins.")
     return dataset
@@ -142,7 +137,6 @@ def run_fold(
     test_idx: np.ndarray,
     *,
     dataset: list,
-    args: argparse.Namespace,
     device: torch.device,
     tokenizer: AutoTokenizer,
     loss_fn: ESMFoldLoss,
@@ -158,9 +152,9 @@ def run_fold(
     model = build_model(
         RUN_CONFIG.model.name,
         device,
-        unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
-        unfreeze_structure_module=args.unfreeze_structure_module,
-        trunk_chunk_size=args.trunk_chunk_size,
+        unfreeze_trunk_blocks=training.unfreeze_trunk_blocks,
+        unfreeze_structure_module=training.unfreeze_structure_module,
+        trunk_chunk_size=runtime.trunk_chunk_size,
         gradient_checkpointing=training.gradient_checkpointing,
         load_esm=not runtime.use_esm_cache,
     )
@@ -175,14 +169,14 @@ def run_fold(
     fold_rng = np.random.default_rng(training.seed + fold)
     val_loader = make_loader(
         val_proteins,
-        args.batch_size,
+        training.batch_size,
         shuffle=False,
-        max_proteins=args.val_proteins_per_epoch,
+        max_proteins=training.val_proteins_per_epoch,
         rng=fold_rng,
     )
-    test_loader = make_loader(test_proteins, args.batch_size, shuffle=False)
+    test_loader = make_loader(test_proteins, training.batch_size, shuffle=False)
 
-    optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
+    optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=training.lr)
     best_model_weights = None
     max_val_tm = 0.0
     patience = 0
@@ -190,9 +184,9 @@ def run_fold(
     for epoch in range(training.epochs):
         train_loader = make_loader(
             train_proteins,
-            args.batch_size,
+            training.batch_size,
             shuffle=True,
-            max_proteins=args.train_proteins_per_epoch,
+            max_proteins=training.train_proteins_per_epoch,
             rng=fold_rng,
         )
         metrics = train_one_epoch(
@@ -202,9 +196,9 @@ def run_fold(
             optimizer,
             device,
             loss_fn=loss_fn,
-            unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
-            unfreeze_structure_module=args.unfreeze_structure_module,
-            train_recycles=args.train_recycles,
+            unfreeze_trunk_blocks=training.unfreeze_trunk_blocks,
+            unfreeze_structure_module=training.unfreeze_structure_module,
+            train_recycles=training.train_recycles,
             use_amp=training.amp,
             esm_cache=esm_cache,
         )
@@ -213,7 +207,7 @@ def run_fold(
             tokenizer,
             val_loader,
             device,
-            infer_recycles=training.infer_recycles,
+            infer_recycles=runtime.infer_recycles,
             esm_cache=esm_cache,
         )
         if val_tm_score > max_val_tm:
@@ -244,7 +238,7 @@ def run_fold(
         tokenizer,
         test_loader,
         device,
-        infer_recycles=training.infer_recycles,
+        infer_recycles=runtime.infer_recycles,
         esm_cache=esm_cache,
     )
     print(f"fold {fold + 1}/{n_splits}  mean_plddt={plddt_score:.4f}  mean_tm={tm_score:.4f}")
@@ -257,17 +251,14 @@ def run_baseline_fold(
     test_idx: np.ndarray,
     *,
     model,
-    args: argparse.Namespace,
     proteins: list,
     device: torch.device,
     tokenizer: AutoTokenizer,
     esm_cache: ESMEmbeddingCache | None,
 ) -> tuple[float, float]:
-    training = RUN_CONFIG.training
-    n_splits = RUN_CONFIG.kfold.n_splits
     test_loader = make_loader(
         [proteins[i] for i in test_idx],
-        args.batch_size,
+        RUN_CONFIG.training.batch_size,
         shuffle=False,
     )
     plddt, tm = test_model(
@@ -275,18 +266,17 @@ def run_baseline_fold(
         tokenizer,
         test_loader,
         device,
-        infer_recycles=training.infer_recycles,
+        infer_recycles=RUN_CONFIG.runtime.infer_recycles,
         esm_cache=esm_cache,
     )
-    print(f"fold {fold + 1}/{n_splits}  mean_plddt={plddt:.4f}  mean_tm={tm:.4f}")
+    print(f"fold {fold + 1}/{RUN_CONFIG.kfold.n_splits}  mean_plddt={plddt:.4f}  mean_tm={tm:.4f}")
     return plddt, tm
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    device = torch.device(args.device)
+def main() -> int:
     runtime = RUN_CONFIG.runtime
     training = RUN_CONFIG.training
+    device = resolve_device()
     set_seed(training.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -301,19 +291,19 @@ def main(argv: list[str] | None = None) -> int:
             RUN_CONFIG.model.name,
             tokenizer,
             device,
-            trunk_chunk_size=args.trunk_chunk_size,
+            trunk_chunk_size=runtime.trunk_chunk_size,
         )
 
-    runner = KFoldRunner(proteins, baseline=args.baseline)
+    runner = KFoldRunner(proteins, baseline=runtime.baseline)
 
-    if args.baseline:
+    if runtime.baseline:
         print(f"Loading pretrained {RUN_CONFIG.model.name} on {device}...")
         model = build_model(
             RUN_CONFIG.model.name,
             device,
             unfreeze_trunk_blocks=0,
             unfreeze_structure_module=False,
-            trunk_chunk_size=args.trunk_chunk_size,
+            trunk_chunk_size=runtime.trunk_chunk_size,
             gradient_checkpointing=False,
             load_esm=not runtime.use_esm_cache,
         )
@@ -321,7 +311,6 @@ def main(argv: list[str] | None = None) -> int:
         fold_fn = partial(
             run_baseline_fold,
             model=model,
-            args=args,
             proteins=proteins,
             device=device,
             tokenizer=tokenizer,
@@ -333,7 +322,6 @@ def main(argv: list[str] | None = None) -> int:
         fold_fn = partial(
             run_fold,
             dataset=proteins,
-            args=args,
             device=device,
             tokenizer=tokenizer,
             loss_fn=loss_fn,
@@ -344,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     fold_plddt_scores, fold_tm_scores = runner.run(fold_fn)
 
     logging = RUN_CONFIG.logging
-    log_path = logging.baseline_log_file if args.baseline else logging.finetune_log_file
+    log_path = logging.baseline_log_file if runtime.baseline else logging.finetune_log_file
     log_file = Path(log_path)
     write_log_file(log_file, fold_plddt_scores, fold_tm_scores)
     print(f"Wrote results to {log_file}")

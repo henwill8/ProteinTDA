@@ -10,13 +10,18 @@ RUN_CONFIG = mlc.ConfigDict(
             "allow_incomplete": False,
             "scn_dir": "data/sidechainnet",
             "max_proteins": 1000,
+            "max_protein_length": None,
         },
         "model": {
             "name": "facebook/esmfold_v1",
         },
         "runtime": {
+            "baseline": False,
+            "device": None, # 'cuda', 'cpu', or None for auto-detection
             "use_esm_cache": True,
             "esm_cache_dir": "cache/esm_embeddings",
+            "trunk_chunk_size": 1024,
+            "infer_recycles": None,
         },
         "kfold": {
             "n_splits": 5,
@@ -24,11 +29,17 @@ RUN_CONFIG = mlc.ConfigDict(
         },
         "training": {
             "seed": 42,
+            "lr": 1e-4,
+            "batch_size": 1,
+            "train_proteins_per_epoch": None,
+            "val_proteins_per_epoch": None,
+            "unfreeze_trunk_blocks": 1,
+            "unfreeze_structure_module": False,
+            "train_recycles": None,
             "epochs": 300,
             "patience": 5,
             "gradient_checkpointing": True,
-            "amp": True,
-            "infer_recycles": None,
+            "amp": True
         },
         "logging": {
             "baseline_log_file": "logs/esmfold_baseline.log",
@@ -116,7 +127,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             "average_clashes": False,
             "eps": _EPS,
             "weight": 1.0,
-            "enabled": True,
+            "enabled": False,
         },
         "tm": {
             "max_bin": 31,

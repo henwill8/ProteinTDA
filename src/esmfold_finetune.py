@@ -212,40 +212,40 @@ def run_esmfold(
     esm_cache: ESMEmbeddingCache | None = None,
     use_amp: bool = False,
 ) -> EsmForProteinFoldingOutput | None:
+    seq_len = len(protein.seq)
     original_chunk_size = model.trunk.chunk_size
     chunk_size = original_chunk_size
-    seq_len = len(protein.seq)
-
-    # if OOM, try smaller chunk sizes until it works or we run out of options
-    while True:
-        model.trunk.set_chunk_size(chunk_size)
-        try:
-            return _esmfold_forward(
-                model,
-                protein,
-                device,
-                tokenizer,
-                num_recycles=num_recycles,
-                esm_cache=esm_cache,
-                use_amp=use_amp,
-            )
-        except torch.cuda.OutOfMemoryError:
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
-            smaller = _smaller_trunk_chunk_size(chunk_size)
-            if smaller is None:
-                print(
-                    f"OOM running ESMFold (seq len {seq_len}, trunk chunk_size=1); "
-                    f"skipping protein and restoring chunk_size={original_chunk_size}"
+    try:
+        while True:
+            model.trunk.set_chunk_size(chunk_size)
+            try:
+                return _esmfold_forward(
+                    model,
+                    protein,
+                    device,
+                    tokenizer,
+                    num_recycles=num_recycles,
+                    esm_cache=esm_cache,
+                    use_amp=use_amp,
                 )
-                break
-            print(
-                f"OOM running ESMFold (seq len {seq_len}, trunk chunk_size={chunk_size}); "
-                f"retrying with chunk_size={smaller}"
-            )
-            chunk_size = smaller
-    
-    model.trunk.set_chunk_size(original_chunk_size)
+            except torch.cuda.OutOfMemoryError:
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
+                smaller = _smaller_trunk_chunk_size(chunk_size)
+                if smaller is None:
+                    print(
+                        f"OOM running ESMFold (seq len {seq_len}, trunk chunk_size=1); "
+                        f"skipping protein."
+                    )
+                    return None
+                print(
+                    f"OOM running ESMFold (seq len {seq_len}, trunk chunk_size={chunk_size}); "
+                    f"retrying with chunk_size={smaller}"
+                )
+                chunk_size = smaller
+    finally:
+        print(f"Restoring chunk size to {original_chunk_size}")
+        model.trunk.set_chunk_size(original_chunk_size)
 
 
 def _sample_num_recycles(max_recycles: int) -> int:
