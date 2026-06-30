@@ -13,6 +13,23 @@
 
 class SamplingMethod {
 public:
+    SamplingMethod() = default;
+    virtual ~SamplingMethod() = default;
+
+    void init(
+        std::shared_ptr<Heat_Kernel> kernel,
+        bool normalized_lambdas = true,
+        int seed = 42);
+
+    std::shared_ptr<Heat_Kernel> build();
+
+    int64_t completed_ops() const;
+    int64_t total_ops() const;
+    int weights_completed() const;
+    int total_weights() const { return total_weights_; }
+
+    virtual std::string progress_postfix() const;
+
 protected:
     std::shared_ptr<Heat_Kernel> kernel;
     bool normalized_lambdas;
@@ -41,21 +58,4 @@ protected:
     void sample_thetas(std::vector<double>& thetas, std::mt19937& gen);
 
     virtual void sample() = 0;
-
-    SamplingMethod(
-        std::shared_ptr<Heat_Kernel> kernel,
-        bool normalized_lambdas,
-        int seed);
-
-public:
-    virtual ~SamplingMethod() = default;
-
-    std::shared_ptr<Heat_Kernel> build();
-
-    int64_t completed_ops() const;
-    int64_t total_ops() const;
-    int weights_completed() const;
-    int total_weights() const { return total_weights_; }
-
-    virtual std::string progress_postfix() const;
 };

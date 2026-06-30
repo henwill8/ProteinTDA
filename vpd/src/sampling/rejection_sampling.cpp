@@ -83,13 +83,6 @@ void RejectionSampling::sample() {
     kernel->weights = std::move(weights);
 }
 
-RejectionSampling::RejectionSampling(
-    std::shared_ptr<Heat_Kernel> kernel,
-    std::optional<uint32_t> seed)
-    : SamplingMethod(
-        std::move(kernel),
-        static_cast<int>(seed.value_or(42))) {}
-
 int RejectionSampling::attempts_completed() const {
     return attempts_completed_.load(std::memory_order_relaxed);
 }

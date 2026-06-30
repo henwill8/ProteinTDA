@@ -18,16 +18,6 @@ private:
     void accept_attempt();
 
 public:
-    /**
-     * @brief Creates a new Heat_Kernel for persistent diagrams using rejection sampling.
-     *
-     * @param[in] kernel The heat kernel to sample thetas and compute weights for.
-     * @param[in] seed (optional) A seed for reproducible randomness. Defaults to 42.
-     */
-    RejectionSampling(
-        std::shared_ptr<Heat_Kernel> kernel,
-        std::optional<uint32_t> seed = std::nullopt);
-
     int attempts_completed() const;
     double acceptance_rate() const;
     std::string progress_postfix() const override;

@@ -286,8 +286,8 @@ def main() -> int:
 
     esm_cache = None
     if runtime.use_esm_cache:
-        if runtime.esm_cache_trunk_blocks > 0 and (training.train_recycles != 0 or runtime.infer_recycles != 0):
-            raise ValueError("esm_cache_trunk_blocks > 0 requires train_recycles and infer_recycles to be 0")
+        if runtime.esm_cache_trunk_blocks != 0 and (training.train_recycles != 0 or runtime.infer_recycles != 0):
+            raise ValueError("esm_cache_trunk_blocks != 0 requires train_recycles and infer_recycles to be 0")
         esm_cache = prepare_esm_cache(
             Path(runtime.esm_cache_dir),
             proteins,

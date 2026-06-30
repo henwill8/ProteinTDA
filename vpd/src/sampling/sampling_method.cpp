@@ -4,31 +4,32 @@
 #include <numbers>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
-SamplingMethod::SamplingMethod(
+void SamplingMethod::init(
     std::shared_ptr<Heat_Kernel> kernel,
     bool normalized_lambdas,
     int seed)
-    : kernel(std::move(kernel)),
-      normalized_lambdas(normalized_lambdas),
-      seed(seed)
 {
-    if (normalized_lambdas) compute_total_weights();
+    this->kernel = std::move(kernel);
+    this->normalized_lambdas = normalized_lambdas;
+    this->seed = seed;
+    if (normalized_lambdas) compute_total_edge_weights();
 }
 
 void SamplingMethod::compute_total_edge_weights() {
-  double total = 0;
-  for (int i = 0; i < kernel->dim; ++i) {
-    for (int j = i; i < kernel->dim; ++j) {
-      total += qdist(node_at(i), node_at(j));
+    double total = 0;
+    for (int i = 0; i < kernel->dim; ++i) {
+        for (int j = i; i < kernel->dim; ++j) {
+            total += qdist(node_at(i), node_at(j));
+        }
+        total += dist_to_diagonal_grid(node_at(i));
     }
-    total += dist_to_diagonal_grid(node_at(i));
-  }
-  this->edge_weight_total = total;
+    this->edge_weight_total = total;
 }
 
 double SamplingMethod::dist_to_diagonal_grid(const std::array<double, 2>& p) const {
@@ -121,22 +122,23 @@ double SamplingMethod::delta_laplacian_symbol(const double* theta, int k, double
     delta += 2 * weight * (std::cos(current_val) - std::cos(proposed_val));
     add_op();
 
+    if (this->normalized_lambdas) delta /= this->edge_weight_total;
     return delta;
 }
 
 void SamplingMethod::grad_laplacian_symbol(const double* theta, double* grad) {
-  for (int i = 0; i < kernel->dim; ++i) {
-    double d_i = 0.0;
-    for (int j = 0; j < kernel->dim; ++j) {
-      if (i == j) continue;
-      double weight = qdist(node_at(i), node_at(j));
-      if (weight == 0) continue;
-      d_i += 2 * weight * std::sin(theta[i] - theta[j]);
+    for (int i = 0; i < kernel->dim; ++i) {
+        double d_i = 0.0;
+        for (int j = 0; j < kernel->dim; ++j) {
+            if (i == j) continue;
+            double weight = qdist(node_at(i), node_at(j));
+            if (weight == 0) continue;
+            d_i += 2 * weight * std::sin(theta[i] - theta[j]);
+        }
+        weight = dist_to_diagonal_grid(node_at(i));
+        d_i += 2 * weight * std::sin(theta[i]);
+        grad[i] = d_i;
     }
-    weight = dist_to_diagonal_grid(node_at(i));
-    d_i += 2 * weight * std::sin(theta[i]);
-    grad[i] = d_i;
-  }
 }
 
 void SamplingMethod::reset_progress() {
@@ -149,6 +151,9 @@ void SamplingMethod::reset_progress() {
 }
 
 std::shared_ptr<Heat_Kernel> SamplingMethod::build() {
+    if (!kernel) {
+        throw std::runtime_error("SamplingMethod::init must be called before build()");
+    }
     reset_progress();
     sample();
     return kernel;
