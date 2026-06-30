@@ -29,6 +29,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def_readonly("weights", &Heat_Kernel::weights);
 
   py::class_<SamplingMethod, std::shared_ptr<SamplingMethod>>(m, "SamplingMethod")
+    .def("init", &SamplingMethod::init,
+        py::arg("kernel"),
+        py::arg("normalized_lambdas") = true,
+        py::arg("seed") = 42)
     .def("build", &SamplingMethod::build, py::call_guard<py::gil_scoped_release>())
     .def_property_readonly("completed_ops", &SamplingMethod::completed_ops)
     .def_property_readonly("total_ops", &SamplingMethod::total_ops)
@@ -37,19 +41,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def("progress_postfix", &SamplingMethod::progress_postfix);
 
   py::class_<RejectionSampling, SamplingMethod, std::shared_ptr<RejectionSampling>>(m, "RejectionSamplingKernel")
-    .def(py::init<std::shared_ptr<Heat_Kernel>, std::optional<uint32_t>>(),
-        py::arg("kernel"),
-        py::arg("seed") = std::nullopt)
+    .def(py::init<>())
     .def_property_readonly("attempts_completed", &RejectionSampling::attempts_completed)
     .def_property_readonly("acceptance_rate", &RejectionSampling::acceptance_rate);
 
   py::class_<MetropolisHastingsSampling, SamplingMethod, std::shared_ptr<MetropolisHastingsSampling>>(m, "MetropolisHastingsSamplingKernel")
-    .def(py::init<std::shared_ptr<Heat_Kernel>, double, int, int, std::optional<uint32_t>>(),
-        py::arg("kernel"),
+    .def(py::init<double, int, int>(),
         py::arg("sigma"),
         py::arg("burn_in"),
-        py::arg("iter"),
-        py::arg("seed") = std::nullopt);
+        py::arg("iter"));
 
   py::class_<VPD>(m, "VPD")
     .def(py::init<std::shared_ptr<Heat_Kernel>>(), py::arg("kernel"))
