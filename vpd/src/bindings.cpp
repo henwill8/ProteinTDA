@@ -3,6 +3,7 @@
 #include "sampling_method.hpp"
 #include "rejection_sampling.hpp"
 #include "metropolis_hastings_sampling.hpp"
+#include "mala_sampling.hpp"
 #include "vpd.hpp"
 
 namespace py = pybind11;
@@ -50,6 +51,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("sigma"),
         py::arg("burn_in"),
         py::arg("iter"));
+
+  py::class_<MALASampling, SamplingMethod, std::shared_ptr<MALASampling>>(m, "MALASampling")
+    .def(py::init<double, int, int, bool>(),
+        py::arg("sigma"),
+        py::arg("burn_in"),
+        py::arg("iter"),
+        py::arg("tune_sigma"));
 
   py::class_<VPD>(m, "VPD")
     .def(py::init<std::shared_ptr<Heat_Kernel>>(), py::arg("kernel"))

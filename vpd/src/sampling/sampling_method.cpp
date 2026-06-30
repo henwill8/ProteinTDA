@@ -135,7 +135,7 @@ void SamplingMethod::grad_laplacian_symbol(const double* theta, double* grad) {
             if (weight == 0) continue;
             d_i += 2 * weight * std::sin(theta[i] - theta[j]);
         }
-        weight = dist_to_diagonal_grid(node_at(i));
+        double weight = dist_to_diagonal_grid(node_at(i));
         d_i += 2 * weight * std::sin(theta[i]);
         grad[i] = d_i;
     }
