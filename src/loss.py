@@ -167,9 +167,9 @@ class ESMFoldLoss(AlphaFoldLoss):
         for loss_name, loss_fn in loss_fns.items():
             weight = self.config[loss_name].weight
             loss = loss_fn()
-            if torch.isnan(loss) or torch.isinf(loss):
-                print(f"{loss_name} loss is NaN. Skipping...")
-                loss = loss.new_tensor(0.0, requires_grad=True)
+            if not torch.isfinite(loss).all():
+                print(f"{loss_name} loss is NaN or Inf. Skipping...")
+                loss = loss.new_zeros((), requires_grad=True)
             cum_loss = cum_loss + weight * loss
             losses[loss_name] = loss.detach().clone()
         losses["unscaled_loss"] = cum_loss.detach().clone()
