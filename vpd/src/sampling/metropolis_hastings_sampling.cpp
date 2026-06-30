@@ -8,7 +8,7 @@ void MetropolisHastingsSampling::reset_progress() {
     SamplingMethod::reset_progress();
     const int64_t initial_ops = ops_per_theta_sampling_ + ops_per_laplacian_;
     const int64_t ops_per_mcmc_pass = static_cast<int64_t>(kernel->dim) * kernel->dim; // goes through all thetas, and each calls delta_laplacian_symbol
-    const int64_t mcmc_passes = static_cast<int64_t>(mcmc_burn_in) + static_cast<int64_t>(kernel->R) * mcmc_iter;
+    const int64_t mcmc_passes = static_cast<int64_t>(mcmc_burn_in) + static_cast<int64_t>(kernel->R) * mcmc_thinning;
     set_total_ops(initial_ops + mcmc_passes * ops_per_mcmc_pass);
 }
 
@@ -52,7 +52,7 @@ void MetropolisHastingsSampling::sample() {
     for (int step = 0; step < this->mcmc_burn_in; ++step) mcmc_pass();
 
     for (int r = 0; r < kernel->R; ++r) {
-        for (int step = 0; step < this->mcmc_iter; ++step) mcmc_pass();
+        for (int step = 0; step < this->mcmc_thinning; ++step) mcmc_pass();
         std::copy(curr_thetas.begin(), curr_thetas.end(), total_thetas.begin() + r * kernel->dim);
 		double lambda = laplacian_symbol(curr_thetas.data());
 		double weight = std::exp(-kernel->t * lambda) * (1 - std::exp(-kernel->s * lambda));
@@ -68,11 +68,11 @@ MetropolisHastingsSampling::MetropolisHastingsSampling(
     std::shared_ptr<Heat_Kernel> kernel,
     double mcmc_sigma,
     int mcmc_burn_in,
-    int mcmc_iter,
+    int mcmc_thinning,
     std::optional<uint32_t> seed)
     : SamplingMethod(
         std::move(kernel),
         static_cast<int>(seed.value_or(42))),
       mcmc_sigma(mcmc_sigma),
       mcmc_burn_in(mcmc_burn_in),
-      mcmc_iter(mcmc_iter) {}
+      mcmc_thinning(mcmc_thinning) {}

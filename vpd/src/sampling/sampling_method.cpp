@@ -124,6 +124,23 @@ double SamplingMethod::delta_laplacian_symbol(const double* theta, int k, double
     return delta;
 }
 
+double SamplingMethod::grad_laplacian_symbol(const double* theta) {
+  std::vector<double> grad(kernel->dim);
+  for (int i = 0; i < kernel->dim; ++i) {
+    double d_i = 0.0;
+    for (int j = 0; j < kernel->dim; ++j) {
+      if (i == j) continue;
+      double weight = qdist(node_at(i), node_at(j));
+      if (weight == 0) continue;
+      d_i += 2 * weight * std::sin(theta[i] - theta[j]);
+    }
+    weight = dist_to_diagonal_grid(node_at(i));
+    d_i += 2 * weight * std::sin(theta[i]);
+    grad[i] = d_i;
+  }
+  return grad;
+}
+
 void SamplingMethod::reset_progress() {
     total_weights_ = kernel->R;
     ops_per_laplacian_ = static_cast<int64_t>(kernel->dim) * (kernel->dim + 1) / 2;
