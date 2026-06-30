@@ -59,7 +59,7 @@ void MALASampling::sample() {
         for (int i = 0; i < kernel->dim; ++i) {
             d = wrap_pi(curr_thetas[i] - prop[i]);
             q_fwd += (-d - this->mala_sigma * curr_grad[i]) * (-d  -this->mala_sigma * curr_grad[i]);
-            q_bwd += (d - this->mala_sigma * prop_grad[i]) * (-d  -this->mala_sigma * prop_grad[i]);
+            q_bwd += (d - this->mala_sigma * prop_grad[i]) * (d  -this->mala_sigma * prop_grad[i]);
         }
         double alpha_log =  (q_fwd - qwd) / 4*(this->mala_sigma) - kernel->t * (prop_lambda - curr_lambda) + std::log1p(-std::exp(-kernel->s * prop_lambda)) - std::log1p(-std::exp(-kernel->s * curr_lambda));
         double a = std::min(1, alpha_log);
