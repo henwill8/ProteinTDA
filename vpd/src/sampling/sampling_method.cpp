@@ -124,8 +124,7 @@ double SamplingMethod::delta_laplacian_symbol(const double* theta, int k, double
     return delta;
 }
 
-double SamplingMethod::grad_laplacian_symbol(const double* theta) {
-  std::vector<double> grad(kernel->dim);
+void SamplingMethod::grad_laplacian_symbol(const double* theta, double* grad) {
   for (int i = 0; i < kernel->dim; ++i) {
     double d_i = 0.0;
     for (int j = 0; j < kernel->dim; ++j) {
@@ -138,7 +137,6 @@ double SamplingMethod::grad_laplacian_symbol(const double* theta) {
     d_i += 2 * weight * std::sin(theta[i]);
     grad[i] = d_i;
   }
-  return grad;
 }
 
 void SamplingMethod::reset_progress() {

@@ -70,9 +70,7 @@ torch::Tensor VPD::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2, bool s
     // dim: [R, dim] x [dim] = [R], each ith entry is the ith dot product
     torch::Tensor dot_products = torch::matmul(theta_tensor, difference_vpd);
 
-
-    // This approximates both the Monte Carlo sampling bias and the scaling by the measure v_t.
-    torch::Tensor scale = torch::sqrt(weights_tensor / static_cast<double>(this->kernel->R));
+    double scale = torch::sqrt(1.0 / static_cast<double>(this->kernel->R));
 
     torch::Tensor cos_vals = scale * (torch::cos(dot_products) - (subtract_zero_embedding ? 1 : 0));
     torch::Tensor sin_vals = scale * torch::sin(dot_products);

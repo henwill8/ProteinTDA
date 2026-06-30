@@ -32,6 +32,7 @@ protected:
     double qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2) const;
     double laplacian_symbol(const double* theta);
     double delta_laplacian_symbol(const double* theta, int k, double proposed_val);
+    void grad_laplacian_symbol(const double* theta, double* grad);
 
     virtual void reset_progress();
     void add_op();
