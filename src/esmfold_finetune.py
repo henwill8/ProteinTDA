@@ -36,6 +36,31 @@ def drop_esm_encoder(model: EsmForProteinFolding) -> None:
         torch.cuda.empty_cache()
 
 
+def drop_cached_trunk_blocks(model: EsmForProteinFolding, cache_trunk_blocks: int) -> int:
+    """Drop cached trunk blocks and recycling modules. Returns the number of blocks removed."""
+    trunk = model.trunk
+    kept_blocks = list(trunk.blocks[cache_trunk_blocks:])
+    dropped = len(trunk.blocks) - len(kept_blocks)
+    if dropped == 0:
+        return 0
+
+    trunk.blocks = torch.nn.ModuleList(kept_blocks)
+    trunk._prefix_blocks_dropped = True
+
+    for name in (
+        "recycle_s_norm",
+        "recycle_z_norm",
+        "recycle_disto",
+        "pairwise_positional_embedding",
+    ):
+        if hasattr(trunk, name):
+            delattr(trunk, name)
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return dropped
+
+
 def configure_finetuning(
     model: EsmForProteinFolding,
     *,
@@ -69,6 +94,7 @@ def build_model(
     esm_half: bool = True,
     gradient_checkpointing: bool = True,
     load_esm: bool = True,
+    cache_trunk_blocks: int = 0,
 ) -> EsmForProteinFolding:
     model = EsmForProteinFolding.from_pretrained(model_name, low_cpu_mem_usage=True).to(device)
     if load_esm:
@@ -76,6 +102,29 @@ def build_model(
             model.esm = model.esm.half()
     else:
         drop_esm_encoder(model)
+
+    if cache_trunk_blocks != 0:
+        if load_esm:
+            raise ValueError("partial trunk caching requires load_esm=False")
+        n_blocks = len(model.trunk.blocks)
+        remaining = len(model.trunk.blocks[cache_trunk_blocks:])
+        if remaining < n_blocks:
+            if unfreeze_trunk_blocks > remaining:
+                raise ValueError(
+                    f"more trunk blocks to unfreeze ({unfreeze_trunk_blocks}) than remaining after caching ({remaining})"
+                )
+            dropped = drop_cached_trunk_blocks(model, cache_trunk_blocks)
+            if remaining == 0:
+                print(
+                    f"Dropped all {dropped} trunk blocks, "
+                    "only structure module and trunk2sm projections remain."
+                )
+            else:
+                print(
+                    f"Dropped first {dropped} trunk blocks, "
+                    f"{len(model.trunk.blocks)} blocks remain in memory."
+                )
+
     configure_finetuning(
         model,
         unfreeze_trunk_blocks=unfreeze_trunk_blocks,
@@ -135,8 +184,9 @@ def prepare_esm_cache(
     device: torch.device,
     *,
     trunk_chunk_size: int,
+    cache_trunk_blocks: int = 0,
 ) -> ESMEmbeddingCache:
-    cache = ESMEmbeddingCache(cache_dir)
+    cache = ESMEmbeddingCache(cache_dir, cache_trunk_blocks=cache_trunk_blocks)
     missing = cache.missing(proteins)
     if missing:
         print(f"Caching {len(missing)} ESM embeddings in {cache_dir}...")
@@ -244,8 +294,9 @@ def run_esmfold(
                 )
                 chunk_size = smaller
     finally:
-        print(f"Restoring chunk size to {original_chunk_size}")
-        model.trunk.set_chunk_size(original_chunk_size)
+        if chunk_size != original_chunk_size:
+            print(f"Restoring chunk size to {original_chunk_size}")
+            model.trunk.set_chunk_size(original_chunk_size)
 
 
 def _sample_num_recycles(max_recycles: int) -> int:

@@ -20,6 +20,8 @@ RUN_CONFIG = mlc.ConfigDict(
             "device": None, # 'cuda', 'cpu', or None for auto-detection
             "use_esm_cache": True,
             "esm_cache_dir": "cache/esm_embeddings",
+            # 0 = cache ESM embeddings only, N = cache first N trunk blocks, -N = cache last N trunk blocks
+            "esm_cache_trunk_blocks": -2,
             "trunk_chunk_size": 1024,
             "infer_recycles": None,
         },
@@ -33,8 +35,8 @@ RUN_CONFIG = mlc.ConfigDict(
             "batch_size": 1,
             "train_proteins_per_epoch": None,
             "val_proteins_per_epoch": None,
-            "unfreeze_trunk_blocks": 1,
-            "unfreeze_structure_module": False,
+            "unfreeze_trunk_blocks": 2,
+            "unfreeze_structure_module": True,
             "train_recycles": None,
             "epochs": 300,
             "patience": 5,

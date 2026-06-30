@@ -157,6 +157,7 @@ def run_fold(
         trunk_chunk_size=runtime.trunk_chunk_size,
         gradient_checkpointing=training.gradient_checkpointing,
         load_esm=not runtime.use_esm_cache,
+        cache_trunk_blocks=runtime.esm_cache_trunk_blocks if runtime.use_esm_cache else 0,
     )
     trainable, total = trainable_parameter_count(model)
     print(f"Trainable parameters: {trainable:,} / {total:,}")
@@ -285,6 +286,8 @@ def main() -> int:
 
     esm_cache = None
     if runtime.use_esm_cache:
+        if runtime.esm_cache_trunk_blocks > 0 and (training.train_recycles != 0 or runtime.infer_recycles != 0):
+            raise ValueError("esm_cache_trunk_blocks > 0 requires train_recycles and infer_recycles to be 0")
         esm_cache = prepare_esm_cache(
             Path(runtime.esm_cache_dir),
             proteins,
@@ -292,6 +295,7 @@ def main() -> int:
             tokenizer,
             device,
             trunk_chunk_size=runtime.trunk_chunk_size,
+            cache_trunk_blocks=runtime.esm_cache_trunk_blocks,
         )
 
     runner = KFoldRunner(proteins, baseline=runtime.baseline)
@@ -306,6 +310,7 @@ def main() -> int:
             trunk_chunk_size=runtime.trunk_chunk_size,
             gradient_checkpointing=False,
             load_esm=not runtime.use_esm_cache,
+            cache_trunk_blocks=runtime.esm_cache_trunk_blocks if runtime.use_esm_cache else 0,
         )
         model.eval()
         fold_fn = partial(
