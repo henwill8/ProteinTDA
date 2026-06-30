@@ -296,7 +296,7 @@ def train_one_epoch(
     unfreeze_trunk_blocks: int = 2,
     unfreeze_structure_module: bool = False,
     dropout_in_frozen: bool = False,
-    train_recycles: int = 1,
+    train_recycles: int | None = None,
     randomize_recycles: bool = True,
     use_amp: bool = False,
     grad_clip_norm: float | None = 1.0,
@@ -315,7 +315,7 @@ def train_one_epoch(
     for batch in tqdm(loader, desc="train", leave=False):
         for protein in batch:
             optimizer.zero_grad(set_to_none=True)
-            if randomize_recycles and train_recycles > 1:
+            if randomize_recycles and train_recycles is not None and train_recycles > 1:
                 num_recycles = _sample_num_recycles(train_recycles)
             else:
                 num_recycles = train_recycles
