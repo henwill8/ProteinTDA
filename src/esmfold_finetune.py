@@ -234,17 +234,18 @@ def run_esmfold(
                 torch.cuda.empty_cache()
             smaller = _smaller_trunk_chunk_size(chunk_size)
             if smaller is None:
-                model.trunk.set_chunk_size(original_chunk_size)
                 print(
                     f"OOM running ESMFold (seq len {seq_len}, trunk chunk_size=1); "
                     f"skipping protein and restoring chunk_size={original_chunk_size}"
                 )
-                return None
+                break
             print(
                 f"OOM running ESMFold (seq len {seq_len}, trunk chunk_size={chunk_size}); "
                 f"retrying with chunk_size={smaller}"
             )
             chunk_size = smaller
+    
+    model.trunk.set_chunk_size(original_chunk_size)
 
 
 def _sample_num_recycles(max_recycles: int) -> int:
