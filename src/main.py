@@ -37,6 +37,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--baseline", action="store_true")
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--train-proteins-per-epoch", type=int, default=None)
+    parser.add_argument("--val-proteins-per-epoch", type=int, default=None)
     parser.add_argument("--unfreeze-trunk-blocks", type=int, default=1)
     parser.add_argument("--unfreeze-structure-module", action="store_true")
     parser.add_argument("--train-recycles", type=int, default=1)
@@ -86,7 +88,29 @@ def load_dataset() -> list:
     return dataset
 
 
-def make_loader(proteins: list, batch_size: int, shuffle: bool) -> DataLoader:
+def sample_proteins(
+    proteins: list,
+    max_proteins: int | None,
+    rng: np.random.Generator,
+) -> list:
+    if max_proteins is None or max_proteins >= len(proteins):
+        return proteins
+    indices = rng.choice(len(proteins), size=max_proteins, replace=False)
+    return [proteins[i] for i in indices]
+
+
+def make_loader(
+    proteins: list,
+    batch_size: int,
+    *,
+    shuffle: bool = False,
+    max_proteins: int | None = None,
+    rng: np.random.Generator | None = None,
+) -> DataLoader:
+    if max_proteins is not None:
+        if rng is None:
+            raise ValueError("rng is required when max_proteins is set")
+        proteins = sample_proteins(proteins, max_proteins, rng)
     return DataLoader(
         dataset=proteins,
         batch_size=batch_size,
@@ -144,9 +168,19 @@ def run_fold(
     print(f"Trainable parameters: {trainable:,} / {total:,}")
 
     train_idx, val_idx = train_test_split(train_idx, test_size=0.25)
-    train_loader = make_loader([dataset[i] for i in train_idx], args.batch_size, shuffle=True)
-    val_loader = make_loader([dataset[i] for i in val_idx], args.batch_size, shuffle=False)
-    test_loader = make_loader([dataset[i] for i in test_idx], args.batch_size, shuffle=False)
+    train_proteins = [dataset[i] for i in train_idx]
+    val_proteins = [dataset[i] for i in val_idx]
+    test_proteins = [dataset[i] for i in test_idx]
+
+    fold_rng = np.random.default_rng(training.seed + fold)
+    val_loader = make_loader(
+        val_proteins,
+        args.batch_size,
+        shuffle=False,
+        max_proteins=args.val_proteins_per_epoch,
+        rng=fold_rng,
+    )
+    test_loader = make_loader(test_proteins, args.batch_size, shuffle=False)
 
     optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
     best_model_weights = None
@@ -154,6 +188,13 @@ def run_fold(
     patience = 0
 
     for epoch in range(training.epochs):
+        train_loader = make_loader(
+            train_proteins,
+            args.batch_size,
+            shuffle=True,
+            max_proteins=args.train_proteins_per_epoch,
+            rng=fold_rng,
+        )
         metrics = train_one_epoch(
             model,
             tokenizer,
