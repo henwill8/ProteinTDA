@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sampling_method.hpp"
+#include <utility>
 
 /**
  * @brief Metropolis Adjusted Langevin Algorithm for heat kernel theta generation.
@@ -9,7 +10,7 @@ class MALASampling : public SamplingMethod {
 private:
     double mala_sigma;
     int mala_burn_in;
-    int mala_iter;
+    int mala_thinning;
     bool tune_sigma;
 
     void reset_progress() override;

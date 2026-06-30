@@ -50,13 +50,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def(py::init<double, int, int>(),
         py::arg("sigma"),
         py::arg("burn_in"),
-        py::arg("iter"));
+        py::arg("thinning"));
 
-  py::class_<MALASampling, SamplingMethod, std::shared_ptr<MALASampling>>(m, "MALASampling")
+  py::class_<MALASampling, SamplingMethod, std::shared_ptr<MALASampling>>(m, "MALASamplingKernel")
     .def(py::init<double, int, int, bool>(),
         py::arg("sigma"),
         py::arg("burn_in"),
-        py::arg("iter"),
+        py::arg("thinning"),
         py::arg("tune_sigma"));
 
   py::class_<VPD>(m, "VPD")

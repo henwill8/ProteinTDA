@@ -124,7 +124,7 @@ def create_heat_random_fourier_features(
 
     if show_progress:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
-        sampler = _cpp.RejectionSamplingKernel()
+        sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
         sampler.init(kernel, seed=seed)
         _build_kernel_with_progress(
             sampler,
@@ -132,7 +132,7 @@ def create_heat_random_fourier_features(
         )
     else:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
-        sampler = _cpp.RejectionSamplingKernel()
+        sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
         sampler.init(kernel, seed=seed)
         sampler.build()
 
