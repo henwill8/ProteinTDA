@@ -50,7 +50,7 @@ void MALASampling::sample() {
         std::vector<double> prop(kernel->dim);
         for (int i = 0; i < kernel->dim; ++i) {
             drift = this->mala_sigma * curr_grad[i];
-            brownian = std::sqrt(2 this->mala_sigma) * gaussian(gen);
+            brownian = std::sqrt(2 * this->mala_sigma) * gaussian(gen);
             prop[i] = wrap_2pi(curr_thetas[i] + drift + brownian);
         }
         std::vector<double> prop_grad(kernel->dim);
