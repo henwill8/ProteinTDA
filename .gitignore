@@ -16,3 +16,5 @@ vpd/*.egg-info
 /vpd/build
 /src/__pycache__
 *.pyc
+/.venv
+/src/proteintda.egg-info

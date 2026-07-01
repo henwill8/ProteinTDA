@@ -15,6 +15,7 @@ sources = [
     os.path.join("src", "sampling", "sampling_method.cpp"),
     os.path.join("src", "sampling", "rejection_sampling.cpp"),
     os.path.join("src", "sampling", "metropolis_hastings_sampling.cpp"),
+    os.path.join("src", "sampling", "mala_sampling.cpp"),
     os.path.join("src", "vpd.cpp"),
     os.path.join("src", "bindings.cpp"),
 ]
