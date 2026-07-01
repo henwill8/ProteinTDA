@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MAKE A REAL NAME"
+version = "0.1.0"
+description = ""
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "gudhi",
+    
+    "minifold @ git+https://github.com/jwohlwend/minifold.git",
+    "ml_collections",
+    "numpy",
+    "scikit-learn",
+    "sidechainnet",
+    "torch>=2.3.0",
+    "tqdm",
+    "vpd @ file:./vpd",
+]
