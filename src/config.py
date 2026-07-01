@@ -12,18 +12,11 @@ RUN_CONFIG = mlc.ConfigDict(
             "max_proteins": 1000,
             "max_protein_length": None,
         },
-        "model": {
-            "name": "facebook/esmfold_v1",
-        },
         "runtime": {
-            "baseline": False,
-            "device": None, # 'cuda', 'cpu', or None for auto-detection
-            "use_esm_cache": True,
-            "esm_cache_dir": "cache/esm_embeddings",
-            # 0 = cache ESM embeddings only, N = cache first N trunk blocks, -N = cache last N trunk blocks
-            "esm_cache_trunk_blocks": -2,
-            "trunk_chunk_size": 1024,
-            "infer_recycles": None,
+            "device": None,  # 'cuda', 'cpu', or None for auto-detection
+            "infer_recycles": 3,
+            "minifold_cache_dir": "cache/minifold",
+            "model_size": "48L",  # '48L' or '12L'
         },
         "kfold": {
             "n_splits": 5,
@@ -33,19 +26,14 @@ RUN_CONFIG = mlc.ConfigDict(
             "seed": 42,
             "lr": 1e-4,
             "batch_size": 1,
-            "train_proteins_per_epoch": None,
-            "val_proteins_per_epoch": None,
-            "unfreeze_trunk_blocks": 2,
-            "unfreeze_structure_module": True,
             "train_recycles": None,
             "epochs": 300,
             "patience": 5,
-            "gradient_checkpointing": True,
-            "amp": True
         },
         "logging": {
             "baseline_log_file": "logs/esmfold_baseline.log",
             "finetune_log_file": "logs/kfold_test_scores.log",
+            "minifold_log_file": "logs/minifold_kfold.log",
         },
     }
 )
@@ -73,79 +61,8 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
     }
 )
 
-# Copied from openfold.config
 LOSS_CONFIG = mlc.ConfigDict(
     {
-        "distogram": {
-            "min_bin": 2.3125,
-            "max_bin": 21.6875,
-            "no_bins": 64,
-            "eps": _EPS,
-            "weight": 0.3,
-            "enabled": True,
-        },
-        "fape": {
-            "backbone": {
-                "clamp_distance": 10.0,
-                "loss_unit_distance": 10.0,
-                "use_clamped_fape": 0.9,
-                "weight": 0.5,
-            },
-            "sidechain": {
-                "clamp_distance": 10.0,
-                "length_scale": 10.0,
-                "use_clamped_fape": 0.9,
-                "weight": 0.5,
-            },
-            "eps": 1e-4,
-            "weight": 1.0,
-            "enabled": True,
-        },
-        "plddt_loss": {
-            "min_resolution": 0.1,
-            "max_resolution": 3.0,
-            "cutoff": 15.0,
-            "no_bins": 50,
-            "eps": _EPS,
-            "weight": 0.01,
-            "enabled": True,
-        },
-        "masked_msa": {
-            "num_classes": 23,
-            "eps": _EPS,
-            "weight": 2.0,
-            "enabled": True,
-        },
-        "supervised_chi": {
-            "chi_weight": 0.5,
-            "angle_norm_weight": 0.01,
-            "eps": _EPS,
-            "weight": 1.0,
-            "enabled": True,
-        },
-        "violation": { # if violation loss is enabled, then stereo_chemical_props.txt must be present in the openfold installation
-            "violation_tolerance_factor": 12.0,
-            "clash_overlap_tolerance": 1.5,
-            "average_clashes": False,
-            "eps": _EPS,
-            "weight": 1.0,
-            "enabled": False,
-        },
-        "tm": {
-            "max_bin": 31,
-            "no_bins": 64,
-            "min_resolution": 0.1,
-            "max_resolution": 3.0,
-            "eps": _EPS,
-            "weight": 0.0,
-            "enabled": False,
-        },
-        "chain_center_of_mass": {
-            "clamp_distance": -4.0,
-            "weight": 0.0,
-            "eps": _EPS,
-            "enabled": False,
-        },
         "pd": {
             "max_dimension": 2,
             "hom_dim": 2,

@@ -16,6 +16,7 @@ dependencies = [
     "scikit-learn",
     "sidechainnet",
     "torch>=2.3.0",
+    "tmtools",
     "tqdm",
     "vpd @ file:./vpd",
 ]

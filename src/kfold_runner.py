@@ -28,6 +28,7 @@ def _run_config(*, baseline: bool, num_proteins: int) -> dict[str, Any]:
         "casp_version": data.casp_version,
         "casp_thinning": data.casp_thinning,
         "max_proteins": data.max_proteins,
+        "model_size": getattr(RUN_CONFIG.runtime, "model_size", None),
     }
 
 
