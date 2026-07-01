@@ -25,6 +25,10 @@ resolve_python_candidate() {
     printf '%s\n' "$CONDA_PREFIX/bin/python"
     return
   fi
+  if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+    printf '%s\n' "$VIRTUAL_ENV/bin/python"
+    return
+  fi
   if [[ -x "$VENV/bin/python" ]]; then
     printf '%s\n' "$VENV/bin/python"
   fi

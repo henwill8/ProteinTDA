@@ -22,12 +22,12 @@ void SamplingMethod::init(
 }
 
 void SamplingMethod::compute_total_edge_weights() {
-    double total = 0;
+    double total = 0.0;
     for (int i = 0; i < kernel->dim; ++i) {
-        for (int j = i; i < kernel->dim; ++j) {
-            total += qdist(node_at(i), node_at(j));
+        for (int j = i; j < kernel->dim; ++j) {
+            total += 2 * qdist(node_at(i), node_at(j));
         }
-        total += dist_to_diagonal_grid(node_at(i));
+        total += 2 * dist_to_diagonal_grid(node_at(i));
     }
     this->edge_weight_total = total;
 }
