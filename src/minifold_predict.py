@@ -1,6 +1,5 @@
 """Functions based on minifold/predict.py"""
 
-import argparse
 import urllib.request
 from pathlib import Path
 
@@ -14,7 +13,6 @@ from sidechainnet.dataloaders.SCNProtein import SCNProtein
 from minifold.data.config import model_config
 from minifold.data.of_data import of_inference
 from minifold.model.model import MiniFoldModel
-from minifold.utils.protein import Protein, to_pdb
 from minifold.utils.residue_constants import (
     atom_order,
     restype_order_with_x,
@@ -43,6 +41,7 @@ def load_minifold(
     device: torch.device | None = None,
     kernels: bool = False,
     compile: bool = False,
+    train: bool = False,
 ) -> tuple[object, MiniFoldModel, object]:
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -57,9 +56,8 @@ def load_minifold(
     hparams = ckpt["hyper_parameters"]
     # TODO: need to look into the config options more, there are a few good memory saving options it seems
     config_of = model_config(
-        # "finetuning",
-        "initial_training",
-        train=False,
+        "initial_training" if train else "finetuning",
+        train=train,
         low_prec=False,
         long_sequence_inference=False,
     )
@@ -87,10 +85,11 @@ def load_minifold(
             fullgraph=True,
         )
     
-    # remove eval once training is implemented
-    model = model.to(device).eval()
+    model = model.to(device)
+    if not train:
+        model.eval()
 
-    return alphabet, model, config_of.data
+    return alphabet, model, config_of
 
 
 def evaluate_minifold(
@@ -98,7 +97,7 @@ def evaluate_minifold(
     *,
     alphabet,
     model: MiniFoldModel,
-    config,
+    config_of,
     device: torch.device,
     num_recycling: int = 3,
 ) -> tuple[float, float]:
@@ -116,7 +115,7 @@ def evaluate_minifold(
             protein,
             alphabet=alphabet,
             model=model,
-            config=config,
+            config_of=config_of,
             device=device,
             num_recycling=num_recycling,
         )
@@ -129,9 +128,8 @@ def evaluate_minifold(
     return float(np.mean(plddt_scores)), float(np.mean(tm_scores))
 
 
-def _prepare_input(seq: str, config, alphabet):
-    # TODO: switch to train once training is implemented
-    open_fold_batch = of_inference(seq, "predict", config)
+def _prepare_input(seq: str, config_of, alphabet, train: bool = False):
+    open_fold_batch = of_inference(seq, "predict" if not train else "train", config_of.data)
     of_seq = "".join(
         restype_order_with_x_inverse[x.item()] for x in open_fold_batch["aatype"]
     )[: open_fold_batch["seq_length"]]
@@ -148,12 +146,12 @@ def predict_scnprotein(
     *,
     alphabet,
     model: MiniFoldModel,
-    config,
+    config_of,
     device: torch.device,
     num_recycling: int = 3,
 ) -> dict[str, torch.Tensor]:
     seq = str(protein.seq)
-    encoded_seq, mask, batch_of = _prepare_input(seq, config, alphabet)
+    encoded_seq, mask, batch_of = _prepare_input(seq, config_of, alphabet)
 
     model_batch = {
         "seq": encoded_seq.unsqueeze(0).to(device),

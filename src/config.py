@@ -13,6 +13,7 @@ RUN_CONFIG = mlc.ConfigDict(
             "max_protein_length": None,
         },
         "runtime": {
+            "baseline": False,  # True = pretrained eval only, False = fine-tune
             "device": None,  # 'cuda', 'cpu', or None for auto-detection
             "infer_recycles": 3,
             "minifold_cache_dir": "cache/minifold",
@@ -24,11 +25,23 @@ RUN_CONFIG = mlc.ConfigDict(
         },
         "training": {
             "seed": 42,
-            "lr": 1e-4,
+            "base_lr": 1e-4,
+            "lm_lr": 3e-5,
+            "struct_lr": 1e-4,
             "batch_size": 1,
-            "train_recycles": None,
+            "train_proteins_per_epoch": None,
+            "val_proteins_per_epoch": None,
+            "unfreeze_fold_blocks": 0,
+            "unfreeze_lm_layers": 2,
+            "train_recycles": 3,
+            "randomize_recycles": True,
+            "disto_weight": 0.8,
+            "structure_weight": 0.2,
+            "tda_weight": 1.0,
             "epochs": 300,
             "patience": 5,
+            "amp": True,
+            "grad_clip_norm": 1.0,
         },
         "logging": {
             "baseline_log_file": "logs/esmfold_baseline.log",

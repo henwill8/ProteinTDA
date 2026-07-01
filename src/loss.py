@@ -1,24 +1,7 @@
 import torch
-import random
-import sys
 
-sys.path.append("../vpd")
-
-from vpd import _cpp
-
-from openfold.utils.loss import (
-    AlphaFoldLoss,
-    chain_center_of_mass_loss,
-    compute_renamed_ground_truth,
-    distogram_loss,
-    fape_loss,
-    find_structural_violations,
-    lddt_loss,
-    supervised_chi_loss,
-    tm_loss,
-    violation_loss,
-)
 from persistence import pd_from_graph, wasserstein_distance
+
 
 def wasserstein_loss(
     pred_diags: list[torch.Tensor],
@@ -33,12 +16,11 @@ def wasserstein_loss(
     return {f"h{i}": terms[i] if i < len(terms) else zero for i in range(hom_dim)}
 
 
-class ESMFoldLoss(AlphaFoldLoss):
-    """AlphaFoldLoss without masked MSA or experimentally-resolved terms. Adds Wasserstein and VPD losses."""
+class MiniFoldTDALoss:
+    """Wasserstein and VPD losses on persistence diagrams from distance matrices."""
 
     def __init__(self, config, h0rff=None, h1rff=None):
-        super().__init__(config)
-        self.original_fape_config = config.fape
+        self.config = config
         self.h0rff = h0rff
         self.h1rff = h1rff
 
@@ -50,52 +32,12 @@ class ESMFoldLoss(AlphaFoldLoss):
             if cfg[name].enabled:
                 loss_fns[name] = fn
 
-        add("distogram", lambda: distogram_loss(
-            logits=out["distogram_logits"],
-            **batch,
-            **cfg.distogram,
-        ))
-        add("fape", lambda: fape_loss(
-            out,
-            batch,
-            cfg.fape
-        ))
-        add("plddt_loss", lambda: lddt_loss(
-            logits=out["lddt_logits"],
-            all_atom_pred_pos=out["final_atom_positions"],
-            **batch,
-            **cfg.plddt_loss,
-        ))
-        add("supervised_chi", lambda: supervised_chi_loss(
-            out["sm"]["angles"],
-            out["sm"]["unnormalized_angles"],
-            **batch,
-            **cfg.supervised_chi,
-        ))
-        add("violation", lambda: violation_loss(
-            out["violation"],
-            **batch,
-            **cfg.violation,
-        ))
-        add("tm", lambda: tm_loss(
-            logits=out["tm_logits"],
-            **out,
-            **batch,
-            **cfg.tm,
-        ))
-        add("chain_center_of_mass", lambda: chain_center_of_mass_loss(
-            all_atom_pred_pos=out["final_atom_positions"],
-            **batch,
-            **cfg.chain_center_of_mass,
-        ))
-
         needs_diags = (
             cfg.wasserstein_h0.enabled
             or cfg.wasserstein_h1.enabled
             or cfg.vpd_h0.enabled
             or cfg.vpd_h1.enabled
         )
-
         if needs_diags:
             target_diags = pd_from_graph(batch["adj"], **cfg.pd)
             pred_diags = pd_from_graph(out["adj"], **cfg.pd)
@@ -106,7 +48,6 @@ class ESMFoldLoss(AlphaFoldLoss):
                 target_diags=target_diags,
                 hom_dim=cfg.pd.hom_dim,
             )
-
             if cfg.wasserstein_h0.enabled:
                 add("wasserstein_h0", lambda: wasserstein_terms["h0"])
             if cfg.wasserstein_h1.enabled:
@@ -115,52 +56,21 @@ class ESMFoldLoss(AlphaFoldLoss):
         if cfg.vpd_h0.enabled:
             if self.h0rff is None:
                 raise ValueError("vpd_h0 loss is enabled but h0rff was not provided")
-            add(
-                "vpd_h0",
-                lambda: self.h0rff.vpd_loss(
-                    pred_diags[0],
-                    target_diags[0],
-                ),
-            )
-
+            add("vpd_h0", lambda: self.h0rff.vpd_loss(pred_diags[0], target_diags[0]))
         if cfg.vpd_h1.enabled:
             if self.h1rff is None:
                 raise ValueError("vpd_h1 loss is enabled but h1rff was not provided")
-            add(
-                "vpd_h1",
-                lambda: self.h1rff.vpd_loss(
-                    pred_diags[1],
-                    target_diags[1],
-                ),
-            )
+            add("vpd_h1", lambda: self.h1rff.vpd_loss(pred_diags[1], target_diags[1]))
 
         return loss_fns
 
-    def loss(self, out, batch, _return_breakdown=False):
-        if self.config.violation.enabled and "violation" not in out:
-            out["violation"] = find_structural_violations(
-                batch,
-                out["sm"]["positions"][-1],
-                **self.config.violation,
-            )
-
-        if self.config.fape.enabled and "renamed_atom14_gt_positions" not in batch:
-            batch.update(
-                compute_renamed_ground_truth(
-                    batch,
-                    out["sm"]["positions"][-1],
-                )
-            )
-
-        if random.random() < 0.1:
-            self.config.fape.backbone.use_clamped_fape = None
-            self.config.fape.sidechain.use_clamped_fape = None
-        else:
-            self.config.fape = self.original_fape_config
-
+    def __call__(self, out, batch, _return_breakdown=False):
         loss_fns = self._build_loss_fns(out, batch)
         if not loss_fns:
-            raise ValueError("No loss terms are enabled in LOSS_CONFIG")
+            zero = torch.zeros((), device=out["adj"].device, dtype=out["adj"].dtype, requires_grad=True)
+            if _return_breakdown:
+                return zero, {}
+            return zero
 
         cum_loss = 0.0
         losses = {}
@@ -172,17 +82,10 @@ class ESMFoldLoss(AlphaFoldLoss):
                 loss = loss.new_zeros((), requires_grad=True)
             cum_loss = cum_loss + weight * loss
             losses[loss_name] = loss.detach().clone()
-        losses["unscaled_loss"] = cum_loss.detach().clone()
-
-        # Scale the loss by the square root of the minimum of the crop size and
-        # the (average) sequence length. See subsection 1.9.
-        seq_len = torch.mean(batch["seq_length"].float())
-        crop_len = batch["aatype"].shape[-1]
-        cum_loss = cum_loss * torch.sqrt(min(seq_len, crop_len))
 
         losses["loss"] = cum_loss.detach().clone()
 
         if not _return_breakdown:
             return cum_loss
-
+            
         return cum_loss, losses
