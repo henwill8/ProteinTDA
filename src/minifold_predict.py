@@ -130,8 +130,8 @@ def evaluate_minifold(
 
 
 def _prepare_input(seq: str, config, alphabet):
-    # "train" was originally "predict", but I reckon we want train
-    open_fold_batch = of_inference(seq, "train", config)
+    # TODO: switch to train once training is implemented
+    open_fold_batch = of_inference(seq, "predict", config)
     of_seq = "".join(
         restype_order_with_x_inverse[x.item()] for x in open_fold_batch["aatype"]
     )[: open_fold_batch["seq_length"]]
