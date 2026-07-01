@@ -8,7 +8,7 @@ RUN_CONFIG = mlc.ConfigDict(
             "casp_version": "debug",
             "casp_thinning": 30,
             "allow_incomplete": False,
-            "scn_dir": "data/sidechainnet",
+            "scn_dir": "./data/sidechainnet",
             "max_proteins": 1000,
             "max_protein_length": None,
         },
