@@ -291,14 +291,20 @@ class MiniFoldRunner:
         seq = str(protein.seq)
         model_batch = self.prepare_batch(protein, train=False)
 
+        # ESM backbone applies dropout in training mode, which we don't want for inference
+        was_training = self.model.training
+        self.model.eval()
         autocast_device = "cuda" if self.device.type == "cuda" else self.device.type
-        with torch.autocast(autocast_device, dtype=torch.bfloat16):
-            try:
+        try:
+            with torch.autocast(autocast_device, dtype=torch.bfloat16):
                 out = self.model(model_batch, num_recycling=num_recycling)
-            except torch.cuda.OutOfMemoryError:
-                torch.cuda.empty_cache()
-                print("OOM during MiniFold forward pass; skipping protein.")
-                return None
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            print("OOM during MiniFold forward pass; skipping protein.")
+            return None
+        finally:
+            if was_training:
+                self.model.train()
 
         length = len(seq)
         return {
