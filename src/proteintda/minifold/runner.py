@@ -187,6 +187,7 @@ class MiniFoldRunner:
                 [float(protein.resolution) if protein.resolution is not None else 0.0],
                 dtype=np.float32,
             )
+            raw_features["is_distillation"] = np.array(0.0, dtype=np.float32)
             batch_of = feature_pipeline.FeaturePipeline(config).process_features(
                 raw_features,
                 "train",

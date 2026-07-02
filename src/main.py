@@ -31,7 +31,7 @@ def main() -> int:
 
     proteins = load_dataset()
     cache_dir = Path(runtime.minifold_cache_dir)
-    runner = KFoldRunner(proteins, baseline=runtime.baseline)
+    runner = KFoldRunner(proteins)
 
     if runtime.baseline:
         fold_fn = partial(
