@@ -192,7 +192,18 @@ class MiniFoldRunner:
                 raw_features,
                 "train",
             )
-            encoded_seq = torch.tensor(self.alphabet.encode(seq), dtype=torch.long)
+            seq_length = batch_of["seq_length"]
+            if isinstance(seq_length, torch.Tensor):
+                seq_length = int(seq_length.reshape(-1)[0].item())
+            else:
+                seq_length = int(seq_length)
+            aatype = batch_of["aatype"]
+            if aatype.ndim > 1:
+                aatype = aatype[:, 0]
+            of_seq = "".join(
+                restype_order_with_x_inverse[x.item()] for x in aatype
+            )[:seq_length]
+            encoded_seq = torch.tensor(self.alphabet.encode(of_seq), dtype=torch.long)
             coords = batch_of["all_atom_positions"][:, 0:3, :, 0]
         else:
             batch_of = of_inference(seq, "predict", config)
