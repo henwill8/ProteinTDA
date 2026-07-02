@@ -232,7 +232,11 @@ def patch_loss(path: Path) -> None:
         ),
         \"\"\"
 
-        if self.config.tm.enabled:""",
+        if self.config.tm.enabled:
+            loss_fns["tm"] = lambda: tm_loss(
+                logits=out["tm_logits"],
+                **{**batch, **out, **self.config.tm},
+            )""",
         """        if self.config.experimentally_resolved.weight != 0.0:
             loss_fns["experimentally_resolved"] = lambda: experimentally_resolved_loss(
                 logits=out["experimentally_resolved_logits"],
@@ -245,7 +249,14 @@ def patch_loss(path: Path) -> None:
                 **batch,
             )
 
-        if self.config.tm.enabled and self.config.tm.weight != 0.0:""",
+        if self.config.tm.enabled and self.config.tm.weight != 0.0:
+            # MiniFold stores frames as 4x4 matrices, but tm_loss expects a
+            # quaternion tensor_7, so convert final_affine_tensor here.
+            tm_kwargs = {**batch, **out, **self.config.tm}
+            tm_kwargs["final_affine_tensor"] = Rigid.from_tensor_4x4(
+                out["final_affine_tensor"]
+            ).to_tensor_7()
+            loss_fns["tm"] = lambda: tm_loss(logits=out["tm_logits"], **tm_kwargs)""",
     )
     path.write_text(text, encoding="utf-8")
 
