@@ -10,14 +10,17 @@
 #include <omp.h>
 #endif
 
+
 void SamplingMethod::init(
     std::shared_ptr<Heat_Kernel> kernel,
     bool normalized_lambdas,
-    int seed)
+    int seed,
+    Device device)
 {
     this->kernel = std::move(kernel);
     this->normalized_lambdas = normalized_lambdas;
     this->seed = seed;
+    this->device = device;
     if (normalized_lambdas) compute_total_edge_weights();
 }
 
@@ -94,8 +97,8 @@ double SamplingMethod::laplacian_symbol(const double* theta) {
                     result += 2 * edge_weight * (1.0 - std::cos(diff));
                 }
                 // If adding op everytime to global counter is too slow, switch to batched local counter
-                add_op();
             }
+            add_op(kernel->dim);
             double edge_weight = dist_to_diagonal_grid(node_at(i));
             result += 2 * edge_weight * (1.0 - std::cos(theta[i]));
             add_op();
@@ -111,11 +114,11 @@ double SamplingMethod::delta_laplacian_symbol(const double* theta, int k, double
     double delta = 0;
 
     for (int i = 0; i < kernel->dim; ++i) {
+        add_op();
         if (i == k) continue;
         double weight = qdist(k_node, node_at(i));
         if (weight == 0) continue;
         delta += 2 * weight * (std::cos(current_val - theta[i]) - std::cos(proposed_val - theta[i]));
-        add_op();
     }
 
     double weight = dist_to_diagonal_grid(k_node);
@@ -127,18 +130,24 @@ double SamplingMethod::delta_laplacian_symbol(const double* theta, int k, double
 }
 
 void SamplingMethod::grad_laplacian_symbol(const double* theta, double* grad) {
-    for (int i = 0; i < kernel->dim; ++i) {
-        double d_i = 0.0;
-        for (int j = 0; j < kernel->dim; ++j) {
-            if (i == j) continue;
-            double weight = qdist(node_at(i), node_at(j));
-            if (weight == 0) continue;
-            d_i += 2 * weight * std::sin(theta[i] - theta[j]);
+#pragma omp parallel 
+    {
+#pragma omp for schedule(static)
+        for (int i = 0; i < kernel->dim; ++i) {
+            double d_i = 0.0;
+            for (int j = 0; j < kernel->dim; ++j) {
+                if (i == j) continue;
+                double weight = qdist(node_at(i), node_at(j));
+                if (weight == 0) continue;
+                d_i += 2 * weight * std::sin(theta[i] - theta[j]);
+            }
+            add_op(kernel->dim);
+            add_op();
+            double weight = dist_to_diagonal_grid(node_at(i));
+            d_i += 2 * weight * std::sin(theta[i]);
+            grad[i] = d_i;
         }
-        double weight = dist_to_diagonal_grid(node_at(i));
-        d_i += 2 * weight * std::sin(theta[i]);
-        grad[i] = d_i;
-    }
+    } 
 }
 
 void SamplingMethod::reset_progress() {
@@ -165,6 +174,10 @@ void SamplingMethod::set_total_ops(int64_t value) {
 
 void SamplingMethod::add_op() {
     completed_ops_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void SamplingMethod::add_op(int amount) {
+    completed_ops_.fetch_add(amount, std::memory_order_relaxed);
 }
 
 int64_t SamplingMethod::completed_ops() const {

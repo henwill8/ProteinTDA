@@ -12,6 +12,11 @@
 
 #include "heat_kernel.hpp"
 
+enum class Device {
+    CPU,
+    CUDA
+};
+
 class SamplingMethod {
 public:
     SamplingMethod() = default;
@@ -20,7 +25,8 @@ public:
     void init(
         std::shared_ptr<Heat_Kernel> kernel,
         bool normalized_lambdas = true,
-        int seed = 42);
+        int seed = 42,
+        Device device = Device::CPU);
 
     std::shared_ptr<Heat_Kernel> build();
 
@@ -36,6 +42,7 @@ protected:
     bool normalized_lambdas;
     double edge_weight_total;
     int seed;
+    Device device;
 
     int total_weights_{0};
     int64_t ops_per_laplacian_{0};
@@ -54,6 +61,7 @@ protected:
 
     virtual void reset_progress();
     void add_op();
+    void add_op(int amount);
     void set_total_ops(int64_t value);
 
     void sample_thetas(std::vector<double>& thetas, std::mt19937& gen);

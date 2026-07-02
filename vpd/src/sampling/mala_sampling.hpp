@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sampling_method.hpp"
+#include "mala_cuda.hpp"
 #include <utility>
 
 /**
@@ -13,6 +14,7 @@ private:
     int mala_thinning;
     bool tune_sigma;
 
+    void cpu_sample();
     void reset_progress() override;
     void sample() override;
 

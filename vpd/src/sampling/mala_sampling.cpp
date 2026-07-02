@@ -6,11 +6,7 @@
 #include <random>
 #include <vector>
 
-void MALASampling::reset_progress() {
-   SamplingMethod::reset_progress();
-}
-
-void MALASampling::sample() {
+void MALASampling::cpu_sample() {
     const double TWO_PI = 2.0 * std::numbers::pi;
     const int total = kernel->R * kernel->dim;
     
@@ -33,7 +29,9 @@ void MALASampling::sample() {
         double curr_lambda = laplacian_symbol(thetas);
         grad_laplacian_symbol(thetas, grad_U);
         double dUdL = (kernel->t - kernel->s/(std::expm1(kernel->s * curr_lambda)));
+#pragma omp simd 
         for (int j = 0; j < kernel->dim; ++j) grad_U[j] *= dUdL;
+        add_op(kernel->dim);
         const double U = kernel->t * curr_lambda - std::log1p(-std::exp(-kernel->s * curr_lambda));
         return std::make_pair(U, curr_lambda);
     };
@@ -53,15 +51,18 @@ void MALASampling::sample() {
             double brownian = std::sqrt(2 * this->mala_sigma) * gaussian(gen);
             prop[i] = wrap_2pi(curr_thetas[i] + drift + brownian);
         }
+        add_op(kernel->dim);
         std::vector<double> prop_grad(kernel->dim);
         auto [prop_U, prop_lambda] = compute_grad(prop.data(), prop_grad.data());
         double q_fwd = 0.0;
         double q_bwd = 0.0;
+#pragma omp parallel for schedule(static) reduction (+:q_fwd,q_bwd)
         for (int i = 0; i < kernel->dim; ++i) {
             double d = wrap_pi(curr_thetas[i] - prop[i]);
             q_fwd += (d - this->mala_sigma * curr_grad[i]) * (d  -this->mala_sigma * curr_grad[i]);
-            q_bwd += (d - this->mala_sigma * prop_grad[i]) * (-d  -this->mala_sigma * prop_grad[i]);
+            q_bwd += (-d - this->mala_sigma * prop_grad[i]) * (-d  -this->mala_sigma * prop_grad[i]);
         }
+        add_op(kernel->dim);
         double alpha_log =  (q_fwd - q_bwd) / (4 * (this->mala_sigma)) - kernel->t * (prop_lambda - curr_lambda) + std::log1p(-std::exp(-kernel->s * prop_lambda)) - std::log1p(-std::exp(-kernel->s * curr_lambda));
         double alpha = std::min(1.0, std::exp(alpha_log));
         if (std::log(uniform_dist(gen)) < alpha_log) {
@@ -84,6 +85,26 @@ void MALASampling::sample() {
         std::copy(curr_thetas.begin(), curr_thetas.end(), total_thetas.begin() + r * kernel->dim);
     }
     kernel->thetas = total_thetas;
+}
+
+void MALASampling::reset_progress() {
+    SamplingMethod::reset_progress();
+    const int64_t ops_per_compute_grad = ops_per_laplacian_ + static_cast<int64_t>(kernel->dim) * kernel ->dim + static_cast<int64_t>(2 * kernel->dim);
+    const int64_t initial_ops = ops_per_theta_sampling_ + ops_per_compute_grad;
+    const int64_t ops_per_mala_pass = static_cast<int64_t>(2 * kernel->dim) + ops_per_compute_grad;
+    const int64_t mala_passes = static_cast<int64_t>(mala_burn_in) + static_cast<int64_t>(kernel->R) * mala_thinning;
+    set_total_ops(initial_ops + mala_passes * ops_per_mala_pass);
+}
+
+void MALASampling::sample() {
+    switch(this->device) {
+        case Device::CPU: 
+            cpu_sample();
+            break;
+        case Device::CUDA:
+            cuda_sample();
+            break;
+    }
 }
 
 MALASampling::MALASampling(
