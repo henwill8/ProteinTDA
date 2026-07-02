@@ -20,6 +20,37 @@ def build_loss_fn() -> MiniFoldLoss:
     return MiniFoldLoss(CONFIG_OF, loss_config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
 
 
+def format_epoch_metrics(
+    *,
+    epoch: int,
+    epochs: int,
+    fold: int,
+    n_splits: int,
+    train: dict[str, float],
+    val_plddt: float,
+    val_tm: float,
+) -> str:
+    grad_keys = ("fold_grad_norm", "topo_grad_norm")
+    ordered_loss: list[str] = []
+    if "distogram" in train:
+        ordered_loss.append("distogram")
+    for key in sorted(train):
+        if key in grad_keys or key in ordered_loss:
+            continue
+        ordered_loss.append(key)
+
+    def fmt_items(keys) -> str:
+        return "  ".join(f"{key}={train[key]:.4f}" for key in keys if key in train)
+
+    lines = [f"epoch {epoch}/{epochs}  fold {fold + 1}/{n_splits}"]
+    if ordered_loss:
+        lines.append(f"  train loss: {fmt_items(ordered_loss)}")
+    if any(key in train for key in grad_keys):
+        lines.append(f"  train grad: {fmt_items(grad_keys)}")
+    lines.append(f"  val:        plddt={val_plddt:.4f}  tm={val_tm:.4f}")
+    return "\n".join(lines)
+
+
 def train_epoch(
     runner: MiniFoldRunner,
     loader,
@@ -201,13 +232,16 @@ def run_train_fold(
         else:
             patience += 1
 
-        metrics["val_tm"] = val_tm_score
-        metrics["val_plddt"] = val_plddt_score
-
         print(
-            f"epoch {epoch + 1}/{training.epochs}"
-            + "\n  " + "  ".join(f"{key}={value:.4f}" for key, value in metrics.items())
-            + f"\nfold {fold + 1}/{n_splits}"
+            format_epoch_metrics(
+                epoch=epoch + 1,
+                epochs=training.epochs,
+                fold=fold,
+                n_splits=n_splits,
+                train=metrics,
+                val_plddt=val_plddt_score,
+                val_tm=val_tm_score,
+            )
         )
 
         if patience > training.patience:

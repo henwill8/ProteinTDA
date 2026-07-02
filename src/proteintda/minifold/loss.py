@@ -182,31 +182,57 @@ class MiniFoldLoss:
             no_bins=preds.shape[-1],
         )
         total = 0.0
-        losses: dict[str, torch.Tensor] = {}
+        log: dict[str, float] = {}
+
+        # TODO: temporarily tracking gradient norms for fold vs topo to check if they are roughly in the same order of magnitude, remove later
+        loss_fold = 0.0
+        loss_topo = None
+
         if self.loss_config.distogram.enabled:
-            total = total + self.loss_config.distogram.weight * disto_loss
-            losses["distogram"] = disto_loss.detach()
+            weighted = self.loss_config.distogram.weight * disto_loss
+            log["distogram"] = float(weighted.detach())
+            total = total + weighted
+            loss_fold = loss_fold + weighted
 
         if not model.use_structure_module or not self.loss_config.structure.enabled:
-            losses["total"] = total
-            return losses
+            log["total"] = float(total.detach())
+            result: dict[str, torch.Tensor] = {"total": total, "log": log}
+            if isinstance(loss_fold, torch.Tensor):
+                result["loss_fold"] = loss_fold
+            return result
 
         batch_of = tensor_tree_map(lambda t: t[..., -1], batch["batch_of"])
         loss_of, of_breakdown = self.structure_loss(r_dict, batch_of, _return_breakdown=True)
-        total = total + self.loss_config.structure.weight * loss_of
-        losses["structure"] = loss_of.detach()
+        weighted_structure = self.loss_config.structure.weight * loss_of
+        total = total + weighted_structure
+        loss_fold = loss_fold + weighted_structure
         for name, value in of_breakdown.items():
-            if name != "loss":
-                losses[f"of_{name}"] = value
+            if name == "loss":
+                continue
+            of_weight = self.config_of.loss[name].weight
+            log[name] = float(
+                (self.loss_config.structure.weight * of_weight * value).detach()
+            )
 
         if self.tda_enabled and self.loss_config.tda.enabled:
             self._add_tda_fields(r_dict, batch_of)
             tda_loss, tda_breakdown = self._tda(r_dict, batch_of, _return_breakdown=True)
-            total = total + self.loss_config.tda.weight * tda_loss
-            losses.update(tda_breakdown)
+            loss_topo = self.loss_config.tda.weight * tda_loss
+            total = total + loss_topo
+            log["tda"] = float(loss_topo.detach())
+            for name, value in tda_breakdown.items():
+                if name == "loss":
+                    continue
+                term_weight = self.loss_config[name].weight
+                log[name] = float((self.loss_config.tda.weight * term_weight * value).detach())
 
-        losses["total"] = total
-        return losses
+        log["total"] = float(total.detach())
+        result = {"total": total, "log": log}
+        if isinstance(loss_fold, torch.Tensor):
+            result["loss_fold"] = loss_fold
+        if loss_topo is not None:
+            result["loss_topo"] = loss_topo
+        return result
 
     @staticmethod
     def sample_recycles(max_recycles: int) -> int:

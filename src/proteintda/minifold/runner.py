@@ -26,6 +26,44 @@ MODEL_URLS = {
 }
 
 
+# TODO: these are temporary metrics, remove after
+def _grad_norm(model: torch.nn.Module) -> float:
+    sq_sum = sum(
+        p.grad.detach().float().pow(2).sum()
+        for p in model.parameters()
+        if p.requires_grad and p.grad is not None
+    )
+    if sq_sum == 0:
+        return 0.0
+    if isinstance(sq_sum, torch.Tensor):
+        return float(torch.sqrt(sq_sum))
+    return float(sq_sum**0.5)
+
+
+def _measure_component_grad_norms(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    losses: dict[str, torch.Tensor],
+) -> tuple[float, float]:
+    fold_norm = 0.0
+    topo_norm = 0.0
+
+    loss_fold = losses.get("loss_fold")
+    if loss_fold is not None and loss_fold.requires_grad:
+        optimizer.zero_grad(set_to_none=True)
+        loss_fold.backward(retain_graph=True)
+        fold_norm = _grad_norm(model)
+        optimizer.zero_grad(set_to_none=True)
+
+    loss_topo = losses.get("loss_topo")
+    if loss_topo is not None and loss_topo.requires_grad:
+        loss_topo.backward(retain_graph=True)
+        topo_norm = _grad_norm(model)
+        optimizer.zero_grad(set_to_none=True)
+
+    return fold_norm, topo_norm
+
+
 def _download_checkpoint(cache_dir: Path, model_size: str) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = cache_dir / f"minifold_{model_size}.ckpt"
@@ -310,6 +348,15 @@ class MiniFoldRunner:
             if losses is None:
                 continue
 
+            # TODO: remove this after ensuring that gradients are roughly in the same order of magnitude
+            fold_grad_norm, topo_grad_norm = _measure_component_grad_norms(
+                self.model,
+                optimizer,
+                losses,
+            )
+            totals["fold_grad_norm"] += fold_grad_norm
+            totals["topo_grad_norm"] += topo_grad_norm
+
             if scaler.is_enabled():
                 scaler.scale(losses["total"]).backward()
                 if grad_clip_norm is not None:
@@ -329,8 +376,9 @@ class MiniFoldRunner:
                     )
                 optimizer.step()
 
-            for key, value in losses.items():
-                totals[key] += float(value.detach())
+            log = losses.get("log", {})
+            for key, value in log.items():
+                totals[key] += value
             n += 1
 
             if self.device.type == "cuda":
