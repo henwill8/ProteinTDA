@@ -109,6 +109,147 @@ def patch_kernel_file(path: Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def patch_heads(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    if "class TMScoreHead" in text:
+        return
+
+    text = text.replace(
+        "class AuxiliaryHeads(nn.Module):",
+        '''class TMScoreHead(nn.Module):
+    def __init__(self, c_z, no_bins, **kwargs):
+        super().__init__()
+        self.linear = nn.Linear(c_z, no_bins)
+        init.final_init_(self.linear.weight)
+        init.bias_init_zero_(self.linear.bias)
+
+    def forward(self, z):
+        return self.linear(z)
+
+
+class ExperimentallyResolvedHead(nn.Module):
+    def __init__(self, c_s, c_out, **kwargs):
+        super().__init__()
+        self.linear = nn.Linear(c_s, c_out)
+        init.final_init_(self.linear.weight)
+        init.bias_init_zero_(self.linear.bias)
+
+    def forward(self, s):
+        return self.linear(s)
+
+
+class AuxiliaryHeads(nn.Module):''',
+    )
+
+    text = text.replace(
+        """    def __init__(self, config):
+        super().__init__()
+        self.plddt = PerResidueLDDTCaPredictor(
+            **config["lddt"],
+        )
+        self.config = config
+
+    def forward(self, outputs):
+        aux_out = {}
+        lddt_logits = self.plddt(outputs["sm"]["single"])
+        aux_out["lddt_logits"] = lddt_logits
+        aux_out["plddt"] = compute_plddt(lddt_logits)
+        return aux_out""",
+        """    def __init__(self, config):
+        super().__init__()
+        self.plddt = PerResidueLDDTCaPredictor(**config["lddt"])
+        self.experimentally_resolved = ExperimentallyResolvedHead(
+            **config["experimentally_resolved"],
+        )
+        tm_cfg = config["tm"]
+        self.tm_enabled = bool(tm_cfg.get("enabled", False))
+        if self.tm_enabled:
+            self.tm = TMScoreHead(**tm_cfg)
+        self.config = config
+
+    def forward(self, outputs):
+        aux_out = {}
+        lddt_logits = self.plddt(outputs["sm"]["single"])
+        aux_out["lddt_logits"] = lddt_logits
+        aux_out["plddt"] = compute_plddt(lddt_logits)
+        aux_out["experimentally_resolved_logits"] = self.experimentally_resolved(
+            outputs["single"]
+        )
+        if self.tm_enabled:
+            aux_out["tm_logits"] = self.tm(outputs["pair"])
+        return aux_out""",
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def patch_loss(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    if "self.config.violation.weight != 0.0" in text:
+        return
+
+    text = text.replace(
+        """        \"\"\"
+        if "violation" not in out.keys():
+            out["violation"] = find_structural_violations(
+                batch,
+                out["sm"]["positions"][-1],
+                **self.config.violation,
+            )
+        \"\"\"
+
+        if "renamed_atom14_gt_positions" not in out.keys():""",
+        """        if self.config.violation.weight != 0.0 and "violation" not in out:
+            out["violation"] = find_structural_violations(
+                batch,
+                out["sm"]["positions"][-1],
+                **self.config.violation,
+            )
+
+        if "renamed_atom14_gt_positions" not in out.keys():""",
+    )
+
+    text = text.replace(
+        """        \"\"\"
+        "distogram": lambda: distogram_loss(
+            logits=out["distogram_logits"],
+            **{**batch, **self.config.distogram},
+        ),
+        "experimentally_resolved": lambda: experimentally_resolved_loss(
+            logits=out["experimentally_resolved_logits"],
+            **{**batch, **self.config.experimentally_resolved},
+        ),
+        \"\"\"
+
+        \"\"\"
+        "masked_msa": lambda: masked_msa_loss(
+            logits=out["masked_msa_logits"],
+            **{**batch, **self.config.masked_msa},
+        ),
+
+        "violation": lambda: violation_loss(
+            out["violation"],
+            **batch,
+        ),
+        \"\"\"
+
+        if self.config.tm.enabled:""",
+        """        if self.config.experimentally_resolved.weight != 0.0:
+            loss_fns["experimentally_resolved"] = lambda: experimentally_resolved_loss(
+                logits=out["experimentally_resolved_logits"],
+                **{**batch, **self.config.experimentally_resolved},
+            )
+
+        if self.config.violation.weight != 0.0:
+            loss_fns["violation"] = lambda: violation_loss(
+                out["violation"],
+                **batch,
+            )
+
+        if self.config.tm.enabled and self.config.tm.weight != 0.0:""",
+    )
+    path.write_text(text, encoding="utf-8")
+
+
 def main() -> int:
     WHEELS_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
@@ -117,6 +258,8 @@ def main() -> int:
         (src / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
         patch_kernel_file(src / "minifold" / "model" / "kernels" / "gating.py")
         patch_kernel_file(src / "minifold" / "model" / "kernels" / "mlp.py")
+        patch_heads(src / "minifold" / "model" / "heads.py")
+        patch_loss(src / "minifold" / "train" / "loss.py")
         subprocess.run(
             [sys.executable, "-m", "pip", "wheel", str(src), "-w", str(WHEELS_DIR), "--no-deps"],
             check=True,

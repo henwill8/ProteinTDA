@@ -12,6 +12,13 @@ CONFIG_OF = model_config(
     long_sequence_inference=False,
 )
 
+with CONFIG_OF.unlocked():
+    CONFIG_OF.model.heads.tm.enabled = True
+    CONFIG_OF.loss.tm.enabled = True
+    CONFIG_OF.loss.tm.weight = 0.1
+    CONFIG_OF.loss.violation.weight = 1.0
+    CONFIG_OF.loss.experimentally_resolved.weight = 0.01
+
 RUN_CONFIG = mlc.ConfigDict(
     {
         "data": {
