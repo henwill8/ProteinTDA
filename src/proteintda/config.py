@@ -18,6 +18,7 @@ with CONFIG_OF.unlocked():
     CONFIG_OF.loss.tm.weight = 0.1
     CONFIG_OF.loss.violation.weight = 1.0
     CONFIG_OF.loss.experimentally_resolved.weight = 0.01
+    CONFIG_OF.data.train.crop = False
 
 RUN_CONFIG = mlc.ConfigDict(
     {
