@@ -42,7 +42,9 @@ torch::Tensor VPD::pd_to_vpd(torch::Tensor pd) const {
 
 torch::Tensor VPD::pd_diff(torch::Tensor pd1, torch::Tensor pd2) const {
     // Map both diagrams into the bounds of the grid using the same scale factor for both pd's
-    torch::Tensor scale = torch::maximum(pd1.max(), pd2.max());
+    torch::Tensor pd1_max = pd1.numel() == 0 ? torch::tensor(0.0, pd1.options().requires_grad(false)) : pd1.max();
+    torch::Tensor pd2_max = pd2.numel() == 0 ? torch::tensor(0.0, pd2.options().requires_grad(false)) : pd2.max();
+    torch::Tensor scale = torch::maximum(pd1_max, pd2_max);
     scale = torch::clamp(scale, 1e-8);
     // subtract 1 from points_per_axis as x starts at 0 and y starts at 1
     const double grid_max = static_cast<double>(this->kernel->points_per_axis() - 1) / this->kernel->resolution;
@@ -68,9 +70,7 @@ torch::Tensor VPD::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2, bool s
     // dim: [R, dim] x [dim] = [R], each ith entry is the ith dot product
     torch::Tensor dot_products = torch::matmul(theta_tensor, difference_vpd);
 
-
-    // This approximates both the Monte Carlo sampling bias and the scaling by the measure v_t.
-    torch::Tensor scale = torch::sqrt(weights_tensor / static_cast<double>(this->kernel->R));
+    double scale = std::sqrt(1.0 / static_cast<double>(this->kernel->R));
 
     torch::Tensor cos_vals = scale * (torch::cos(dot_products) - (subtract_zero_embedding ? 1 : 0));
     torch::Tensor sin_vals = scale * torch::sin(dot_products);

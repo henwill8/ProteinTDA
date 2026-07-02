@@ -1,265 +1,244 @@
-from sklearn.model_selection import KFold, train_test_split
-
-import os, warnings
-warnings.filterwarnings("ignore")
-os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
-os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-
-import transformers
-transformers.logging.set_verbosity_error()       
-transformers.utils.logging.disable_progress_bar() 
-
-import argparse
-import sys
 import copy
+import os
+import sys
+import warnings
 from pathlib import Path
 
-import sidechainnet as scn
-
+import numpy as np
 import optuna
+import torch
 from optuna.pruners import SuccessiveHalvingPruner
 from optuna.samplers import TPESampler
+from sklearn.model_selection import KFold, train_test_split
 
-import torch
-from torch.utils.data import DataLoader
-from transformers import AutoTokenizer 
-import numpy as np
+from proteintda.config import CONFIG_OF, HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG
+from proteintda.minifold.loss import MiniFoldLoss
+from proteintda.minifold.pipeline import evaluate_loader, train_epoch
+from proteintda.minifold.runner import MiniFoldRunner
+from proteintda.tda.vpd_kernels import create_vpd_kernels
+from proteintda.utils.dataset import load_dataset, make_loader, set_seed
 
-from esmfold_finetune import (
-    build_model,
-    train_one_epoch,
-    test_model,
-    trainable_parameter_count,
-)
-from loss import ESMFoldLoss
-from config import HEAT_RFF_CONFIG, LOSS_CONFIG
-from vpd_macros import create_vpd_kernels
+warnings.filterwarnings("ignore")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
-def set_seed(seed: int = 42) -> None:
-    torch.manual_seed(seed)
-    np.random.seed(seed)
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Fine-tune ESMFold with Wasserstein TDA loss.")
-    parser.add_argument("--model", default="facebook/esmfold_v1")
-    parser.add_argument("--casp-version", default="debug")
-    parser.add_argument("--casp-thinning", type=int, default=30)
-    parser.add_argument("--allow-incomplete", type=bool, default=False)
-    parser.add_argument("--scn-dir", type=Path, default=Path("data/sidechainnet"))
-    parser.add_argument("--epochs", type=int, default=30)
-    parser.add_argument("--patience", type=int, default=5)
-    parser.add_argument("--lr", type=float, default=1e-5)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--unfreeze-trunk-blocks", type=int, default=2)
-    parser.add_argument("--unfreeze-structure-module", type=bool, default=True)
-    parser.add_argument("--unfreeze-esm-layers", type=int, default=0)
-    parser.add_argument("--train-recycles", type=int, default=8)
-    parser.add_argument("--trunk-chunk-size", type=int, default=64)
-    parser.add_argument("--gradient-checkpointing", type=bool, default=True)
-    parser.add_argument("--amp", type=bool, default=True)
-    parser.add_argument("--optimized-param", type=str, default="tau")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--log-file", type=Path, default=Path("out/optuna_output.txt"))
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--w-min", type=float, default=0.005)
-    parser.add_argument("--w-max", type=float, default=2)
-    parser.add_argument("--t-min", type=float, default=1e-25)
-    parser.add_argument("--t-max", type=float, default=1e-5)
-    parser.add_argument("--n-folds", type=int, default=2)
-    parser.add_argument("--n-trials", type=int, default=2)
-    return parser.parse_args(argv)
+def resolve_device() -> torch.device:
+    device = RUN_CONFIG.runtime.device
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.device(device)
 
-def suggest_params(trial: optuna.Trial, args) -> dict:
-    params = {
-            "w_wasserstein_h0": trial.suggest_float("w_wasserstein_h0", args.w_min, args.w_max, log=True),
-            "w_wasserstein_h1": trial.suggest_float("w_wasserstein_h1", args.w_min, args.w_max, log=True),
-            #"w_vpd_h0": trial.suggest_float("w_vpd_h0", args.w_min, args.w_max, log=True),
-            #"w_vpd_h1": trial.suggest_float("w_vpd_h1", args.w_min, args.w_max, log=True),
-            #"tau_h0": trial.suggest_float("tau_h0", args.t_min, args.t_max, log=True),
-            #"tau_h1": trial.suggest_float("tau_h1", args.t_min, args.t_max, log=True)
+
+def suggest_params(trial: optuna.Trial) -> dict:
+    optuna_cfg = RUN_CONFIG.optuna
+    return {
+        "w_wasserstein_h0": trial.suggest_float(
+            "w_wasserstein_h0", optuna_cfg.w_min, optuna_cfg.w_max, log=True
+        ),
+        "w_wasserstein_h1": trial.suggest_float(
+            "w_wasserstein_h1", optuna_cfg.w_min, optuna_cfg.w_max, log=True
+        ),
+        # "w_vpd_h0": trial.suggest_float("w_vpd_h0", optuna_cfg.w_min, optuna_cfg.w_max, log=True),
+        # "w_vpd_h1": trial.suggest_float("w_vpd_h1", optuna_cfg.w_min, optuna_cfg.w_max, log=True),
+        # "t_h0": trial.suggest_float("t_h0", optuna_cfg.t_min, optuna_cfg.t_max, log=True),
+        # "t_h1": trial.suggest_float("t_h1", optuna_cfg.t_min, optuna_cfg.t_max, log=True),
     }
-    return params
 
-def build_params(params:dict):
+
+def build_params(params: dict) -> tuple:
     loss_cfg = copy.deepcopy(LOSS_CONFIG)
     heat_cfg = copy.deepcopy(HEAT_RFF_CONFIG)
 
     loss_cfg.wasserstein_h0.weight = params["w_wasserstein_h0"]
     loss_cfg.wasserstein_h1.weight = params["w_wasserstein_h1"]
-    #loss_cfg.vpd_h0.weight = params["w_vpd_h0"]
-    #loss_cfg.vpd_h1.weight = params["w_vpd_h1"]
-
-    #heat_cfg.h0rff.tau = params["tau_h0"]
-    #heat_cfg.h1rff.tau = params["tau_h1"]
+    # loss_cfg.vpd_h0.weight = params["w_vpd_h0"]
+    # loss_cfg.vpd_h1.weight = params["w_vpd_h1"]
+    # heat_cfg.h0rff.t = params["t_h0"]
+    # heat_cfg.h1rff.t = params["t_h1"]
 
     return loss_cfg, heat_cfg
 
-def create_obj_function(args, device, tokenizer, dataset):
-    def objective(trial: optuna.Trial) -> float:
-        params = suggest_params(trial, args)
-        loss_cfg, heat_cfg = build_params(params)
-        h0rff, h1rff = create_vpd_kernels(loss_cfg, heat_cfg)
 
-        kf = KFold(n_splits=5, shuffle=True, random_state=42)
-        fold_tm_scores: list[float] = []
+def build_loss_fn(loss_cfg, heat_cfg) -> MiniFoldLoss:
+    h0rff, h1rff = create_vpd_kernels(loss_cfg, heat_cfg)
+    return MiniFoldLoss(CONFIG_OF, loss_config=loss_cfg, h0rff=h0rff, h1rff=h1rff)
 
-        for fold, (train_idx, test_idx) in enumerate(kf.split(dataset)):
-            if fold >= args.n_folds:
-                break
-            set_seed(42 + fold)
-        
-            model = build_model(
-                args.model,
-                device,
-                unfreeze_esm_layers=args.unfreeze_esm_layers,
-                unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
-                unfreeze_structure_module=args.unfreeze_structure_module,
-                trunk_chunk_size=args.trunk_chunk_size,
-                gradient_checkpointing=args.gradient_checkpointing,
-            )
-            trainable, total = trainable_parameter_count(model)
-        
-            train_idx, val_idx = train_test_split(train_idx, test_size=0.25)
 
-            train_dataset = [dataset[i] for i in train_idx]
-            val_dataset = [dataset[i] for i in val_idx]
-            test_dataset = [dataset[i] for i in test_idx]
+def run_optuna_fold(
+    fold: int,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    *,
+    proteins: list,
+    device: torch.device,
+    cache_dir: Path,
+    loss_fn: MiniFoldLoss,
+    trial: optuna.Trial,
+) -> float:
+    training = RUN_CONFIG.training
+    runtime = RUN_CONFIG.runtime
+    set_seed(training.seed + fold)
 
-            train_loader = DataLoader(
-                dataset = train_dataset,
-                batch_size = args.batch_size,
-                shuffle = True,
-                collate_fn = lambda x: x,
-            )
+    runner = MiniFoldRunner(
+        cache_dir,
+        model_size=runtime.model_size,
+        device=device,
+        train=True,
+        unfreeze_fold_blocks=training.unfreeze_fold_blocks,
+        unfreeze_structure_module=training.unfreeze_structure_module,
+    )
 
-            val_loader = DataLoader(
-                dataset = val_dataset,
-                batch_size = args.batch_size,
-                shuffle = False,
-                collate_fn = lambda x: x,
-            )
+    train_idx, val_idx = train_test_split(train_idx, test_size=0.25)
+    train_proteins = [proteins[i] for i in train_idx]
+    val_proteins = [proteins[i] for i in val_idx]
+    test_proteins = [proteins[i] for i in test_idx]
 
-            test_loader = DataLoader(
-                dataset = test_dataset,
-                batch_size = args.batch_size,
-                shuffle = False,
-                collate_fn = lambda x: x,
-            )
+    fold_rng = np.random.default_rng(training.seed + fold)
+    val_loader = make_loader(val_proteins, training.batch_size, shuffle=False)
+    test_loader = make_loader(test_proteins, training.batch_size, shuffle=False)
 
-            optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
+    optimizer = runner.build_optimizer(
+        base_lr=training.base_lr,
+        struct_lr=training.struct_lr,
+    )
+    best_model_weights = None
+    max_val_tm = 0.0
+    patience = 0
+    report_num = 0
 
-            best_model_weights = None
-            max_val_tm = 0.0 
+    for epoch in range(training.epochs):
+        report_num += 1
+        train_loader = make_loader(
+            train_proteins,
+            training.batch_size,
+            shuffle=True,
+            rng=fold_rng,
+        )
+        train_epoch(
+            runner,
+            train_loader,
+            optimizer,
+            loss_fn,
+            train_recycles=training.train_recycles,
+            randomize_recycles=training.randomize_recycles,
+            use_amp=training.amp,
+            grad_clip_norm=training.grad_clip_norm,
+        )
+        _, val_tm_score = evaluate_loader(
+            runner,
+            val_loader,
+            num_recycling=runtime.infer_recycles,
+        )
+
+        best_val_tm = max(max_val_tm, val_tm_score)
+        trial.report(best_val_tm, report_num)
+        if trial.should_prune():
+            del runner
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+            raise optuna.TrialPruned()
+
+        if val_tm_score > max_val_tm:
+            max_val_tm = val_tm_score
             patience = 0
+            best_model_weights = runner.snapshot_state_dict()
+        else:
+            patience += 1
 
-            report_num = 0
+        if patience > training.patience:
+            print(f"Early stopping at epoch {epoch + 1}")
+            break
 
-            for epoch in range(args.epochs):
-                report_num += 1
-                metrics = train_one_epoch(
-                    model,
-                    tokenizer,
-                    train_loader,
-                    optimizer,
-                    device,
-                    loss_fn=ESMFoldLoss(config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff),
-                    unfreeze_esm_layers=args.unfreeze_esm_layers,
-                    unfreeze_trunk_blocks=args.unfreeze_trunk_blocks,
-                    unfreeze_structure_module=args.unfreeze_structure_module,
-                    train_recycles=args.train_recycles,
-                    use_amp=args.amp,
-                )
-                _, val_tm_score = test_model(
-                    model,
-                    tokenizer,
-                    val_loader,
-                    device,
-                )
+    if best_model_weights is not None:
+        runner.load_state_dict(best_model_weights)
 
-                best_val_tm = max(max_val_tm, val_tm_score)
-    
-                trial.report(best_val_tm, report_num)
+    _, tm_score = evaluate_loader(
+        runner,
+        test_loader,
+        num_recycling=runtime.infer_recycles,
+    )
 
-                if trial.should_prune():
-                    del model
-                    if device.type == "cuda":
-                        torch.cuda.empty_cache()
-                    raise optuna.TrialPruned()
+    del runner
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    return tm_score
 
-                if val_tm_score > max_val_tm:
-                    max_val_tm = val_tm_score
-                    patience = 0
-                    best_model_weights = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-                else:
-                    patience += 1
 
-                if patience > args.patience:
-                    print(f"Early stoppping at epoch {epoch}")
-                    break
+def create_objective(device: torch.device, proteins: list):
+    optuna_cfg = RUN_CONFIG.optuna
+    training = RUN_CONFIG.training
+    kfold = RUN_CONFIG.kfold
 
-            if best_model_weights is not None:
-                model.load_state_dict({k: v.to(device) for k, v in best_model_weights.items()})
+    def objective(trial: optuna.Trial) -> float:
+        params = suggest_params(trial)
+        loss_cfg, heat_cfg = build_params(params)
+        loss_fn = build_loss_fn(loss_cfg, heat_cfg)
 
-            _, tm_score = test_model(
-                model,
-                tokenizer,
-                test_loader,
-                device,
+        kf = KFold(n_splits=kfold.n_splits, shuffle=True, random_state=training.seed)
+        fold_tm_scores: list[float] = []
+        cache_dir = Path(RUN_CONFIG.runtime.minifold_cache_dir)
+
+        for fold, (train_idx, test_idx) in enumerate(kf.split(proteins)):
+            if fold >= optuna_cfg.n_folds:
+                break
+            tm_score = run_optuna_fold(
+                fold,
+                train_idx,
+                test_idx,
+                proteins=proteins,
+                device=device,
+                cache_dir=cache_dir,
+                loss_fn=loss_fn,
+                trial=trial,
             )
             fold_tm_scores.append(tm_score)
 
-        del model
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
         print(fold_tm_scores)
-        return (np.mean(fold_tm_scores)) if fold_tm_scores else 0.0
+        return float(np.mean(fold_tm_scores)) if fold_tm_scores else 0.0
 
     return objective
 
 
-def main(argv: list[str] | None = None) -> int:
+def main() -> int:
     optuna.logging.set_verbosity(optuna.logging.INFO)
 
-    args = parse_args(argv)
-    device = torch.device(args.device)
-
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    optuna_cfg = RUN_CONFIG.optuna
+    training = RUN_CONFIG.training
+    device = resolve_device()
+    set_seed(training.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
 
-    dataset = scn.load(
-        casp_version = args.casp_version,
-        casp_thinning = args.casp_thinning,
-        scn_dataset = True,
-        scn_dir = str(args.scn_dir),
-        force_download = False,
-        complete_structures_only = not args.allow_incomplete,
-    )
-
-    # The last 5 proteins in the dataset were large enough to  significantly impact memory usage and time complexity.
-    dataset = dataset[:-5]
+    proteins = load_dataset()
 
     study = optuna.create_study(
-        study_name="TDA Optimizer",
-        storage="sqlite:///optuna_tda.db",
-        sampler=TPESampler(seed=args.seed),
+        study_name=optuna_cfg.study_name,
+        storage=optuna_cfg.storage,
+        sampler=TPESampler(seed=training.seed),
         pruner=SuccessiveHalvingPruner(),
         direction="maximize",
-        load_if_exists=True
+        load_if_exists=True,
     )
 
-    study.optimize(create_obj_function(args, device, tokenizer, dataset), show_progress_bar=True, n_trials=args.n_trials)
+    study.optimize(
+        create_objective(device, proteins),
+        show_progress_bar=True,
+        n_trials=optuna_cfg.n_trials,
+    )
 
-    args.log_file.parent.mkdir(parents=True, exist_ok=True)
-    with args.log_file.open("a") as f:
-        f.write("==================== New Study Results ====================\n")
-        f.write("========== Best Values= =========\n")
-        f.write(f"best_mean_val_tm={study.best_value:.6f}\n")
-        for k, v in study.best_params.items():
-            f.write(f"{k}={v:.8g}\n")
-        f.write("========== Parameter Importances ==========\n")
-        f.write(str(optuna.importance.get_param_importances(study)))
+    log_file = Path(RUN_CONFIG.logging.optuna_log_file)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("a", encoding="utf-8") as handle:
+        handle.write("==================== New Study Results ====================\n")
+        handle.write("========== Best Values ==========\n")
+        handle.write(f"best_mean_val_tm={study.best_value:.6f}\n")
+        for key, value in study.best_params.items():
+            handle.write(f"{key}={value:.8g}\n")
+        handle.write("========== Parameter Importances ==========\n")
+        handle.write(str(optuna.importance.get_param_importances(study)))
 
+    print(f"Wrote results to {log_file}")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

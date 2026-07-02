@@ -44,7 +44,6 @@ public:
 
 	torch::Tensor get_vpd(torch::Tensor pd) const;
 
-	const std::vector<double>& get_thetas() const { return kernel->get_thetas(); }
-	const std::vector<double>& get_lambdas() const { return kernel->get_lambdas(); }
-	const std::vector<double>& get_weights() const { return kernel->get_weights(); }
+	const std::vector<double>& get_thetas() const { return kernel->thetas; }
+	const std::vector<double>& get_weights() const { return kernel->weights; }
 };

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proteintda"
+version = "0.1.0"
+description = "ProteinTDA"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "eagerpy",
+    "gudhi",
+    "minifold @ file:./wheels/minifold-0.1.0-py3-none-any.whl",
+    "ml_collections",
+    "numpy",
+    "openmm",
+    "optuna",
+    "POT",
+    "scikit-learn",
+    "sidechainnet",
+    "torch>=2.3.0",
+    "tmtools",
+    "tqdm",
+    "vpd @ file:./vpd",
+]
+
+[project.scripts]
+proteintda = "main:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+py-modules = ["main"]
