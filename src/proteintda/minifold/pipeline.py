@@ -32,7 +32,7 @@ def format_epoch_metrics(
 ) -> str:
     grad_keys = ("fold_grad_norm", "topo_grad_norm")
     ordered_loss: list[str] = []
-    if "total" in train:
+    if train is not None and "total" in train:
         ordered_loss.append("total")
     for key in sorted(train):
         if key in grad_keys or key in ordered_loss:

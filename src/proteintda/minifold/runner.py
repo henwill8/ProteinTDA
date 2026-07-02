@@ -189,9 +189,33 @@ class MiniFoldRunner:
                     param.requires_grad = True
 
         if unfreeze_structure_module and model.use_structure_module:
-            for module in (model.structure_module, model.aux_heads, model.sz_project):
+            for module in (model.structure_module, model.sz_project):
                 for param in module.parameters():
                     param.requires_grad = True
+            for param in model.aux_heads.plddt.parameters():
+                param.requires_grad = True
+
+        self._unfreeze_enabled_aux_heads()
+
+    def _unfreeze_enabled_aux_heads(self) -> None:
+        if not self.model.use_structure_module:
+            return
+
+        loss_cfg = self.config_of.loss
+        heads = self.model.aux_heads
+
+        if loss_cfg.experimentally_resolved.weight != 0.0 and hasattr(heads, "experimentally_resolved"):
+            for param in heads.experimentally_resolved.parameters():
+                param.requires_grad = True
+
+        if (
+            loss_cfg.tm.enabled
+            and loss_cfg.tm.weight != 0.0
+            and getattr(heads, "tm_enabled", False)
+            and hasattr(heads, "tm")
+        ):
+            for param in heads.tm.parameters():
+                param.requires_grad = True
 
     @property
     def trainable_parameter_count(self) -> tuple[int, int]:
