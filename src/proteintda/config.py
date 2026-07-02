@@ -26,18 +26,14 @@ RUN_CONFIG = mlc.ConfigDict(
         "training": {
             "seed": 42,
             "base_lr": 1e-4,
-            "lm_lr": 3e-5,
             "struct_lr": 1e-4,
             "batch_size": 1,
             "train_proteins_per_epoch": None,
             "val_proteins_per_epoch": None,
             "unfreeze_fold_blocks": 0,
-            "unfreeze_lm_layers": 2,
+            "unfreeze_structure_module": True,
             "train_recycles": 3,
             "randomize_recycles": True,
-            "disto_weight": 0.8,
-            "structure_weight": 0.2,
-            "tda_weight": 1.0,
             "epochs": 300,
             "patience": 5,
             "amp": True,
@@ -60,7 +56,7 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "R": 1000,
             "t": 7e-9,
             "s": 1.0,
-            "seed": 42
+            "seed": 42,
         },
         "h1rff": {
             "n": 2,
@@ -69,13 +65,25 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "R": 1000,
             "t": 1e-10,
             "s": 1.0,
-            "seed": 42
-        }
+            "seed": 42,
+        },
     }
 )
 
 LOSS_CONFIG = mlc.ConfigDict(
     {
+        "distogram": {
+            "weight": 0.8,
+            "enabled": True,
+        },
+        "structure": {
+            "weight": 0.2,
+            "enabled": True,
+        },
+        "tda": {
+            "weight": 1.0,
+            "enabled": True,
+        },
         "pd": {
             "max_dimension": 2,
             "hom_dim": 2,

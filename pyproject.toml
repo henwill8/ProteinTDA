@@ -13,6 +13,7 @@ dependencies = [
     "minifold @ file:./wheels/minifold-0.1.0-py3-none-any.whl",
     "ml_collections",
     "numpy",
+    "POT",
     "scikit-learn",
     "sidechainnet",
     "torch>=2.3.0",
@@ -20,3 +21,15 @@ dependencies = [
     "tqdm",
     "vpd @ file:./vpd",
 ]
+
+[project.scripts]
+proteintda = "main:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools]
+py-modules = ["main"]

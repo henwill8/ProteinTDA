@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 from sklearn.model_selection import KFold
 
-from config import RUN_CONFIG
+from proteintda.config import RUN_CONFIG
 
 
 def _checkpoint_path(baseline: bool) -> Path:

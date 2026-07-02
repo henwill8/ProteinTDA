@@ -1,15 +1,15 @@
 import sys
-import time
 import threading
+import time
 from pathlib import Path
 
 import torch
 from tqdm import tqdm
-
-from config import LOSS_CONFIG, HEAT_RFF_CONFIG
 from vpd import _cpp
 
-_CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "heat_rff"
+from proteintda.config import HEAT_RFF_CONFIG, LOSS_CONFIG
+
+_CACHE_DIR = Path(__file__).resolve().parents[3] / "cache" / "heat_rff"
 
 
 def _heat_rff_cache_path(n, axis_dim, resolution, R, t, seed):
