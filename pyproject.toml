@@ -8,11 +8,12 @@ version = "0.1.0"
 description = "ProteinTDA"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+    "eagerpy",
     "gudhi",
-    "openmm",
     "minifold @ file:./wheels/minifold-0.1.0-py3-none-any.whl",
     "ml_collections",
     "numpy",
+    "openmm",
     "POT",
     "scikit-learn",
     "sidechainnet",

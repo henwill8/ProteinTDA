@@ -169,6 +169,7 @@ class MiniFoldLoss:
         try:
             r_dict = model(batch, num_recycling=num_recycling)
         except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
             print("OOM during MiniFold forward pass; skipping protein.")
             return None
 

@@ -237,7 +237,12 @@ class MiniFoldRunner:
 
         autocast_device = "cuda" if self.device.type == "cuda" else self.device.type
         with torch.autocast(autocast_device, dtype=torch.bfloat16):
-            out = self.model(model_batch, num_recycling=num_recycling)
+            try:
+                out = self.model(model_batch, num_recycling=num_recycling)
+            except torch.cuda.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                print("OOM during MiniFold forward pass; skipping protein.")
+                return None
 
         length = len(seq)
         return {
@@ -351,6 +356,8 @@ class MiniFoldRunner:
 
         for protein in batch:
             result = self.predict(protein, num_recycling=num_recycling)
+            if result is None:
+                continue
             plddt_scores.append(float(result["plddt"].mean()))
             pred_ca = result["positions"][:, ca_idx].numpy()
             exp_ca = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).numpy()
