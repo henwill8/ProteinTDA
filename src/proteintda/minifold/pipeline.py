@@ -5,11 +5,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from minifold.data.config import model_config
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-from proteintda.config import HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG
+from proteintda.config import CONFIG_OF, HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG
 from proteintda.minifold.loss import MiniFoldLoss
 from proteintda.utils.dataset import make_loader, set_seed
 from proteintda.minifold.runner import MiniFoldRunner
@@ -17,14 +16,8 @@ from proteintda.tda.vpd_kernels import create_vpd_kernels
 
 
 def build_loss_fn() -> MiniFoldLoss:
-    config_of = model_config(
-        "initial_training",
-        train=True,
-        low_prec=False,
-        long_sequence_inference=False,
-    )
     h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
-    return MiniFoldLoss(config_of, loss_config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
+    return MiniFoldLoss(CONFIG_OF, loss_config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
 
 
 def train_epoch(
@@ -194,6 +187,8 @@ def run_train_fold(
             use_amp=training.amp,
             grad_clip_norm=training.grad_clip_norm,
         )
+
+        # TODO: switch to checking on the loss instead of the metric?
         val_plddt_score, val_tm_score = evaluate_loader(
             runner,
             val_loader,

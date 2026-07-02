@@ -1,6 +1,16 @@
 import ml_collections as mlc
+from minifold.data.config import model_config
 
 _EPS = 1e-8
+
+# Shared OpenFold / MiniFold config for feature pipeline, model, and loss.
+# TODO: review memory and training options (can validation still use train=True?)
+CONFIG_OF = model_config(
+    "initial_training",
+    train=True,
+    low_prec=False,
+    long_sequence_inference=False,
+)
 
 RUN_CONFIG = mlc.ConfigDict(
     {

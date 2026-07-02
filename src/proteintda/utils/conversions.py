@@ -111,6 +111,7 @@ def sidechainnet_to_atom37(
             continue
         res_coords = coords[res_idx]
         for atom_idx, atom_name in enumerate(atom_names):
+            # PAD is SidechainNet's filler for empty slots
             if atom_name == "PAD" or atom_name not in atom_order:
                 continue
             atom_pos = res_coords[atom_idx]

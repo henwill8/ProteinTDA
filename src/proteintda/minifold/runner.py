@@ -6,13 +6,13 @@ import numpy as np
 import torch
 from esm.pretrained import load_model_and_alphabet
 from minifold.data import data_pipeline, feature_pipeline
-from minifold.data.config import model_config
 from minifold.data.of_data import of_inference
 from minifold.model.model import MiniFoldModel
 from minifold.utils.residue_constants import atom_order, restype_order_with_x_inverse
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
 from tmtools import tm_align
 
+from proteintda.config import CONFIG_OF
 from proteintda.minifold.loss import MiniFoldLoss
 from proteintda.utils.conversions import (
     SideChainAtom,
@@ -61,18 +61,12 @@ class MiniFoldRunner:
 
         ckpt = torch.load(checkpoint, map_location="cpu")
         hparams = ckpt["hyper_parameters"]
-        config_of = model_config(
-            "finetuning" if train else "initial_training",
-            train=train,
-            low_prec=False,
-            long_sequence_inference=False,
-        )
         model = MiniFoldModel(
             esm_model_name=hparams["esm_model_name"],
             num_blocks=hparams["num_blocks"],
             no_bins=hparams["no_bins"],
-            config_of=config_of,
-            use_structure_module=True,
+            config_of=CONFIG_OF,
+            use_structure_module=True, # Note: They only used structure module in second stage
             kernels=kernels,
         )
         _, alphabet = load_model_and_alphabet(hparams["esm_model_name"])
@@ -93,7 +87,7 @@ class MiniFoldRunner:
 
         self.alphabet = alphabet
         self.model = model.to(device)
-        self.config_of = config_of
+        self.config_of = CONFIG_OF
         self.device = device
         self.cache_dir = cache_dir
         self.model_size = model_size

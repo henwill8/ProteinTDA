@@ -25,6 +25,7 @@ def load_dataset() -> list:
         complete_structures_only=not data.allow_incomplete,
     )
 
+    # Sidechainnet includes proteins with '.' in the mask which we don't want to use
     if not data.allow_incomplete:
         before = len(dataset)
         bad = [
