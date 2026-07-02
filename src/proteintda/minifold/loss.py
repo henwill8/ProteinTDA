@@ -132,6 +132,7 @@ class MiniFoldLoss:
         """Cross-entropy distogram loss. Adapted from minifold.train.model.MiniFold.training_step."""
         coords = coords[:, :, 1, :]
         dists = torch.cdist(coords, coords)
+        boundaries = boundaries.to(device=preds.device, dtype=preds.dtype)
         labels = F.one_hot((dists.unsqueeze(-1) > boundaries).sum(dim=-1), no_bins).to(preds)
         errors = -torch.sum(labels * F.log_softmax(preds, dim=-1), dim=-1)
 

@@ -110,9 +110,10 @@ class MiniFoldRunner:
         """Adapted from minifold.train.model.MiniFold.__init__."""
         if no_bins is None:
             no_bins = self.model.fold.disto_bins
-        boundaries = torch.linspace(2, max_dist, no_bins - 1)
-        lower = torch.tensor([1.0])
-        upper = torch.tensor([max_dist + 5.0])
+        device = next(self.model.parameters()).device
+        boundaries = torch.linspace(2, max_dist, no_bins - 1, device=device)
+        lower = torch.tensor([1.0], device=device)
+        upper = torch.tensor([max_dist + 5.0], device=device)
         exp_boundaries = torch.cat((lower, boundaries, upper))
         mid_points = (exp_boundaries[:-1] + exp_boundaries[1:]) / 2
         self.model.register_buffer("boundaries", boundaries)
