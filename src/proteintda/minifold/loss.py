@@ -207,7 +207,7 @@ class MiniFoldLoss:
         total = total + weighted_structure
         loss_fold = loss_fold + weighted_structure
         for name, value in of_breakdown.items():
-            if name == "loss":
+            if name in ("loss", "unscaled_loss"):
                 continue
             of_weight = self.config_of.loss[name].weight
             log[name] = float(
@@ -219,7 +219,6 @@ class MiniFoldLoss:
             tda_loss, tda_breakdown = self._tda(r_dict, batch_of, _return_breakdown=True)
             loss_topo = self.loss_config.tda.weight * tda_loss
             total = total + loss_topo
-            log["tda"] = float(loss_topo.detach())
             for name, value in tda_breakdown.items():
                 if name == "loss":
                     continue
