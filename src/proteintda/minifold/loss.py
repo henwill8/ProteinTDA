@@ -150,8 +150,8 @@ class MiniFoldLoss:
         atom = Atom37.CB if self.tda_atom is SideChainAtom.CB else Atom37.CA
         pred_positions = r_dict["final_atom_positions"][0]
         pred_mask = r_dict["final_atom_mask"][0]
-        target_positions = batch_of["all_atom_positions"][0, -1]
-        target_mask = batch_of["all_atom_mask_true"][0, -1]
+        target_positions = batch_of["all_atom_positions"][0]
+        target_mask = batch_of["all_atom_mask_true"][0]
 
         pred_pts = atom_positions_from_atom37(pred_positions, pred_mask, atom)
         target_pts = atom_positions_from_atom37(target_positions, target_mask, atom)
