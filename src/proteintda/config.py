@@ -56,6 +56,7 @@ RUN_CONFIG = mlc.ConfigDict(
             "patience": 5,
             "amp": True,
             "grad_clip_norm": 1.0,
+            "dropout": False,
         },
         "logging": {
             "baseline_log_file": "logs/esmfold_baseline.log",

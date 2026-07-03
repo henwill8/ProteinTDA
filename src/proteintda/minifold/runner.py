@@ -12,7 +12,7 @@ from minifold.utils.residue_constants import atom_order, restype_order_with_x_in
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
 from tmtools import tm_align
 
-from proteintda.config import CONFIG_OF
+from proteintda.config import CONFIG_OF, RUN_CONFIG
 from proteintda.minifold.loss import MiniFoldLoss
 from proteintda.utils.conversions import (
     SideChainAtom,
@@ -162,7 +162,7 @@ class MiniFoldRunner:
             unfreeze_fold_blocks=unfreeze_fold_blocks,
             unfreeze_structure_module=unfreeze_structure_module,
         )
-        self.model.train()
+        self._set_training_mode()
 
     def _configure_finetuning(
         self,
@@ -196,6 +196,28 @@ class MiniFoldRunner:
                 param.requires_grad = True
 
         self._unfreeze_enabled_aux_heads()
+
+    def _disable_dropout(self, model: torch.nn.Module, *, frozen_only: bool = True) -> None:
+        """Disable dropout on frozen submodules; zero rates on trainable ones if requested."""
+        for module in model.modules():
+            params = tuple(module.parameters())
+            if not params:
+                continue
+            if not any(p.requires_grad for p in params):
+                module.eval()
+            elif not frozen_only:
+                if isinstance(module, torch.nn.Dropout):
+                    module.p = 0.0
+                dropout = getattr(module, "dropout", None)
+                if isinstance(dropout, float):
+                    module.dropout = 0.0
+                dropout_prob = getattr(module, "dropout_prob", None)
+                if isinstance(dropout_prob, float):
+                    module.dropout_prob = 0.0
+
+    def _set_training_mode(self) -> None:
+        self.model.train()
+        self._disable_dropout(self.model, frozen_only=RUN_CONFIG.training.dropout)
 
     def _unfreeze_enabled_aux_heads(self) -> None:
         if not self.model.use_structure_module:
@@ -292,8 +314,9 @@ class MiniFoldRunner:
         model_batch = self.prepare_batch(protein, train=False)
 
         # ESM backbone applies dropout in training mode, which we don't want for inference
-        was_training = self.model.training
-        self.model.eval()
+        is_training = self.model.training
+        if is_training:
+            self.model.eval()
         autocast_device = "cuda" if self.device.type == "cuda" else self.device.type
         try:
             with torch.autocast(autocast_device, dtype=torch.bfloat16):
@@ -303,8 +326,8 @@ class MiniFoldRunner:
             print("OOM during MiniFold forward pass; skipping protein.")
             return None
         finally:
-            if was_training:
-                self.model.train()
+            if is_training:
+                self._set_training_mode()
 
         length = len(seq)
         return {
@@ -359,7 +382,7 @@ class MiniFoldRunner:
         use_amp: bool = False,
         grad_clip_norm: float | None = 1.0,
     ) -> tuple[dict[str, float], int]:
-        self.model.train()
+        self._set_training_mode()
         totals = defaultdict(float)
         n = 0
 
