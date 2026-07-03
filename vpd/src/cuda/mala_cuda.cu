@@ -57,7 +57,7 @@ __device__ double qdist(int i, int j, const Heat_Kernel kernel) {
 }
 
 __global__ void setup_random_states(curandState* state, int seed, int dim) {
-    int i = threadIdx.x + blockDim.x + blockIdx.x; 
+    int i = threadIdx.x + blockDim.x * blockIdx.x; 
 
     if (i >= dim) return;
 
@@ -65,7 +65,7 @@ __global__ void setup_random_states(curandState* state, int seed, int dim) {
 }
 
 __global__ void laplacian_symbol(const double* theta, double* lambda, const Heat_Kernel kernel) {
-    int i = threadIdx.x + blockDim.x + blockIdx.x;
+    int i = threadIdx.x + blockDim.x * blockIdx.x;
     if (i >= kernel.dim) return;
 
     double theta_i = theta[i];
@@ -102,14 +102,14 @@ __global__ void grad_laplacian_symbol(const double* theta, double* grad, const H
 }
 
 __global__ void multiply_vector(double* vector, double c, int dim) {
-    int i = threadIdx.x + blockDim.x + blockIdx.x;
+    int i = threadIdx.x + blockDim.x * blockIdx.x;
     if (i >= dim) return;
 
     vector[i] *= c;
 }
 
 __global__ void sample_theta (double *theta, curandState *states, int dim) {
-    int i = threadIdx.x + blockDim.x + blockIdx.x; 
+    int i = threadIdx.x + blockDim.x * blockIdx.x; 
     if (i >= dim) return;
 
     curandState local_state = states[i];
@@ -125,7 +125,7 @@ __global__ void drift_theta (double *curr_theta,
         int dim
 ) {
 
-    int i = threadIdx.x + blockDim.x + blockIdx.x;
+    int i = threadIdx.x + blockDim.x * blockIdx.x;
     if (i >= dim) return;
 
     curandState local_state = states[i];
