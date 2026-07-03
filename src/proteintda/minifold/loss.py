@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from minifold.model.model import MiniFoldModel
 from minifold.train.loss import AlphaFoldLoss
+from minifold.utils.residue_constants import atom_order
 from minifold.utils.tensor_utils import tensor_tree_map
 
 from proteintda.tda.persistence import pd_from_graph, wasserstein_distance
@@ -184,28 +185,19 @@ class MiniFoldLoss:
         total = 0.0
         log: dict[str, float] = {}
 
-        # TODO: temporarily tracking gradient norms for fold vs topo to check if they are roughly in the same order of magnitude, remove later
-        loss_fold = 0.0
-        loss_topo = None
-
         if self.loss_config.distogram.enabled:
             weighted = self.loss_config.distogram.weight * disto_loss
             log["distogram"] = float(weighted.detach())
             total = total + weighted
-            loss_fold = loss_fold + weighted
 
         if not model.use_structure_module or not self.loss_config.structure.enabled:
             log["total"] = float(total.detach())
-            result: dict[str, torch.Tensor] = {"total": total, "log": log}
-            if isinstance(loss_fold, torch.Tensor):
-                result["loss_fold"] = loss_fold
-            return result
+            return {"total": total, "log": log}
 
         batch_of = tensor_tree_map(lambda t: t[..., -1], batch["batch_of"])
         loss_of, of_breakdown = self.structure_loss(r_dict, batch_of, _return_breakdown=True)
         weighted_structure = self.loss_config.structure.weight * loss_of
         total = total + weighted_structure
-        loss_fold = loss_fold + weighted_structure
         for name, value in of_breakdown.items():
             if name in ("loss", "unscaled_loss"):
                 continue
@@ -217,8 +209,7 @@ class MiniFoldLoss:
         if self.tda_enabled and self.loss_config.tda.enabled:
             self._add_tda_fields(r_dict, batch_of)
             tda_loss, tda_breakdown = self._tda(r_dict, batch_of, _return_breakdown=True)
-            loss_topo = self.loss_config.tda.weight * tda_loss
-            total = total + loss_topo
+            total = total + self.loss_config.tda.weight * tda_loss
             for name, value in tda_breakdown.items():
                 if name == "loss":
                     continue
@@ -226,11 +217,12 @@ class MiniFoldLoss:
                 log[name] = float((self.loss_config.tda.weight * term_weight * value).detach())
 
         log["total"] = float(total.detach())
-        result = {"total": total, "log": log}
-        if isinstance(loss_fold, torch.Tensor):
-            result["loss_fold"] = loss_fold
-        if loss_topo is not None:
-            result["loss_topo"] = loss_topo
+        result: dict[str, torch.Tensor | float | dict[str, float]] = {"total": total, "log": log}
+        if "plddt" in r_dict:
+            result["mean_plddt"] = float(r_dict["plddt"].mean().detach().cpu())
+        if "final_atom_positions" in r_dict:
+            ca_idx = atom_order["CA"]
+            result["pred_ca"] = r_dict["final_atom_positions"][0, :, ca_idx].detach().float().cpu()
         return result
 
     @staticmethod

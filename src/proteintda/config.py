@@ -43,8 +43,8 @@ RUN_CONFIG = mlc.ConfigDict(
         },
         "training": {
             "seed": 42,
-            "base_lr": 1e-4,
-            "struct_lr": 1e-4,
+            "lr": 1e-4,
+            "weight_decay": 0.01,
             "batch_size": 1,
             "train_proteins_per_epoch": None,
             "val_proteins_per_epoch": None,

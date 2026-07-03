@@ -1,5 +1,3 @@
-"""MiniFold k-fold training, evaluation, and logging."""
-
 from collections import defaultdict
 from pathlib import Path
 
@@ -20,6 +18,23 @@ def build_loss_fn() -> MiniFoldLoss:
     return MiniFoldLoss(CONFIG_OF, loss_config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
 
 
+_METRIC_KEYS = ("plddt", "tm")
+
+
+def _format_metrics_line(name: str, metrics: dict[str, float]) -> str:
+    loss_keys: list[str] = []
+    if "total" in (metrics):
+        loss_keys.append("total")
+    for key in sorted(metrics):
+        if key in _METRIC_KEYS or key in loss_keys:
+            continue
+        loss_keys.append(key)
+
+    loss_str = "  ".join(f"{key}={metrics[key]:.4f}" for key in loss_keys if key in metrics)
+    metric_str = "  ".join(f"{key}={metrics[key]:.4f}" for key in _METRIC_KEYS if key in metrics)
+    return f"  {name}:  loss: {loss_str}  metrics: {metric_str}"
+
+
 def format_epoch_metrics(
     *,
     epoch: int,
@@ -27,27 +42,11 @@ def format_epoch_metrics(
     fold: int,
     n_splits: int,
     train: dict[str, float],
-    val_plddt: float,
-    val_tm: float,
+    val: dict[str, float],
 ) -> str:
-    grad_keys = ("fold_grad_norm", "topo_grad_norm")
-    ordered_loss: list[str] = []
-    if "total" in train:
-        ordered_loss.append("total")
-    for key in sorted(train):
-        if key in grad_keys or key in ordered_loss:
-            continue
-        ordered_loss.append(key)
-
-    def fmt_items(keys) -> str:
-        return "  ".join(f"{key}={train[key]:.4f}" for key in keys if key in train)
-
     lines = [f"epoch {epoch}/{epochs}  fold {fold + 1}/{n_splits}"]
-    if ordered_loss:
-        lines.append(f"  train loss: {fmt_items(ordered_loss)}")
-    if any(key in train for key in grad_keys):
-        lines.append(f"  train grad: {fmt_items(grad_keys)}")
-    lines.append(f"  val:        plddt={val_plddt:.4f}  tm={val_tm:.4f}")
+    lines.append(_format_metrics_line("train", train))
+    lines.append(_format_metrics_line("val", val))
     return "\n".join(lines)
 
 
@@ -67,15 +66,18 @@ def train_epoch(
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp and runner.device.type == "cuda")
 
     for batch in tqdm(loader, desc="train", leave=False):
-        batch_totals, batch_n = runner.training_step(
+        batch_totals, batch_n = runner.run_batch(
             batch,
-            optimizer,
             loss_fn,
-            scaler,
-            train_recycles=train_recycles,
+            optimizer=optimizer,
+            scaler=scaler,
+            num_recycling=train_recycles or 0,
             randomize_recycles=randomize_recycles,
             use_amp=use_amp,
             grad_clip_norm=grad_clip_norm,
+            backward=True,
+            include_loss=True,
+            include_metrics=True,
         )
         for key, value in batch_totals.items():
             totals[key] += value
@@ -89,18 +91,30 @@ def train_epoch(
 def evaluate_loader(
     runner: MiniFoldRunner,
     loader,
+    loss_fn: MiniFoldLoss,
     *,
     num_recycling: int,
-) -> tuple[float, float]:
-    plddt_scores: list[float] = []
-    tm_scores: list[float] = []
+    include_loss: bool = True,
+) -> dict[str, float]:
+    totals = defaultdict(float)
+    n = 0
 
     for batch in tqdm(loader, desc="eval", leave=False):
-        batch_plddt, batch_tm = runner.evaluation_step(batch, num_recycling=num_recycling)
-        plddt_scores.extend(batch_plddt)
-        tm_scores.extend(batch_tm)
+        batch_totals, batch_n = runner.run_batch(
+            batch,
+            loss_fn,
+            num_recycling=num_recycling,
+            backward=False,
+            include_loss=include_loss,
+            include_metrics=True,
+        )
+        for key, value in batch_totals.items():
+            totals[key] += value
+        n += batch_n
 
-    return float(np.mean(plddt_scores)), float(np.mean(tm_scores))
+    if n == 0:
+        return dict(totals)
+    return {key: value / n for key, value in totals.items()}
 
 
 def write_log_file(
@@ -144,9 +158,17 @@ def run_baseline_fold(
 
     test_proteins = [proteins[i] for i in test_idx]
     test_loader = make_loader(test_proteins, training.batch_size, shuffle=False)
-    plddt, tm = evaluate_loader(runner, test_loader, num_recycling=runtime.infer_recycles)
-    print(f"fold {fold + 1}/{n_splits}  mean_plddt={plddt:.4f}  mean_tm={tm:.4f}")
-    return plddt, tm
+    metrics = evaluate_loader(
+        runner,
+        test_loader,
+        loss_fn=None,
+        num_recycling=runtime.infer_recycles,
+    )
+    print(
+        f"fold {fold + 1}/{n_splits}  "
+        f"mean_plddt={metrics['plddt']:.4f}  mean_tm={metrics['tm']:.4f}"
+    )
+    return metrics["plddt"], metrics["tm"]
 
 
 def run_train_fold(
@@ -192,9 +214,10 @@ def run_train_fold(
     )
     test_loader = make_loader(test_proteins, training.batch_size, shuffle=False)
 
-    optimizer = runner.build_optimizer(
-        base_lr=training.base_lr,
-        struct_lr=training.struct_lr,
+    optimizer = torch.optim.AdamW(
+        [p for p in runner.model.parameters() if p.requires_grad],
+        lr=training.lr,
+        weight_decay=training.weight_decay,
     )
     best_model_weights = None
     max_val_tm = 0.0
@@ -220,13 +243,14 @@ def run_train_fold(
         )
 
         # TODO: switch to checking on the loss instead of the metric?
-        val_plddt_score, val_tm_score = evaluate_loader(
+        val_metrics = evaluate_loader(
             runner,
             val_loader,
             num_recycling=runtime.infer_recycles,
+            loss_fn=loss_fn,
         )
-        if val_tm_score > max_val_tm:
-            max_val_tm = val_tm_score
+        if val_metrics["tm"] > max_val_tm:
+            max_val_tm = val_metrics["tm"]
             patience = 0
             best_model_weights = runner.snapshot_state_dict()
         else:
@@ -239,8 +263,7 @@ def run_train_fold(
                 fold=fold,
                 n_splits=n_splits,
                 train=metrics,
-                val_plddt=val_plddt_score,
-                val_tm=val_tm_score,
+                val=val_metrics,
             )
         )
 
@@ -251,10 +274,14 @@ def run_train_fold(
     if best_model_weights is not None:
         runner.load_state_dict(best_model_weights)
 
-    plddt_score, tm_score = evaluate_loader(
+    test_metrics = evaluate_loader(
         runner,
         test_loader,
+        loss_fn=None,
         num_recycling=runtime.infer_recycles,
     )
-    print(f"fold {fold + 1}/{n_splits}  mean_plddt={plddt_score:.4f}  mean_tm={tm_score:.4f}")
-    return plddt_score, tm_score
+    print(
+        f"fold {fold + 1}/{n_splits}  "
+        f"mean_plddt={test_metrics['plddt']:.4f}  mean_tm={test_metrics['tm']:.4f}"
+    )
+    return test_metrics["plddt"], test_metrics["tm"]
