@@ -129,6 +129,7 @@ class MiniFoldRunner:
         self.device = device
         self.cache_dir = cache_dir
         self.model_size = model_size
+        self._frozen_modules: list[torch.nn.Module] = []
 
         if train:
             self.prepare_for_training(
@@ -196,15 +197,17 @@ class MiniFoldRunner:
                 param.requires_grad = True
 
         self._unfreeze_enabled_aux_heads()
+        self._configure_dropout()
 
-    def _disable_dropout(self, model: torch.nn.Module, *, frozen_only: bool = True) -> None:
-        """Disable dropout on frozen submodules; zero rates on trainable ones if requested."""
-        for module in model.modules():
+    def _configure_dropout(self) -> None:
+        frozen_only = RUN_CONFIG.training.dropout
+        self._frozen_modules = []
+        for module in self.model.modules():
             params = tuple(module.parameters())
             if not params:
                 continue
             if not any(p.requires_grad for p in params):
-                module.eval()
+                self._frozen_modules.append(module)
             elif not frozen_only:
                 if isinstance(module, torch.nn.Dropout):
                     module.p = 0.0
@@ -217,7 +220,8 @@ class MiniFoldRunner:
 
     def _set_training_mode(self) -> None:
         self.model.train()
-        self._disable_dropout(self.model, frozen_only=RUN_CONFIG.training.dropout)
+        for module in self._frozen_modules:
+            module.eval()
 
     def _unfreeze_enabled_aux_heads(self) -> None:
         if not self.model.use_structure_module:
