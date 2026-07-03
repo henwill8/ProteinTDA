@@ -4,7 +4,6 @@ from minifold.data.config import model_config
 _EPS = 1e-8
 
 # Shared OpenFold / MiniFold config for feature pipeline, model, and loss.
-# TODO: review memory and training options (can validation still use train=True?)
 CONFIG_OF = model_config(
     "initial_training",
     train=True,
@@ -18,7 +17,7 @@ with CONFIG_OF.unlocked():
     CONFIG_OF.loss.tm.weight = 0.1
     CONFIG_OF.loss.violation.weight = 1.0
     CONFIG_OF.loss.experimentally_resolved.weight = 0.01
-    CONFIG_OF.data.train.crop = False
+    CONFIG_OF.data.train.crop_size = None
 
 RUN_CONFIG = mlc.ConfigDict(
     {
