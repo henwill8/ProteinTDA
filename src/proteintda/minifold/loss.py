@@ -31,6 +31,18 @@ def _wasserstein_terms(
     return {f"h{i}": terms[i] if i < len(terms) else zero for i in range(hom_dim)}
 
 
+def _as_tensor(value: torch.Tensor | float, ref: torch.Tensor) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        return value
+    return ref.new_tensor(value)
+
+
+def _as_scalar(value: torch.Tensor | float) -> float:
+    if isinstance(value, float):
+        return value
+    return float(value.detach())
+
+
 class TDALoss:
     """Wasserstein and VPD losses on persistence diagrams from distance matrices."""
 
@@ -76,11 +88,12 @@ class TDALoss:
                 return zero, {}
             return zero
 
-        cum_loss = 0.0
+        ref = out["adj"]
+        cum_loss = ref.new_zeros(())
         losses = {}
         for loss_name, loss_fn in loss_fns.items():
             weight = self.config[loss_name].weight
-            loss = loss_fn()
+            loss = _as_tensor(loss_fn(), ref)
             if not torch.isfinite(loss).all():
                 print(f"{loss_name} loss is NaN or Inf. Skipping...")
                 loss = loss.new_zeros((), requires_grad=True)
@@ -175,48 +188,54 @@ class MiniFoldLoss:
             return None
 
         preds = r_dict["preds"]
-        disto_loss = self._distogram_loss(
-            preds,
-            batch["coords"],
-            batch["mask"],
-            model.boundaries,
-            no_bins=preds.shape[-1],
-        )
-        total = 0.0
+        total = preds.new_zeros(())
         log: dict[str, float] = {}
 
         if self.loss_config.distogram.enabled:
+            disto_loss = self._distogram_loss(
+                preds,
+                batch["coords"],
+                batch["mask"],
+                model.boundaries,
+                no_bins=preds.shape[-1],
+            )
             weighted = self.loss_config.distogram.weight * disto_loss
-            log["distogram"] = float(weighted.detach())
+            log["distogram"] = _as_scalar(weighted)
             total = total + weighted
 
-        if not model.use_structure_module or not self.loss_config.structure.enabled:
-            log["total"] = float(total.detach())
-            return {"total": total, "log": log}
+        needs_structure_outputs = (
+            self.loss_config.structure.enabled
+            or (self.tda_enabled and self.loss_config.tda.enabled)
+        )
+        if needs_structure_outputs:
+            if not model.use_structure_module:
+                raise ValueError(
+                    "Structure module outputs are required for structure and TDA losses."
+                )
+            batch_of = tensor_tree_map(lambda t: t[..., -1], batch["batch_of"])
 
-        batch_of = tensor_tree_map(lambda t: t[..., -1], batch["batch_of"])
-        loss_of, of_breakdown = self.structure_loss(r_dict, batch_of, _return_breakdown=True)
-        weighted_structure = self.loss_config.structure.weight * loss_of
-        total = total + weighted_structure
-        for name, value in of_breakdown.items():
-            if name in ("loss", "unscaled_loss"):
-                continue
-            of_weight = self.config_of.loss[name].weight
-            log[name] = float(
-                (self.loss_config.structure.weight * of_weight * value).detach()
-            )
+            if self.loss_config.structure.enabled:
+                loss_of, of_breakdown = self.structure_loss(r_dict, batch_of, _return_breakdown=True)
+                weighted_structure = self.loss_config.structure.weight * loss_of
+                total = total + weighted_structure
+                for name, value in of_breakdown.items():
+                    if name in ("loss", "unscaled_loss"):
+                        continue
+                    of_weight = self.config_of.loss[name].weight
+                    log[name] = _as_scalar(self.loss_config.structure.weight * of_weight * value)
 
-        if self.tda_enabled and self.loss_config.tda.enabled:
-            self._add_tda_fields(r_dict, batch_of)
-            tda_loss, tda_breakdown = self._tda(r_dict, batch_of, _return_breakdown=True)
-            total = total + self.loss_config.tda.weight * tda_loss
-            for name, value in tda_breakdown.items():
-                if name == "loss":
-                    continue
-                term_weight = self.loss_config[name].weight
-                log[name] = float((self.loss_config.tda.weight * term_weight * value).detach())
+            if self.tda_enabled and self.loss_config.tda.enabled:
+                self._add_tda_fields(r_dict, batch_of)
+                tda_loss, tda_breakdown = self._tda(r_dict, batch_of, _return_breakdown=True)
+                weighted_tda = self.loss_config.tda.weight * tda_loss
+                total = total + weighted_tda
+                for name, value in tda_breakdown.items():
+                    if name == "loss":
+                        continue
+                    term_weight = self.loss_config[name].weight
+                    log[name] = _as_scalar(self.loss_config.tda.weight * term_weight * value)
 
-        log["total"] = float(total.detach())
+        log["total"] = _as_scalar(total)
         result: dict[str, torch.Tensor | float | dict[str, float]] = {"total": total, "log": log}
         if "plddt" in r_dict:
             result["mean_plddt"] = float(r_dict["plddt"].mean().detach().cpu())
