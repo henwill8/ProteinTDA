@@ -6,9 +6,12 @@ import numpy as np
 from matplotlib.widgets import Button
 import torch
 import torch.nn as nn
+from minifold.train.loss import AlphaFoldLoss
+from minifold.utils.tensor_utils import tensor_tree_map
 from torch.optim.lr_scheduler import StepLR
 
-from proteintda.minifold.loss import _distance_matrix, _wasserstein_terms
+from proteintda.config import CONFIG_OF
+from proteintda.minifold.loss import MiniFoldLoss, _distance_matrix, _wasserstein_terms
 from proteintda.minifold.runner import MiniFoldRunner
 from proteintda.tda.persistence import pd_from_graph
 from proteintda.utils.conversions import (
@@ -26,7 +29,6 @@ SCHEDULER_STEP = 5
 SCHEDULER_GAMMA = 0.9
 LOG_EVERY = 10
 SEED = 42
-TRAIL_LENGTH = 50
 
 MODE = "minifold"  # "points", "mlp", or "minifold"
 MINIFOLD_CACHE_DIR = Path("cache/minifold")
@@ -34,6 +36,10 @@ MINIFOLD_MODEL_SIZE = "12L"  # "12L" or "48L"
 MINIFOLD_RECYCLES = 3
 MINIFOLD_UNFREEZE_FOLD_BLOCKS = 0
 MINIFOLD_UNFREEZE_STRUCTURE_MODULE = True
+USE_DISTOGRAM_LOSS = False
+USE_STRUCTURE_LOSS = False
+W_DISTOGRAM = 0.8
+W_STRUCTURE = 0.2
 
 HIDDEN_DIM = 256
 USE_H2 = False
@@ -74,21 +80,6 @@ def wasserstein_loss(pred_pts, target_diags):
     if USE_H2:
         breakdown["wasserstein_h2"] = terms["h2"]
     return loss, pred_diags, breakdown
-
-
-# This is all llm code cause I didnt want to figure out animation stuff:
-def _nearest_trails(prev, curr):
-    if len(prev) == 0 or len(curr) == 0:
-        return []
-    dists = ((prev[:, None, :] - curr[None, :, :]) ** 2).sum(axis=2)
-    return [(prev[i], curr[j]) for j, i in enumerate(dists.argmin(axis=0))]
-
-
-def _trail_alpha(frame_idx, seg_idx, trail_start):
-    age = frame_idx - seg_idx
-    n_segs = frame_idx - trail_start + 1
-    t = age / max(n_segs - 1, 1)
-    return 0.2 * (1 - t) + 0.04 * t
 
 
 def _pd_limits(target_diags, history):
@@ -206,19 +197,14 @@ def show_history(history, target_diags, target_pts, title, *, align_pred_pts=Fal
 
     step_text = fig.text(0.02, 0.96, "", fontsize=10)
     pd_dynamic = []
-    pt_trail_artists = []
 
     def clear_dynamic():
         for art in pd_dynamic:
             art.remove()
         pd_dynamic.clear()
-        for art in pt_trail_artists:
-            art.remove()
-        pt_trail_artists.clear()
 
     def draw_pd(frame_idx):
         frame = history[frame_idx]
-        trail_start = max(1, frame_idx - TRAIL_LENGTH + 1)
         for dim in ACTIVE_HOMS:
             pred = frame["pred"][dim]
             if len(pred):
@@ -228,34 +214,11 @@ def show_history(history, target_diags, target_pts, title, *, align_pred_pts=Fal
                         s=40, alpha=0.8, zorder=3,
                     )
                 )
-            for seg_idx in range(trail_start, frame_idx + 1):
-                prev = history[seg_idx - 1]["pred"][dim]
-                curr = history[seg_idx]["pred"][dim]
-                alpha = _trail_alpha(frame_idx, seg_idx, trail_start)
-                for p0, p1 in _nearest_trails(prev, curr):
-                    (ln,) = ax_pd.plot(
-                        [p0[0], p1[0]], [p0[1], p1[1]],
-                        c="red", alpha=alpha, linewidth=1, zorder=1,
-                    )
-                    pd_dynamic.append(ln)
 
     def draw_pts(frame_idx):
         frame = history[frame_idx]
         pts = _view_pred_pts(frame["pts"], target_pts, align_pred_pts)
-        trail_start = max(1, frame_idx - TRAIL_LENGTH + 1)
         pred_sc._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
-        for seg_idx in range(trail_start, frame_idx + 1):
-            prev = _view_pred_pts(history[seg_idx - 1]["pts"], target_pts, align_pred_pts)
-            curr = _view_pred_pts(history[seg_idx]["pts"], target_pts, align_pred_pts)
-            alpha = _trail_alpha(frame_idx, seg_idx, trail_start)
-            for i in range(len(curr)):
-                (ln,) = ax_pts.plot(
-                    [prev[i, 0], curr[i, 0]],
-                    [prev[i, 1], curr[i, 1]],
-                    [prev[i, 2], curr[i, 2]],
-                    c="red", alpha=alpha, linewidth=1,
-                )
-                pt_trail_artists.append(ln)
 
     def show(frame_idx):
         clear_dynamic()
@@ -278,22 +241,47 @@ def show_history(history, target_diags, target_pts, title, *, align_pred_pts=Fal
     plt.show(block=True)
 
 
+def _extra_loss_msg(breakdown):
+    parts = []
+    if "distogram" in breakdown:
+        parts.append(f"disto={_scalar(breakdown['distogram']):.4f}")
+    if "structure" in breakdown:
+        parts.append(f"struct={_scalar(breakdown['structure']):.4f}")
+    return f"  {'  '.join(parts)}" if parts else ""
+
+
 def train(
-    name, target_adj, target_pts, get_pred_pts, optimizer, scheduler, device, *,
+    name, target_adj, target_pts, optimizer, scheduler, device, *,
+    get_pred_pts=None,
+    get_step=None,
     align_pred_pts=False,
 ):
     n_pts = target_pts.shape[0]
     print(f"[{name}] {n_pts} points, {STEPS} steps, lr={LR}")
+    if USE_DISTOGRAM_LOSS or USE_STRUCTURE_LOSS:
+        enabled = []
+        if USE_DISTOGRAM_LOSS:
+            enabled.append(f"distogram (w={W_DISTOGRAM})")
+        if USE_STRUCTURE_LOSS:
+            enabled.append(f"structure (w={W_STRUCTURE})")
+        print(f"  auxiliary losses: {', '.join(enabled)}")
     history = []
     target_diags = pd_from_graph(target_adj.detach(), max_dimension=HOM_DIM, hom_dim=HOM_DIM)
     tgt_counts = [len(d) for d in target_diags]
     hom_label = "/".join(f"H{d}" for d in ACTIVE_HOMS)
     print(f"target diagram sizes {hom_label}={tgt_counts}")
 
+    if get_step is None:
+        if get_pred_pts is None:
+            raise ValueError("train requires get_pred_pts or get_step")
+        def get_step():
+            pred_pts = get_pred_pts()
+            loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
+            return loss, pred_pts, pred_diags, breakdown
+
     for step in range(STEPS + 1):
-        pred_pts = get_pred_pts()
+        loss, pred_pts, pred_diags, breakdown = get_step()
         log_step = step % LOG_EVERY == 0 or step == STEPS
-        loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
         loss_val = _scalar(breakdown["total"])
 
         if log_step:
@@ -306,7 +294,8 @@ def train(
                 hom_msg += f"  h2={h2:.4f}"
             print(
                 f"step {step:4d}  lr={scheduler.get_last_lr()[0]:.6g}  loss={loss_val:.4f}  "
-                f"{hom_msg}  pred_n={pred_counts}  tgt_n={tgt_counts}"
+                f"{hom_msg}{_extra_loss_msg(breakdown)}  "
+                f"pred_n={pred_counts}  tgt_n={tgt_counts}"
             )
             frame = {
                 "step": step,
@@ -374,6 +363,34 @@ def _cbeta_from_minifold_output(r_dict):
     return atom_positions_from_atom37(pred_positions, pred_mask, Atom37.CB)
 
 
+def _minifold_step(runner, model_batch, target_diags, structure_loss_fn):
+    runner._set_training_mode()
+    r_dict = runner.model(model_batch, num_recycling=MINIFOLD_RECYCLES)
+    pred_pts = _cbeta_from_minifold_output(r_dict)
+    tda_loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
+    total = tda_loss
+
+    if USE_DISTOGRAM_LOSS:
+        disto = MiniFoldLoss._distogram_loss(
+            r_dict["preds"],
+            model_batch["coords"],
+            model_batch["mask"],
+            runner.model.boundaries,
+            no_bins=r_dict["preds"].shape[-1],
+        )
+        total = total + W_DISTOGRAM * disto
+        breakdown["distogram"] = disto
+
+    if USE_STRUCTURE_LOSS:
+        batch_of = tensor_tree_map(lambda t: t[..., -1], model_batch["batch_of"])
+        struct_loss, _ = structure_loss_fn(r_dict, batch_of, _return_breakdown=True)
+        total = total + W_STRUCTURE * struct_loss
+        breakdown["structure"] = struct_loss
+
+    breakdown["total"] = total
+    return total, pred_pts, pred_diags, breakdown
+
+
 def _make_optimizer_scheduler(params, lr=LR):
     optimizer = torch.optim.Adam(params, lr=lr)
     scheduler = StepLR(optimizer, step_size=SCHEDULER_STEP, gamma=SCHEDULER_GAMMA)
@@ -407,10 +424,10 @@ def run_points(device):
         "points",
         target_adj,
         target_pts,
-        lambda: pred_pts,
         optimizer,
         scheduler,
         device,
+        get_pred_pts=lambda: pred_pts,
     )
 
 
@@ -423,10 +440,10 @@ def run_mlp(device):
         "mlp",
         target_adj,
         target_pts,
-        lambda: model(model_input),
         optimizer,
         scheduler,
         device,
+        get_pred_pts=lambda: model(model_input),
     )
 
 
@@ -447,20 +464,20 @@ def run_minifold(device):
     trainable_params = [p for p in runner.model.parameters() if p.requires_grad]
     optimizer, scheduler = _make_optimizer_scheduler(trainable_params)
     model_batch = runner.prepare_batch(protein, train=True)
+    structure_loss_fn = AlphaFoldLoss(CONFIG_OF.loss)
+    target_diags = pd_from_graph(target_adj.detach(), max_dimension=HOM_DIM, hom_dim=HOM_DIM)
 
-    def get_pred_pts():
-        runner._set_training_mode()
-        out = runner.model(model_batch, num_recycling=MINIFOLD_RECYCLES)
-        return _cbeta_from_minifold_output(out)
+    def get_step():
+        return _minifold_step(runner, model_batch, target_diags, structure_loss_fn)
 
     train(
         f"minifold:{protein.id}",
         target_adj,
         target_pts,
-        get_pred_pts,
         optimizer,
         scheduler,
         device,
+        get_step=get_step,
         align_pred_pts=True,
     )
 
