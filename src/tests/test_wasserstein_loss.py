@@ -38,6 +38,7 @@ MINIFOLD_UNFREEZE_FOLD_BLOCKS = 0
 MINIFOLD_UNFREEZE_STRUCTURE_MODULE = True
 USE_DISTOGRAM_LOSS = False
 USE_STRUCTURE_LOSS = False
+USE_TDA_LOSS = True
 W_DISTOGRAM = 0.8
 W_STRUCTURE = 0.2
 
@@ -250,6 +251,18 @@ def _extra_loss_msg(breakdown):
     return f"  {'  '.join(parts)}" if parts else ""
 
 
+def _log_loss_config():
+    parts = []
+    if USE_TDA_LOSS:
+        parts.append("tda (wasserstein)")
+    if USE_DISTOGRAM_LOSS:
+        parts.append(f"distogram (w={W_DISTOGRAM})")
+    if USE_STRUCTURE_LOSS:
+        parts.append(f"structure (w={W_STRUCTURE})")
+    if parts:
+        print(f"  losses: {', '.join(parts)}")
+
+
 def train(
     name, target_adj, target_pts, optimizer, scheduler, device, *,
     get_pred_pts=None,
@@ -258,13 +271,7 @@ def train(
 ):
     n_pts = target_pts.shape[0]
     print(f"[{name}] {n_pts} points, {STEPS} steps, lr={LR}")
-    if USE_DISTOGRAM_LOSS or USE_STRUCTURE_LOSS:
-        enabled = []
-        if USE_DISTOGRAM_LOSS:
-            enabled.append(f"distogram (w={W_DISTOGRAM})")
-        if USE_STRUCTURE_LOSS:
-            enabled.append(f"structure (w={W_STRUCTURE})")
-        print(f"  auxiliary losses: {', '.join(enabled)}")
+    _log_loss_config()
     history = []
     target_diags = pd_from_graph(target_adj.detach(), max_dimension=HOM_DIM, hom_dim=HOM_DIM)
     tgt_counts = [len(d) for d in target_diags]
@@ -367,8 +374,14 @@ def _minifold_step(runner, model_batch, target_diags, structure_loss_fn):
     runner._set_training_mode()
     r_dict = runner.model(model_batch, num_recycling=MINIFOLD_RECYCLES)
     pred_pts = _cbeta_from_minifold_output(r_dict)
-    tda_loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
-    total = tda_loss
+
+    if USE_TDA_LOSS:
+        tda_loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
+        total = tda_loss
+    else:
+        with torch.no_grad():
+            _, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
+        total = pred_pts.new_zeros(())
 
     if USE_DISTOGRAM_LOSS:
         disto = MiniFoldLoss._distogram_loss(
@@ -448,6 +461,8 @@ def run_mlp(device):
 
 
 def run_minifold(device):
+    if not USE_TDA_LOSS and not USE_DISTOGRAM_LOSS and not USE_STRUCTURE_LOSS:
+        raise ValueError("enable at least one of USE_TDA_LOSS, USE_DISTOGRAM_LOSS, USE_STRUCTURE_LOSS")
     protein, target_pts = _load_protein(device)
     target_adj = _distance_matrix(target_pts).detach()
     runner = MiniFoldRunner(
