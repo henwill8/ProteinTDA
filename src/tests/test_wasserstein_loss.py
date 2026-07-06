@@ -43,6 +43,8 @@ USE_STRUCTURE_LOSS = False
 USE_TDA_LOSS = True
 W_DISTOGRAM = 0.8
 W_STRUCTURE = 0.2
+TDA_WARMUP_STEPS = 50
+TDA_RAMP_STEPS = 50
 
 HIDDEN_DIM = 256
 USE_H2 = False
@@ -85,6 +87,19 @@ def wasserstein_loss(pred_pts, target_diags):
     return loss, pred_diags, breakdown
 
 
+def tda_weight(step):
+    if TDA_WARMUP_STEPS == 0 and TDA_RAMP_STEPS == 0:
+        return 1.0
+    if step < TDA_WARMUP_STEPS:
+        return 0.0
+    if TDA_RAMP_STEPS <= 0:
+        return 1.0
+    ramp_step = step - TDA_WARMUP_STEPS
+    if ramp_step >= TDA_RAMP_STEPS:
+        return 1.0
+    return ramp_step / TDA_RAMP_STEPS
+
+
 def _pd_limits(target_diags, history):
     pts = []
     for dim in ACTIVE_HOMS:
@@ -94,13 +109,8 @@ def _pd_limits(target_diags, history):
     return max(float(p[:, 1].max()) for p in pts if len(p)) * 1.1 + 0.1
 
 
-def _pts_limits(target_pts, history, align_pred_pts=False):
-    pred_pts = [
-        _kabsch_align(f["pts"], target_pts) if align_pred_pts else f["pts"]
-        for f in history
-    ]
-    all_coords = np.concatenate([target_pts, *pred_pts], axis=0)
-    lo, hi = float(all_coords.min()), float(all_coords.max())
+def _coords_limits(coords):
+    lo, hi = float(coords.min()), float(coords.max())
     pad = (hi - lo) * 0.1 + 0.1
     return lo - pad, hi + pad
 
@@ -124,6 +134,11 @@ def _view_pred_pts(pred, target_pts, align_pred_pts):
     if not align_pred_pts:
         return pred
     return _kabsch_align(pred, target_pts)
+
+
+def _pts_limits(target_pts, history, align_pred_pts=False):
+    pred_pts = [_view_pred_pts(f["pts"], target_pts, align_pred_pts) for f in history]
+    return _coords_limits(np.concatenate([target_pts, *pred_pts], axis=0))
 
 
 def _attach_buttons(fig, show, n_frames):
@@ -222,6 +237,11 @@ def show_history(history, target_diags, target_pts, title, *, align_pred_pts=Fal
         frame = history[frame_idx]
         pts = _view_pred_pts(frame["pts"], target_pts, align_pred_pts)
         pred_sc._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
+        if align_pred_pts:
+            lo, hi = _coords_limits(np.concatenate([target_pts, pts], axis=0))
+            ax_pts.set_xlim(lo, hi)
+            ax_pts.set_ylim(lo, hi)
+            ax_pts.set_zlim(lo, hi)
 
     def show(frame_idx):
         clear_dynamic()
@@ -259,6 +279,10 @@ def _log_loss_config():
     parts = []
     if USE_TDA_LOSS:
         parts.append("tda (wasserstein)")
+        if TDA_WARMUP_STEPS > 0 or TDA_RAMP_STEPS > 0:
+            parts.append(
+                f"warmup={TDA_WARMUP_STEPS} ramp={TDA_RAMP_STEPS}",
+            )
     if USE_DISTOGRAM_LOSS:
         parts.append(f"distogram (w={W_DISTOGRAM})")
     if USE_STRUCTURE_LOSS:
@@ -285,13 +309,23 @@ def train(
     if get_step is None:
         if get_pred_pts is None:
             raise ValueError("train requires get_pred_pts or get_step")
-        def get_step():
+        def get_step(step):
             pred_pts = get_pred_pts()
-            loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
+            w = tda_weight(step)
+            if w > 0:
+                loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
+                if w < 1.0:
+                    loss = w * loss
+            else:
+                with torch.no_grad():
+                    _, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
+                loss = pred_pts.new_zeros(())
+            breakdown["tda_w"] = w
+            breakdown["total"] = loss
             return loss, pred_pts, pred_diags, breakdown
 
     for step in range(STEPS + 1):
-        loss, pred_pts, pred_diags, breakdown = get_step()
+        loss, pred_pts, pred_diags, breakdown = get_step(step)
         log_step = step % LOG_EVERY == 0 or step == STEPS
         loss_val = _scalar(breakdown["total"])
 
@@ -303,9 +337,12 @@ def train(
             if USE_H2:
                 h2 = _scalar(breakdown["wasserstein_h2"])
                 hom_msg += f"  h2={h2:.4f}"
+            tda_w_msg = ""
+            if breakdown.get("tda_w", 1.0) < 1.0:
+                tda_w_msg = f"  tda_w={breakdown['tda_w']:.3f}"
             print(
                 f"step {step:4d}  lr={scheduler.get_last_lr()[0]:.6g}  loss={loss_val:.4f}  "
-                f"{hom_msg}{_extra_loss_msg(breakdown)}  "
+                f"{hom_msg}{tda_w_msg}{_extra_loss_msg(breakdown)}  "
                 f"pred_n={pred_counts}  tgt_n={tgt_counts}"
             )
             frame = {
@@ -389,18 +426,22 @@ def _tm_score(pred_ca, target_ca, seq):
     return float(alignment.tm_norm_chain2)
 
 
-def _minifold_step(runner, model_batch, target_diags, structure_loss_fn, protein):
+def _minifold_step(runner, model_batch, target_diags, structure_loss_fn, protein, step):
     runner._set_training_mode()
     r_dict = runner.model(model_batch, num_recycling=MINIFOLD_RECYCLES)
     pred_pts = _cbeta_from_minifold_output(r_dict)
+    w = tda_weight(step)
+    breakdown = {}
 
-    if USE_TDA_LOSS:
+    if USE_TDA_LOSS and w > 0:
         tda_loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
-        total = tda_loss
+        total = w * tda_loss
     else:
         with torch.no_grad():
             _, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
         total = pred_pts.new_zeros(())
+
+    breakdown["tda_w"] = w
 
     with torch.no_grad():
         pred_ca = _ca_from_minifold_output(r_dict)
@@ -508,8 +549,8 @@ def run_minifold(device):
     structure_loss_fn = AlphaFoldLoss(CONFIG_OF.loss)
     target_diags = pd_from_graph(target_adj.detach(), max_dimension=HOM_DIM, hom_dim=HOM_DIM)
 
-    def get_step():
-        return _minifold_step(runner, model_batch, target_diags, structure_loss_fn, protein)
+    def get_step(step):
+        return _minifold_step(runner, model_batch, target_diags, structure_loss_fn, protein, step)
 
     train(
         f"minifold:{protein.id}",
