@@ -63,12 +63,11 @@ def _load_sidechainnet_proteins(
     return dataset
 
 
-def load_all_proteins() -> list:
-    data = RUN_CONFIG.data
+def load_all_proteins(allow_incomplete: bool = False) -> list:
     return _load_sidechainnet_proteins(
         max_proteins=None,
-        max_protein_length=data.max_protein_length,
-        allow_incomplete=data.allow_incomplete,
+        max_protein_length=None,
+        allow_incomplete=allow_incomplete,
     )
 
 
