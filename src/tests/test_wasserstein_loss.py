@@ -7,8 +7,10 @@ from matplotlib.widgets import Button
 import torch
 import torch.nn as nn
 from minifold.train.loss import AlphaFoldLoss
+from minifold.utils.residue_constants import atom_order
 from minifold.utils.tensor_utils import tensor_tree_map
 from torch.optim.lr_scheduler import StepLR
+from tmtools import tm_align
 
 from proteintda.config import CONFIG_OF
 from proteintda.minifold.loss import MiniFoldLoss, _distance_matrix, _wasserstein_terms
@@ -248,6 +250,8 @@ def _extra_loss_msg(breakdown):
         parts.append(f"disto={_scalar(breakdown['distogram']):.4f}")
     if "structure" in breakdown:
         parts.append(f"struct={_scalar(breakdown['structure']):.4f}")
+    if "tm" in breakdown:
+        parts.append(f"tm={breakdown['tm']:.4f}")
     return f"  {'  '.join(parts)}" if parts else ""
 
 
@@ -370,7 +374,22 @@ def _cbeta_from_minifold_output(r_dict):
     return atom_positions_from_atom37(pred_positions, pred_mask, Atom37.CB)
 
 
-def _minifold_step(runner, model_batch, target_diags, structure_loss_fn):
+def _ca_from_minifold_output(r_dict):
+    ca_idx = atom_order["CA"]
+    return r_dict["final_atom_positions"][0, :, ca_idx].detach().float().cpu()
+
+
+def _tm_score(pred_ca, target_ca, seq):
+    alignment = tm_align(
+        pred_ca.numpy(),
+        target_ca.numpy(),
+        seq,
+        seq,
+    )
+    return float(alignment.tm_norm_chain2)
+
+
+def _minifold_step(runner, model_batch, target_diags, structure_loss_fn, protein):
     runner._set_training_mode()
     r_dict = runner.model(model_batch, num_recycling=MINIFOLD_RECYCLES)
     pred_pts = _cbeta_from_minifold_output(r_dict)
@@ -382,6 +401,13 @@ def _minifold_step(runner, model_batch, target_diags, structure_loss_fn):
         with torch.no_grad():
             _, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
         total = pred_pts.new_zeros(())
+
+    with torch.no_grad():
+        pred_ca = _ca_from_minifold_output(r_dict)
+        target_ca = atom_positions_from_sidechainnet(
+            protein, SideChainAtom.CA, device=pred_pts.device,
+        ).cpu()
+        breakdown["tm"] = _tm_score(pred_ca, target_ca, str(protein.seq))
 
     if USE_DISTOGRAM_LOSS:
         disto = MiniFoldLoss._distogram_loss(
@@ -483,7 +509,7 @@ def run_minifold(device):
     target_diags = pd_from_graph(target_adj.detach(), max_dimension=HOM_DIM, hom_dim=HOM_DIM)
 
     def get_step():
-        return _minifold_step(runner, model_batch, target_diags, structure_loss_fn)
+        return _minifold_step(runner, model_batch, target_diags, structure_loss_fn, protein)
 
     train(
         f"minifold:{protein.id}",
