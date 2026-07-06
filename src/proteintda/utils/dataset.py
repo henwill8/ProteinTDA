@@ -13,7 +13,12 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
 
 
-def load_dataset() -> list:
+def _load_sidechainnet_proteins(
+    *,
+    max_proteins: int | None,
+    max_protein_length: int | None,
+    allow_incomplete: bool,
+) -> list:
     data = RUN_CONFIG.data
     print("Loading SidechainNet...")
     dataset = scn.load(
@@ -22,11 +27,11 @@ def load_dataset() -> list:
         scn_dataset=True,
         scn_dir=data.scn_dir,
         force_download=False,
-        complete_structures_only=not data.allow_incomplete,
+        complete_structures_only=not allow_incomplete,
     )
 
     # Sidechainnet includes proteins with '.' in the mask which we don't want to use
-    if not data.allow_incomplete:
+    if not allow_incomplete:
         before = len(dataset)
         bad = [
             protein
@@ -45,17 +50,35 @@ def load_dataset() -> list:
         if removed:
             print(f"Removed {removed} proteins with incomplete or misaligned masks.")
 
-    if data.max_protein_length is not None:
+    if max_protein_length is not None:
         before = len(dataset)
-        dataset = [protein for protein in dataset if len(protein.seq) <= data.max_protein_length]
+        dataset = [protein for protein in dataset if len(protein.seq) <= max_protein_length]
         removed = before - len(dataset)
         if removed:
-            print(f"Removed {removed} proteins longer than {data.max_protein_length} residues.")
+            print(f"Removed {removed} proteins longer than {max_protein_length} residues.")
 
-    if data.max_proteins is not None and len(dataset) > data.max_proteins:
-        dataset = dataset[-data.max_proteins :]
+    if max_proteins is not None and len(dataset) > max_proteins:
+        dataset = dataset[-max_proteins :]
     print(f"Loaded {len(dataset)} proteins.")
     return dataset
+
+
+def load_all_proteins() -> list:
+    data = RUN_CONFIG.data
+    return _load_sidechainnet_proteins(
+        max_proteins=None,
+        max_protein_length=data.max_protein_length,
+        allow_incomplete=data.allow_incomplete,
+    )
+
+
+def load_dataset() -> list:
+    data = RUN_CONFIG.data
+    return _load_sidechainnet_proteins(
+        max_proteins=data.max_proteins,
+        max_protein_length=data.max_protein_length,
+        allow_incomplete=data.allow_incomplete,
+    )
 
 
 def sample_proteins(

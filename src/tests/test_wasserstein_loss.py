@@ -17,7 +17,7 @@ from proteintda.utils.conversions import (
     atom_positions_from_atom37,
     atom_positions_from_sidechainnet,
 )
-from proteintda.utils.dataset import load_dataset
+from proteintda.utils.dataset import load_all_proteins
 
 N_POINTS = 100
 STEPS = 200
@@ -310,7 +310,7 @@ def _make_problem(device):
 
 
 def _load_protein(device):
-    proteins = load_dataset()
+    proteins = load_all_proteins()
     if not proteins:
         raise ValueError("dataset is empty")
     exact = [p for p in proteins if len(p.seq) == N_POINTS]
