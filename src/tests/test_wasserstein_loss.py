@@ -100,11 +100,36 @@ def _pd_limits(target_diags, history):
     return max(float(p[:, 1].max()) for p in pts if len(p)) * 1.1 + 0.1
 
 
-def _pts_limits(target_pts, history):
-    all_coords = np.concatenate([target_pts, *[f["pts"] for f in history]], axis=0)
+def _pts_limits(target_pts, history, align_pred_pts=False):
+    pred_pts = [
+        _kabsch_align(f["pts"], target_pts) if align_pred_pts else f["pts"]
+        for f in history
+    ]
+    all_coords = np.concatenate([target_pts, *pred_pts], axis=0)
     lo, hi = float(all_coords.min()), float(all_coords.max())
     pad = (hi - lo) * 0.1 + 0.1
     return lo - pad, hi + pad
+
+
+def _kabsch_align(pred, target):
+    pc = pred.mean(axis=0)
+    tc = target.mean(axis=0)
+    pred_c = pred - pc
+    tgt_c = target - tc
+    h = pred_c.T @ tgt_c
+    u, _, vt = np.linalg.svd(h)
+    r = vt.T @ u.T
+    if np.linalg.det(r) < 0:
+        vt = vt.copy()
+        vt[-1] *= -1
+        r = vt.T @ u.T
+    return (pred - pc) @ r.T + tc
+
+
+def _view_pred_pts(pred, target_pts, align_pred_pts):
+    if not align_pred_pts:
+        return pred
+    return _kabsch_align(pred, target_pts)
 
 
 def _attach_buttons(fig, show, n_frames):
@@ -133,7 +158,7 @@ def _attach_buttons(fig, show, n_frames):
     return go
 
 
-def show_history(history, target_diags, target_pts, title):
+def show_history(history, target_diags, target_pts, title, *, align_pred_pts=False):
     if not history:
         return
 
@@ -161,12 +186,12 @@ def show_history(history, target_diags, target_pts, title):
 
     col = 2
     ax_pts = fig.add_subplot(1, ncols, col, projection="3d")
-    pts_lo, pts_hi = _pts_limits(target_pts, history)
+    pts_lo, pts_hi = _pts_limits(target_pts, history, align_pred_pts=align_pred_pts)
     ax_pts.scatter(
         target_pts[:, 0], target_pts[:, 1], target_pts[:, 2],
         c="blue", label="target", s=30, alpha=0.8,
     )
-    init_pts = history[0]["pts"]
+    init_pts = _view_pred_pts(history[0]["pts"], target_pts, align_pred_pts)
     pred_sc = ax_pts.scatter(
         init_pts[:, 0], init_pts[:, 1], init_pts[:, 2],
         c="red", label="pred", s=30, alpha=0.8,
@@ -216,12 +241,12 @@ def show_history(history, target_diags, target_pts, title):
 
     def draw_pts(frame_idx):
         frame = history[frame_idx]
-        pts = frame["pts"]
+        pts = _view_pred_pts(frame["pts"], target_pts, align_pred_pts)
         trail_start = max(1, frame_idx - TRAIL_LENGTH + 1)
         pred_sc._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
         for seg_idx in range(trail_start, frame_idx + 1):
-            prev = history[seg_idx - 1]["pts"]
-            curr = history[seg_idx]["pts"]
+            prev = _view_pred_pts(history[seg_idx - 1]["pts"], target_pts, align_pred_pts)
+            curr = _view_pred_pts(history[seg_idx]["pts"], target_pts, align_pred_pts)
             alpha = _trail_alpha(frame_idx, seg_idx, trail_start)
             for i in range(len(curr)):
                 (ln,) = ax_pts.plot(
@@ -253,7 +278,10 @@ def show_history(history, target_diags, target_pts, title):
     plt.show(block=True)
 
 
-def train(name, target_adj, target_pts, get_pred_pts, optimizer, scheduler, device):
+def train(
+    name, target_adj, target_pts, get_pred_pts, optimizer, scheduler, device, *,
+    align_pred_pts=False,
+):
     n_pts = target_pts.shape[0]
     print(f"[{name}] {n_pts} points, {STEPS} steps, lr={LR}")
     history = []
@@ -267,12 +295,6 @@ def train(name, target_adj, target_pts, get_pred_pts, optimizer, scheduler, devi
         log_step = step % LOG_EVERY == 0 or step == STEPS
         loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
         loss_val = _scalar(breakdown["total"])
-
-        if step < STEPS:
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
 
         if log_step:
             h0 = _scalar(breakdown["wasserstein_h0"])
@@ -298,7 +320,19 @@ def train(name, target_adj, target_pts, get_pred_pts, optimizer, scheduler, devi
                 frame["h2"] = h2
             history.append(frame)
 
-    show_history(history, target_diags, target_pts.detach().cpu().numpy(), name)
+        if step < STEPS:
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+
+    show_history(
+        history,
+        target_diags,
+        target_pts.detach().cpu().numpy(),
+        name,
+        align_pred_pts=align_pred_pts,
+    )
 
 
 def _make_problem(device):
@@ -427,6 +461,7 @@ def run_minifold(device):
         optimizer,
         scheduler,
         device,
+        align_pred_pts=True,
     )
 
 
