@@ -20,6 +20,7 @@ void SamplingMethod::init(
     this->kernel = std::move(kernel);
     this->normalized_lambdas = normalized_lambdas;
     this->seed = seed;
+    this->device = device;
     if (normalized_lambdas) compute_total_edge_weights();
 }
 
@@ -144,6 +145,7 @@ void SamplingMethod::grad_laplacian_symbol(const double* theta, double* grad) {
             add_op();
             double weight = dist_to_diagonal_grid(node_at(i));
             d_i += 2 * weight * std::sin(theta[i]);
+            if (this->normalized_lambdas) d_i /= this->edge_weight_total;
             grad[i] = d_i;
         }
     } 

@@ -9,7 +9,11 @@
 namespace py = pybind11;
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  py::enum_<Device>(m, "Device")
+    .value("CPU", Device::CPU)
+    .value("CUDA", Device::CUDA);
   py::class_<Heat_Kernel, std::shared_ptr<Heat_Kernel>>(m, "Heat_Kernel")
+
     .def(py::init<int, int, double, int, double, double>(),
         py::arg("n"),
         py::arg("axis_dim"),
@@ -33,7 +37,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def("init", &SamplingMethod::init,
         py::arg("kernel"),
         py::arg("normalized_lambdas") = true,
-        py::arg("seed") = 42)
+        py::arg("seed") = 42,
+        py::arg("device") = Device::CPU)
     .def("build", &SamplingMethod::build, py::call_guard<py::gil_scoped_release>())
     .def_property_readonly("completed_ops", &SamplingMethod::completed_ops)
     .def_property_readonly("total_ops", &SamplingMethod::total_ops)

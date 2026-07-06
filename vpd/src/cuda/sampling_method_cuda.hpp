@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cuda_runtime.h>
 #include <driver_types.h>
+#include "sampling_method.hpp"
 
 #define CUDA_CHECK(expr_to_check) do {                  \
     cudaError_t result = expr_to_check;                 \
@@ -16,3 +17,4 @@
         exit (EXIT_FAILURE);                            \
     }                                                   \
 } while(0)
+

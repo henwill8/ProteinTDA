@@ -25,7 +25,7 @@ def main() -> None:
     timer = time.time()
     print("Creating heat kernels...")
     h0rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h0rff"])
-#    h1rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h1rff"])
+    h1rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h1rff"])
     print(f"Time taken to create heat kernels: {time.time() - timer:.2f} seconds")
 
     print("Running cases...")

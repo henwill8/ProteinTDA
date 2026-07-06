@@ -126,7 +126,7 @@ def create_heat_random_fourier_features(
     if show_progress:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
         sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
-        sampler.init(kernel, True, seed=seed)
+        sampler.init(kernel, True, seed=seed, device=_cpp.Device.CUDA)
         _build_kernel_with_progress(
             sampler,
             f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, s, t, seed)}",
@@ -134,7 +134,7 @@ def create_heat_random_fourier_features(
     else:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
         sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
-        sampler.init(kernel, True, seed=seed)
+        sampler.init(kernel, True, seed=seed, device=_cpp.Device.CUDA)
         sampler.build()
 
     vpd = _cpp.VPD(kernel)
