@@ -32,7 +32,6 @@ MODE = "minifold"  # "points", "mlp", or "minifold"
 MINIFOLD_CACHE_DIR = Path("cache/minifold")
 MINIFOLD_MODEL_SIZE = "12L"  # "12L" or "48L"
 MINIFOLD_RECYCLES = 3
-MINIFOLD_LR = 1e-4
 MINIFOLD_UNFREEZE_FOLD_BLOCKS = 0
 MINIFOLD_UNFREEZE_STRUCTURE_MODULE = True
 
@@ -77,6 +76,7 @@ def wasserstein_loss(pred_pts, target_diags):
     return loss, pred_diags, breakdown
 
 
+# This is all llm code cause I didnt want to figure out animation stuff:
 def _nearest_trails(prev, curr):
     if len(prev) == 0 or len(curr) == 0:
         return []
@@ -108,7 +108,6 @@ def _pts_limits(target_pts, history):
 
 
 def _attach_buttons(fig, show, n_frames):
-    """Keep Button refs alive or callbacks get garbage-collected."""
     state = {"i": 0}
     holders = []
 
@@ -316,10 +315,14 @@ def _load_protein(device):
     exact = [p for p in proteins if len(p.seq) == N_POINTS]
     if exact:
         protein = exact[0]
-        selection = f"exact length {N_POINTS}"
+        print(f"selected {protein.id}  len={N_POINTS}  (exact match for N_POINTS={N_POINTS})")
     else:
         protein = min(proteins, key=lambda p: (abs(len(p.seq) - N_POINTS), p.id))
-        selection = f"closest to N_POINTS={N_POINTS}"
+        n_seq = len(protein.seq)
+        print(
+            f"no protein with length {N_POINTS}; "
+            f"selected {protein.id}  len={n_seq}  "
+        )
     target_pts = atom_positions_from_sidechainnet(
         protein, SideChainAtom.CB, device=device,
     )
@@ -328,10 +331,6 @@ def _load_protein(device):
         raise ValueError(
             f"protein {protein.id} has {n_pts} C-beta points but len(seq)={len(protein.seq)}",
         )
-    print(
-        f"loaded protein {protein.id}  ({selection})  "
-        f"len={n_pts}  seq={protein.seq[:32]}...",
-    )
     return protein, target_pts
 
 
@@ -412,7 +411,7 @@ def run_minifold(device):
     print(f"MiniFold trainable parameters: {trainable:,} / {total:,}")
 
     trainable_params = [p for p in runner.model.parameters() if p.requires_grad]
-    optimizer, scheduler = _make_optimizer_scheduler(trainable_params, lr=MINIFOLD_LR)
+    optimizer, scheduler = _make_optimizer_scheduler(trainable_params)
     model_batch = runner.prepare_batch(protein, train=True)
 
     def get_pred_pts():
