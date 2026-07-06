@@ -12,8 +12,8 @@ from vpd import _cpp
 _CACHE_DIR = Path(__file__).resolve().parent.parent / "cache" / "heat_rff"
 
 
-def _heat_rff_cache_path(n, axis_dim, resolution, R, t, seed):
-    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_t-{t}-R-{R}_seed-{seed}.pt")
+def _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed):
+    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_s-{s}_t-{t}-R-{R}_seed-{seed}.pt")
 
 
 def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed) -> None:
@@ -31,12 +31,13 @@ def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed) -
             )
 
 
-def _format_kernel_config(n, axis_dim, resolution, R, t, seed) -> str:
+def _format_kernel_config(n, axis_dim, resolution, R, s, t, seed) -> str:
     parts = [
         f"n={n}",
         f"R={R}",
         f"axis_dim={axis_dim}",
         f"resolution={resolution}",
+        f"s={s}",
         f"t={t}",
         f"seed={seed}",
     ]
@@ -111,7 +112,7 @@ def _build_kernel_with_progress(sampler, config_line: str):
 def create_heat_random_fourier_features(
     n, axis_dim, resolution, R=100, s=1.0, t=1, seed=42, show_progress=True,
 ):
-    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, t, seed)
+    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed)
     if cache_path.is_file():
         cached = torch.load(cache_path, weights_only=False)
         _validate_cached_kernel(
@@ -128,7 +129,7 @@ def create_heat_random_fourier_features(
         sampler.init(kernel, True, seed=seed)
         _build_kernel_with_progress(
             sampler,
-            f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, t, seed)}",
+            f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, s, t, seed)}",
         )
     else:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)

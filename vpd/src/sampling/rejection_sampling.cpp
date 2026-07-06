@@ -52,7 +52,7 @@ void RejectionSampling::update_total_ops() {
     set_total_ops(committed + estimated_remaining);
 }
 
-void RejectionSampling::sample() {
+void RejectionSampling::cpu_sample() {
     const int total = kernel->R * kernel->dim;
     std::vector<double> total_thetas(total);
     std::vector<double> weights(kernel->R);
@@ -81,6 +81,17 @@ void RejectionSampling::sample() {
 
     kernel->thetas = std::move(total_thetas);
     kernel->weights = std::move(weights);
+}
+
+void RejectionSampling::sample() {
+    switch(this->device) {
+        case Device::CPU:
+            cpu_sample();
+            break;
+        case Device::CUDA:
+            cuda_sample();
+            break;
+    }
 }
 
 int RejectionSampling::attempts_completed() const {

@@ -20,7 +20,6 @@ void SamplingMethod::init(
     this->kernel = std::move(kernel);
     this->normalized_lambdas = normalized_lambdas;
     this->seed = seed;
-    this->device = device;
     if (normalized_lambdas) compute_total_edge_weights();
 }
 
@@ -77,8 +76,8 @@ void SamplingMethod::sample_thetas(std::vector<double>& thetas, std::mt19937& ge
     thetas.resize(kernel->dim);
     for (int j = 0; j < kernel->dim; ++j) {
         thetas[j] = theta_dist(gen);
-        add_op();
     }
+    add_op(kernel->dim);
 }
 
 double SamplingMethod::laplacian_symbol(const double* theta) {

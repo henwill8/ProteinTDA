@@ -19,7 +19,7 @@ void MALASampling::cpu_sample() {
     };
 
     auto wrap_pi = [&](double x) {
-        x = std::fmod(x, TWO_PI); if (x <= -std::numbers::pi) x += TWO_PI; else if (x > std::numbers::pi) x-= TWO_PI; return x;
+        x = std::fmod(x, TWO_PI); if (x <= -std::numbers::pi) x += TWO_PI; else if (x > std::numbers::pi) x -= TWO_PI; return x;
     };
 
     std::vector<double> curr_thetas(kernel->dim);

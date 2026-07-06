@@ -12,7 +12,7 @@ void MetropolisHastingsSampling::reset_progress() {
     set_total_ops(initial_ops + mcmc_passes * ops_per_mcmc_pass);
 }
 
-void MetropolisHastingsSampling::sample() {
+void MetropolisHastingsSampling::cpu_sample() {
     const double TWO_PI = 2.0 * std::numbers::pi;
     const int total = kernel->R * kernel->dim;
 
@@ -62,6 +62,17 @@ void MetropolisHastingsSampling::sample() {
 
     kernel->thetas = std::move(total_thetas);
     kernel->weights = std::move(weights);
+}
+
+void MetropolisHastingsSampling:sample() {
+    switch(this->device) {
+        case Device::CPU:
+            cpu_sample();
+            break;
+        case Device::CUDA:
+            cuda_sample();
+            break;
+    }
 }
 
 MetropolisHastingsSampling::MetropolisHastingsSampling(

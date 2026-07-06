@@ -1,7 +1,7 @@
 #pragma once
 
 #include "sampling_method.hpp"
-#include "mala_cuda.hpp"
+#include "mala_sampling_cuda.hpp"
 #include <utility>
 
 /**

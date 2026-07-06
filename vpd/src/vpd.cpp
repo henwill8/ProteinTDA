@@ -64,7 +64,7 @@ torch::Tensor VPD::vpd_loss_vector_(torch::Tensor pd1, torch::Tensor pd2, bool s
 
     const auto tensor_options = difference_vpd.options().dtype(torch::kFloat64);
     torch::Tensor theta_tensor = torch::from_blob(this->kernel->thetas.data(), {this->kernel->R, this->kernel->dim}, torch::kFloat64).clone().to(tensor_options);
-    torch::Tensor weights_tensor = torch::from_blob(this->kernel->weights.data(), {this->kernel->R}, torch::kFloat64).clone().to(tensor_options);
+    // torch::Tensor weights_tensor = torch::from_blob(this->kernel->weights.data(), {this->kernel->R}, torch::kFloat64).clone().to(tensor_options);
 
     // Calculating \langle \alpha, \theta^{(r)} \ranlge_{r = 1}^{R} (sorry I wrote it in LaTeX, I hope you understand it)
     // dim: [R, dim] x [dim] = [R], each ith entry is the ith dot product

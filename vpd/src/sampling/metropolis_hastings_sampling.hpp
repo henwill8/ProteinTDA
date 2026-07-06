@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sampling_method.hpp"
+#include "metropolis_hastings_cuda_sampling.hpp"
 
 /**
  * @brief Metropolis-Hastings sampling for heat kernel theta generation.
@@ -11,6 +12,7 @@ private:
     int mcmc_burn_in;
     int mcmc_thinning;
 
+    void cuda_sample();
     void reset_progress() override;
     void sample() override;
 
