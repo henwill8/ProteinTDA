@@ -1,18 +1,21 @@
 import urllib.request
 from collections import defaultdict
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from esm.pretrained import load_model_and_alphabet
 from minifold.data import data_pipeline, feature_pipeline
+from minifold.data.config import NUM_RES
 from minifold.data.of_data import of_inference
 from minifold.model.model import MiniFoldModel
 from minifold.utils.residue_constants import atom_order, restype_order_with_x_inverse
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
 from tmtools import tm_align
 
-from proteintda.config import CONFIG_OF
+from proteintda.config import CONFIG_OF, RUN_CONFIG
 from proteintda.minifold.loss import MiniFoldLoss
 from proteintda.utils.conversions import (
     SideChainAtom,
@@ -73,6 +76,12 @@ def _download_checkpoint(cache_dir: Path, model_size: str) -> Path:
     return checkpoint
 
 
+def _as_tensor(value) -> torch.Tensor:
+        if isinstance(value, torch.Tensor):
+            return value
+        return torch.as_tensor(value)
+
+
 class MiniFoldRunner:
     def __init__(
         self,
@@ -129,6 +138,7 @@ class MiniFoldRunner:
         self.device = device
         self.cache_dir = cache_dir
         self.model_size = model_size
+        self._frozen_modules: list[torch.nn.Module] = []
 
         if train:
             self.prepare_for_training(
@@ -138,18 +148,6 @@ class MiniFoldRunner:
         else:
             self.model.eval()
 
-    def _register_distogram_bins(self, *, max_dist: float = 25.0, no_bins: int | None = None) -> None:
-        """Adapted from minifold.train.model.MiniFold.__init__."""
-        if no_bins is None:
-            no_bins = self.model.fold.disto_bins
-        device = next(self.model.parameters()).device
-        boundaries = torch.linspace(2, max_dist, no_bins - 1, device=device)
-        lower = torch.tensor([1.0], device=device)
-        upper = torch.tensor([max_dist + 5.0], device=device)
-        exp_boundaries = torch.cat((lower, boundaries, upper))
-        mid_points = (exp_boundaries[:-1] + exp_boundaries[1:]) / 2
-        self.model.register_buffer("boundaries", boundaries)
-        self.model.register_buffer("mid_points", mid_points)
 
     def prepare_for_training(
         self,
@@ -162,7 +160,20 @@ class MiniFoldRunner:
             unfreeze_fold_blocks=unfreeze_fold_blocks,
             unfreeze_structure_module=unfreeze_structure_module,
         )
-        self.model.train()
+        self._set_training_mode()
+    
+    def _register_distogram_bins(self, *, max_dist: float = 25.0, no_bins: int | None = None) -> None:
+        """Adapted from minifold.train.model.MiniFold.__init__."""
+        if no_bins is None:
+            no_bins = self.model.fold.disto_bins
+        device = next(self.model.parameters()).device
+        boundaries = torch.linspace(2, max_dist, no_bins - 1, device=device)
+        lower = torch.tensor([1.0], device=device)
+        upper = torch.tensor([max_dist + 5.0], device=device)
+        exp_boundaries = torch.cat((lower, boundaries, upper))
+        mid_points = (exp_boundaries[:-1] + exp_boundaries[1:]) / 2
+        self.model.register_buffer("boundaries", boundaries)
+        self.model.register_buffer("mid_points", mid_points)
 
     def _configure_finetuning(
         self,
@@ -189,18 +200,76 @@ class MiniFoldRunner:
                     param.requires_grad = True
 
         if unfreeze_structure_module and model.use_structure_module:
-            for module in (model.structure_module, model.aux_heads, model.sz_project):
+            for module in (model.structure_module, model.sz_project):
                 for param in module.parameters():
                     param.requires_grad = True
+            for param in model.aux_heads.plddt.parameters():
+                param.requires_grad = True
 
-    @property
-    def trainable_parameter_count(self) -> tuple[int, int]:
-        trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        total = sum(p.numel() for p in self.model.parameters())
-        return trainable, total
+        self._unfreeze_enabled_aux_heads()
+        self._configure_dropout()
 
-    def prepare_batch(self, protein: SCNProtein, *, train: bool = False) -> dict:
-        """Build a batched model input from a SidechainNet protein."""
+    def _unfreeze_enabled_aux_heads(self) -> None:
+        if not self.model.use_structure_module:
+            return
+
+        loss_cfg = self.config_of.loss
+        heads = self.model.aux_heads
+
+        # TM and Experimentally Resolved heads are initialized randomly and need to be trained
+
+        if loss_cfg.experimentally_resolved.weight != 0.0 and hasattr(heads, "experimentally_resolved"):
+            for param in heads.experimentally_resolved.parameters():
+                param.requires_grad = True
+
+        if (
+            loss_cfg.tm.enabled
+            and loss_cfg.tm.weight != 0.0
+            and getattr(heads, "tm_enabled", False)
+            and hasattr(heads, "tm")
+        ):
+            for param in heads.tm.parameters():
+                param.requires_grad = True
+
+    def _configure_dropout(self) -> None:
+        # TODO: ensure this actually works
+        frozen_only = RUN_CONFIG.training.dropout
+        self._frozen_modules = []
+        for module in self.model.modules():
+            params = tuple(module.parameters())
+            if not params:
+                continue
+            if not any(p.requires_grad for p in params):
+                self._frozen_modules.append(module)
+            elif not frozen_only:
+                if isinstance(module, torch.nn.Dropout):
+                    module.p = 0.0
+                dropout = getattr(module, "dropout", None)
+                if isinstance(dropout, float):
+                    module.dropout = 0.0
+                dropout_prob = getattr(module, "dropout_prob", None)
+                if isinstance(dropout_prob, float):
+                    module.dropout_prob = 0.0
+
+    def _set_training_mode(self) -> None:
+        self.model.train()
+        for module in self._frozen_modules:
+            module.eval()
+    
+
+    def prepare_batch(
+        self,
+        proteins: SCNProtein | list[SCNProtein],
+        *,
+        train: bool = False,
+    ) -> dict:
+        if not isinstance(proteins, list):
+            proteins = [proteins]
+        singles = [self._prepare_single(protein, train=train) for protein in proteins]
+        return self._collate_batches(singles)
+
+
+    def _prepare_single(self, protein: SCNProtein, *, train: bool = False) -> dict:
         seq = str(protein.seq)
         config = self.config_of.data
 
@@ -237,175 +306,253 @@ class MiniFoldRunner:
                 restype_order_with_x_inverse[x.item()] for x in aatype
             )[:seq_length]
             encoded_seq = torch.tensor(self.alphabet.encode(of_seq), dtype=torch.long)
-            coords = batch_of["all_atom_positions"][:, 0:3, :, 0]
+            coords = _as_tensor(batch_of["all_atom_positions"][:, 0:3, :, 0])
+            batch_of = {k: _as_tensor(v) for k, v in batch_of.items()}
         else:
             batch_of = of_inference(seq, "predict", config)
+            seq_length = batch_of["seq_length"]
+            if isinstance(seq_length, torch.Tensor):
+                seq_length = int(seq_length.reshape(-1)[0].item())
+            else:
+                seq_length = int(seq_length)
             of_seq = "".join(
                 restype_order_with_x_inverse[x.item()] for x in batch_of["aatype"]
-            )[: batch_of["seq_length"]]
+            )[:seq_length]
             encoded_seq = torch.tensor(self.alphabet.encode(of_seq), dtype=torch.long)
-            batch_of = {k: v for k, v in batch_of.items() if k in (
-                "aatype",
-                "seq_mask",
-                "residx_atom37_to_atom14",
-                "atom37_atom_exists",
-            )}
+            batch_of = {
+                k: _as_tensor(v)
+                for k, v in batch_of.items()
+                if k in (
+                    "aatype",
+                    "seq_mask",
+                    "residx_atom37_to_atom14",
+                    "atom37_atom_exists",
+                )
+            }
             coords = None
 
         mask = batch_of["seq_mask"][:, 0].bool()
-        model_batch = {
-            "seq": encoded_seq.unsqueeze(0).to(self.device),
-            "mask": mask.unsqueeze(0).to(self.device),
-            "batch_of": {k: v.unsqueeze(0).to(self.device) for k, v in batch_of.items()},
+        single = {
+            "seq": encoded_seq,
+            "mask": mask,
+            "batch_of": batch_of,
+            "seq_length": seq_length,
         }
         if coords is not None:
-            model_batch["coords"] = coords.unsqueeze(0).to(self.device)
+            single["coords"] = coords
+        return single
+
+    @staticmethod
+    def _pad_residue_tensor(tensor: torch.Tensor, schema: list, target_len: int) -> torch.Tensor:
+        res_dims = [i for i, dim in enumerate(schema) if dim == NUM_RES]
+        if not res_dims:
+            return tensor
+
+        pad_len = target_len - tensor.shape[res_dims[0]]
+        if pad_len <= 0:
+            return tensor
+
+        ndim = tensor.ndim
+        padding = [0, 0] * ndim
+        for res_dim in res_dims:
+            reverse_idx = ndim - 1 - res_dim
+            padding[2 * reverse_idx + 1] = pad_len
+        return F.pad(tensor, tuple(padding))
+
+    def _collate_batch_of(self, items: list[dict], max_len: int) -> dict:
+        schema = self.config_of.data.common.feat
+        keys = items[0].keys()
+        collated: dict[str, torch.Tensor] = {}
+        for key in keys:
+            tensors = [item[key] for item in items]
+            if key in schema and NUM_RES in schema[key]:
+                collated[key] = torch.stack(
+                    [
+                        self._pad_residue_tensor(tensor, schema[key], max_len)
+                        for tensor in tensors
+                    ],
+                    dim=0,
+                )
+            else:
+                collated[key] = torch.stack(tensors, dim=0)
+        return collated
+
+    def _collate_batches(self, singles: list[dict]) -> dict:
+        max_len = max(single["seq_length"] for single in singles)
+        pad_idx = self.alphabet.padding_idx
+
+        seqs = [
+            F.pad(single["seq"], (0, max_len - single["seq"].shape[0]), value=pad_idx)
+            if max_len - single["seq"].shape[0] > 0 else single["seq"]
+            for single in singles
+        ]
+        masks = [
+            F.pad(single["mask"], (0, max_len - single["mask"].shape[0]), value=False)
+            if max_len - single["mask"].shape[0] > 0 else single["mask"]
+            for single in singles
+        ]
+        coords_list = [
+            F.pad(single["coords"], (0, 0, 0, 0, 0, max_len - single["coords"].shape[0]))
+            if max_len - single["coords"].shape[0] > 0 else single["coords"]
+            for single in singles if "coords" in single
+        ]
+
+        model_batch = {
+            "seq": torch.stack(seqs, dim=0).to(self.device),
+            "mask": torch.stack(masks, dim=0).to(self.device),
+            "batch_of": {
+                k: v.to(self.device) for k, v in self._collate_batch_of(
+                    [single["batch_of"] for single in singles],
+                    max_len,
+                ).items()
+            },
+        }
+   
+        if coords_list:
+            model_batch["coords"] = torch.stack(coords_list, dim=0).to(self.device)
         return model_batch
 
-    @torch.inference_mode()
-    def predict(self, protein: SCNProtein, *, num_recycling: int = 3) -> dict[str, torch.Tensor]:
-        seq = str(protein.seq)
-        model_batch = self.prepare_batch(protein, train=False)
-
-        autocast_device = "cuda" if self.device.type == "cuda" else self.device.type
-        with torch.autocast(autocast_device, dtype=torch.bfloat16):
-            try:
-                out = self.model(model_batch, num_recycling=num_recycling)
-            except torch.cuda.OutOfMemoryError:
-                torch.cuda.empty_cache()
-                print("OOM during MiniFold forward pass; skipping protein.")
-                return None
-
-        length = len(seq)
-        return {
-            "positions": out["final_atom_positions"][0, :length].float().cpu(),
-            "atom_mask": out["final_atom_mask"][0, :length].float().cpu(),
-            "plddt": out["plddt"][0, :length].float().cpu(),
-            "sequence": seq,
-        }
-
-    def build_optimizer(self, *, base_lr: float, struct_lr: float) -> torch.optim.Optimizer:
-        """Adapted from minifold.train.model.MiniFold.configure_optimizers."""
-        model = self.model
-        return torch.optim.Adam(
-            [
-                {
-                    "params": [
-                        p
-                        for name, p in model.named_parameters()
-                        if p.requires_grad
-                        and ("structure_module" not in name)
-                        and ("aux_heads" not in name)
-                        and ("sz_project" not in name)
-                    ],
-                    "lr": base_lr,
-                },
-                {
-                    "params": [
-                        p
-                        for name, p in model.named_parameters()
-                        if p.requires_grad
-                        and (
-                            ("structure_module" in name)
-                            or ("aux_heads" in name)
-                            or ("sz_project" in name)
-                        )
-                    ],
-                    "lr": struct_lr,
-                },
-            ],
-            lr=base_lr,
-        )
-
-    def training_step(
+    def run_batch(
         self,
-        batch,
-        optimizer: torch.optim.Optimizer,
-        loss_fn: MiniFoldLoss,
-        scaler: torch.amp.GradScaler,
+        batch: list[SCNProtein],
+        loss_fn: MiniFoldLoss | None = None,
         *,
-        train_recycles: int | None = None,
-        randomize_recycles: bool = True,
+        optimizer: torch.optim.Optimizer | None = None,
+        scaler: torch.amp.GradScaler | None = None,
+        num_recycling: int = 0,
+        randomize_recycles: bool = False,
         use_amp: bool = False,
         grad_clip_norm: float | None = 1.0,
+        backward: bool = False,
+        include_loss: bool = True,
+        include_metrics: bool = False,
     ) -> tuple[dict[str, float], int]:
-        self.model.train()
-        totals = defaultdict(float)
-        n = 0
+        """Single forward pass with an optional backward pass and optionally reports loss and/or metrics."""
+        include_loss = include_loss and loss_fn is not None
+        proteins = list(batch)
+        if not proteins:
+            return {}, 0
 
-        for protein in batch:
+        if backward:
+            self._set_training_mode()
+            was_training = True
             optimizer.zero_grad(set_to_none=True)
-            if randomize_recycles and train_recycles is not None and train_recycles > 0:
-                num_recycling = MiniFoldLoss.sample_recycles(train_recycles)
-            else:
-                num_recycling = train_recycles or 0
+        else:
+            was_training = self.model.training
+            self.model.eval()
 
-            model_batch = self.prepare_batch(protein, train=True)
-            autocast_device = "cuda" if self.device.type == "cuda" else self.device.type
-            with torch.autocast(autocast_device, dtype=torch.bfloat16, enabled=use_amp):
-                losses = loss_fn.compute(self.model, model_batch, num_recycling=num_recycling)
+        totals = defaultdict(float)
+        autocast_device = "cuda" if self.device.type == "cuda" else self.device.type
+        autocast_enabled = use_amp if backward else True
+        grad_context = nullcontext() if backward else torch.no_grad()
 
-            if losses is None:
-                continue
+        if randomize_recycles and num_recycling > 0:
+            recycles = MiniFoldLoss.sample_recycles(num_recycling)
+        else:
+            recycles = num_recycling
 
-            # TODO: remove this after ensuring that gradients are roughly in the same order of magnitude
-            fold_grad_norm, topo_grad_norm = _measure_component_grad_norms(
-                self.model,
-                optimizer,
-                losses,
-            )
-            totals["fold_grad_norm"] += fold_grad_norm
-            totals["topo_grad_norm"] += topo_grad_norm
+        outputs = None
+        try:
+            with grad_context, torch.autocast(
+                autocast_device, dtype=torch.bfloat16, enabled=autocast_enabled
+            ):
+                outputs = self._forward_batch(proteins, loss_fn, recycles)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            print("OOM during MiniFold forward pass; skipping batch.")
 
-            if scaler.is_enabled():
-                scaler.scale(losses["total"]).backward()
-                if grad_clip_norm is not None:
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(
-                        [p for p in self.model.parameters() if p.requires_grad],
-                        grad_clip_norm,
-                    )
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                losses["total"].backward()
-                if grad_clip_norm is not None:
-                    torch.nn.utils.clip_grad_norm_(
-                        [p for p in self.model.parameters() if p.requires_grad],
-                        grad_clip_norm,
-                    )
-                optimizer.step()
+        if outputs is None:
+            if not backward and was_training:
+                self._set_training_mode()
+            return dict(totals), 0
 
-            for key, value in losses.items():
-                totals[key] += float(value.detach())
-            n += 1
+        batch_n = outputs.get("batch_size", len(proteins))
 
-            if self.device.type == "cuda":
-                torch.cuda.empty_cache()
+        if backward:
+            self._apply_gradients(outputs["total"], optimizer, scaler, grad_clip_norm)
+        if include_loss:
+            for key, value in outputs.get("log", {}).items():
+                totals[key] += value * batch_n
+        if include_metrics:
+            self._accumulate_metrics(totals, proteins, outputs)
 
-        return dict(totals), n
+        if not backward and was_training:
+            self._set_training_mode()
 
-    def evaluation_step(
+        return dict(totals), batch_n
+
+    def _forward_batch(
         self,
-        batch,
-        *,
+        proteins: list[SCNProtein],
+        loss_fn: MiniFoldLoss | None,
         num_recycling: int,
-    ) -> tuple[list[float], list[float]]:
+    ) -> dict | None:
+        train = loss_fn is not None
+        model_batch = self.prepare_batch(proteins, train=train)
+        if loss_fn is not None:
+            result = loss_fn.compute(self.model, model_batch, num_recycling=num_recycling)
+            if result is not None:
+                result["batch_size"] = len(proteins)
+            return result
+
+        out = self.model(model_batch, num_recycling=num_recycling)
         ca_idx = atom_order["CA"]
-        plddt_scores: list[float] = []
-        tm_scores: list[float] = []
+        return {
+            "plddt": out["plddt"].detach(),
+            "pred_ca": out["final_atom_positions"][:, :, ca_idx].detach().float().cpu(),
+            "batch_size": len(proteins),
+        }
 
-        for protein in batch:
-            result = self.predict(protein, num_recycling=num_recycling)
-            if result is None:
-                continue
-            plddt_scores.append(float(result["plddt"].mean()))
-            pred_ca = result["positions"][:, ca_idx].numpy()
-            exp_ca = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).numpy()
-            alignment = tm_align(pred_ca, exp_ca, str(protein.seq), str(protein.seq))
-            tm_scores.append(alignment.tm_norm_chain2)
+    def _accumulate_metrics(
+        self,
+        totals: dict[str, float],
+        proteins: list[SCNProtein],
+        outputs: dict,
+    ) -> None:
+        plddt = outputs.get("plddt")
+        pred_ca = outputs.get("pred_ca")
+        for i, protein in enumerate(proteins):
+            length = len(str(protein.seq))
+            if plddt is not None:
+                totals["plddt"] += float(plddt[i, :length].mean().detach().cpu())
+            if pred_ca is not None:
+                exp_ca = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).cpu().numpy()
+                alignment = tm_align(
+                    pred_ca[i, :length].numpy(),
+                    exp_ca,
+                    str(protein.seq),
+                    str(protein.seq),
+                )
+                totals["tm"] += alignment.tm_norm_chain2
 
-        return plddt_scores, tm_scores
+    def _apply_gradients(
+        self,
+        loss: torch.Tensor,
+        optimizer: torch.optim.Optimizer,
+        scaler: torch.amp.GradScaler | None,
+        grad_clip_norm: float | None,
+    ) -> None:
+        trainable = [p for p in self.model.parameters() if p.requires_grad]
+        if scaler is not None and scaler.is_enabled():
+            scaler.scale(loss).backward()
+            if grad_clip_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(trainable, grad_clip_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if grad_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_(trainable, grad_clip_norm)
+            optimizer.step()
+
+    
+    @property
+    def trainable_parameter_count(self) -> tuple[int, int]:
+        trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in self.model.parameters())
+        return trainable, total
+
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
         self.model.load_state_dict({k: v.to(self.device) for k, v in state_dict.items()})
