@@ -584,7 +584,7 @@ class MiniFoldRunner:
 
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
-        self.model.load_state_dict({k: v.to(self.device) for k, v in state_dict.items()})
+        self.model.load_state_dict(state_dict)
 
     def snapshot_state_dict(self) -> dict[str, torch.Tensor]:
         return {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
