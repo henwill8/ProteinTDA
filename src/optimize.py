@@ -150,7 +150,7 @@ def run_optuna_fold(
             loss_fn,
             num_recycling=runtime.infer_recycles,
         )
-        val_tm_score = val_metrics["tm"]
+        val_tm_score = val_metrics["tm_score"]
 
         best_val_tm = max(max_val_tm, val_tm_score)
         trial.report(best_val_tm, report_num)
@@ -180,7 +180,7 @@ def run_optuna_fold(
         loss_fn=None,
         num_recycling=runtime.infer_recycles,
     )
-    tm_score = test_metrics["tm"]
+    tm_score = test_metrics["tm_score"]
 
     del runner
     if device.type == "cuda":
