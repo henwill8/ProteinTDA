@@ -104,29 +104,24 @@ def _pd_limits(target_diags, history):
     return max(float(p[:, 1].max()) for p in pts if len(p)) * 1.1 + 0.1
 
 
-def _coords_limits(coords):
-    lo, hi = float(coords.min()), float(coords.max())
+def _point_view_limits(target_pts):
+    lo = target_pts.min(axis=0)
+    hi = target_pts.max(axis=0)
     pad = (hi - lo) * 0.1 + 0.1
     return lo - pad, hi + pad
 
 
-def _kabsch_align(pred, target):
-    pc = pred.mean(axis=0)
-    tc = target.mean(axis=0)
-    pred_c = pred - pc
-    tgt_c = target - tc
-    h = pred_c.T @ tgt_c
-    u, _, vt = np.linalg.svd(h)
-    r = vt.T @ u.T
-    if np.linalg.det(r) < 0:
-        vt = vt.copy()
-        vt[-1] *= -1
-        r = vt.T @ u.T
-    return (pred - pc) @ r.T + tc
+def _tm_align(pred_ca, target_ca, seq):
+    return tm_align(
+        np.asarray(pred_ca, dtype=float),
+        np.asarray(target_ca, dtype=float),
+        seq,
+        seq,
+    )
 
 
-def _pts_axis_limits(target_pts, pred_pts):
-    return _coords_limits(np.concatenate([target_pts, pred_pts], axis=0))
+def _apply_tm_align(pts, alignment):
+    return pts @ alignment.u + alignment.t
 
 
 def _attach_controls(fig, show, n_steps, *, n_proteins=1):
@@ -258,8 +253,7 @@ def show_history(cases, title):
             by_label = dict(zip(labels, handles))
             ax_pd.legend(by_label.values(), by_label.keys(), loc="lower right")
 
-        view_pts = _kabsch_align(frame["pts"], target_pts)
-        lo, hi = _pts_axis_limits(target_pts, view_pts)
+        lo, hi = _point_view_limits(target_pts)
         target_scatters.append(
             ax_pts.scatter(
                 target_pts[:, 0], target_pts[:, 1], target_pts[:, 2],
@@ -267,12 +261,12 @@ def show_history(cases, title):
             )
         )
         pred_sc = ax_pts.scatter(
-            view_pts[:, 0], view_pts[:, 1], view_pts[:, 2],
+            frame["view_pts"][:, 0], frame["view_pts"][:, 1], frame["view_pts"][:, 2],
             c="red", label="pred", s=30, alpha=0.8,
         )
-        ax_pts.set_xlim(lo, hi)
-        ax_pts.set_ylim(lo, hi)
-        ax_pts.set_zlim(lo, hi)
+        ax_pts.set_xlim(lo[0], hi[0])
+        ax_pts.set_ylim(lo[1], hi[1])
+        ax_pts.set_zlim(lo[2], hi[2])
         ax_pts.legend(loc="upper right")
 
         protein_msg = ""
@@ -322,7 +316,7 @@ def _log_loss_config():
         print(f"  losses: {', '.join(parts)}")
 
 
-def _make_history_frame(step, pred_pts, pred_diags, breakdown):
+def _make_history_frame(step, pred_pts, pred_diags, breakdown, view_pts):
     frame = {
         "step": step,
         "loss": _scalar(breakdown["total"]),
@@ -330,6 +324,7 @@ def _make_history_frame(step, pred_pts, pred_diags, breakdown):
         "h1": _scalar(breakdown["wasserstein_h1"]),
         "pred": [_to_numpy(pred_diags, d).copy() for d in ACTIVE_HOMS],
         "pts": pred_pts.detach().cpu().numpy().copy(),
+        "view_pts": np.asarray(view_pts, dtype=float).copy(),
         "breakdown": breakdown,
     }
     if USE_H2:
@@ -338,7 +333,7 @@ def _make_history_frame(step, pred_pts, pred_diags, breakdown):
 
 
 def _log_step_metrics(step, scheduler, cases, step_results, *, batch_loss):
-    for case, (_, pred_diags, breakdown) in zip(cases, step_results):
+    for case, (_, pred_diags, breakdown, _) in zip(cases, step_results):
         tgt_counts = [len(d) for d in case["target_diags"]]
         pred_counts = [len(pred_diags[i]) for i in range(HOM_DIM)]
         hom_msg = (
@@ -421,11 +416,16 @@ def _load_cases(device, n=1, target_length=TARGET_LENGTH):
                 f"protein {protein.id} has {target_pts.shape[0]} C-beta points "
                 f"but len(seq)={len(protein.seq)}",
             )
+        target_ca = atom_positions_from_sidechainnet(
+            protein, SideChainAtom.CA, device=device,
+        )
         target_adj = _distance_matrix(target_pts).detach()
         cases.append({
             "protein": protein,
             "name": protein.id,
+            "seq": str(protein.seq),
             "target_pts": target_pts,
+            "target_ca_np": target_ca.detach().cpu().numpy(),
             "target_adj": target_adj,
             "target_diags": pd_from_graph(
                 target_adj, max_dimension=HOM_DIM, hom_dim=HOM_DIM,
@@ -448,11 +448,6 @@ def _ca_from_output(r_dict, index=0):
     return r_dict["final_atom_positions"][index, :, ca_idx].detach().float().cpu()
 
 
-def _tm_score(pred_ca, target_ca, seq):
-    alignment = tm_align(pred_ca.numpy(), target_ca.numpy(), seq, seq)
-    return float(alignment.tm_norm_chain2)
-
-
 def _case_step(r_dict, case, index, w, shared_breakdown):
     pred_pts = _cbeta_from_output(r_dict, index)
     breakdown = dict(shared_breakdown)
@@ -469,14 +464,13 @@ def _case_step(r_dict, case, index, w, shared_breakdown):
 
     breakdown["tda_w"] = w
     with torch.no_grad():
-        pred_ca = _ca_from_output(r_dict, index)
-        target_ca = atom_positions_from_sidechainnet(
-            case["protein"], SideChainAtom.CA, device=pred_pts.device,
-        ).cpu()
-        breakdown["tm"] = _tm_score(pred_ca, target_ca, str(case["protein"].seq))
+        pred_ca = _ca_from_output(r_dict, index).numpy()
+        alignment = _tm_align(pred_ca, case["target_ca_np"], case["seq"])
+        breakdown["tm"] = float(alignment.tm_norm_chain2)
+        view_pts = _apply_tm_align(pred_pts.detach().cpu().numpy(), alignment)
 
     breakdown["total"] = protein_total
-    return protein_total, pred_pts, pred_diags, breakdown
+    return protein_total, pred_pts, pred_diags, breakdown, view_pts
 
 
 def _batch_step(runner, model_batch, cases, structure_loss_fn, step):
@@ -507,11 +501,11 @@ def _batch_step(runner, model_batch, cases, structure_loss_fn, step):
     protein_totals = []
     results = []
     for index, case in enumerate(cases):
-        protein_total, pred_pts, pred_diags, breakdown = _case_step(
+        protein_total, pred_pts, pred_diags, breakdown, view_pts = _case_step(
             r_dict, case, index, w, shared_breakdown,
         )
         protein_totals.append(protein_total)
-        results.append((pred_pts, pred_diags, breakdown))
+        results.append((pred_pts, pred_diags, breakdown, view_pts))
 
     if USE_TDA_LOSS and w > 0:
         total = total + torch.stack(protein_totals).mean()
