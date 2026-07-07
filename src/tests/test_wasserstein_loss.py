@@ -1,4 +1,5 @@
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -23,7 +24,11 @@ from proteintda.utils.conversions import (
 )
 from proteintda.utils.dataset import load_all_proteins
 
-N_PROTEINS = 1
+N_PROTEINS = 200
+BATCH_SIZE = 8
+LOG_EVERY_NTH_PROTEIN = 20
+EVAL_FRACTION = 0.2
+EVAL_SEED = 42
 TARGET_LENGTH = 100
 STEPS = 200
 LR = 0.05
@@ -332,6 +337,30 @@ def _make_history_frame(step, pred_pts, pred_diags, breakdown, view_pts):
     return frame
 
 
+def _logged_protein_indices(n_proteins: int, every_nth: int) -> list[int]:
+    stride = max(1, every_nth)
+    return list(range(0, n_proteins, stride))
+
+
+class _NullScheduler:
+    def get_last_lr(self):
+        return [0.0]
+
+
+def _split_train_eval(cases, eval_fraction: float, seed: int):
+    if eval_fraction <= 0 or len(cases) <= 1:
+        return cases, []
+    n_eval = max(1, int(round(len(cases) * eval_fraction)))
+    if n_eval >= len(cases):
+        n_eval = len(cases) - 1
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(cases))
+    eval_set = set(perm[:n_eval])
+    train_cases = [case for i, case in enumerate(cases) if i not in eval_set]
+    eval_cases = [case for i, case in enumerate(cases) if i in eval_set]
+    return train_cases, eval_cases
+
+
 def _log_step_metrics(step, scheduler, cases, step_results, *, batch_loss):
     for case, (_, pred_diags, breakdown, _) in zip(cases, step_results):
         tgt_counts = [len(d) for d in case["target_diags"]]
@@ -355,37 +384,175 @@ def _log_step_metrics(step, scheduler, cases, step_results, *, batch_loss):
         print(f"  batch_loss={_scalar(batch_loss):.4f}")
 
 
-def train(cases, optimizer, scheduler, *, get_step, group_name="train"):
-    print(f"[{group_name}] {len(cases)} protein(s), {STEPS} steps, lr={LR}")
+def _run_batches(
+    runner,
+    cases,
+    structure_loss_fn,
+    step,
+    *,
+    batch_size: int,
+    train: bool,
+):
+    num_batches = max(1, (len(cases) + batch_size - 1) // batch_size)
+    batch_losses = []
+    step_results: dict[int, tuple] = {}
+
+    grad_context = nullcontext() if train else torch.no_grad()
+    with grad_context:
+        for batch_start in range(0, len(cases), batch_size):
+            batch_cases = cases[batch_start : batch_start + batch_size]
+            model_batch = runner.prepare_batch(
+                [case["protein"] for case in batch_cases],
+                train=train,
+            )
+            loss, results = _batch_step(
+                runner,
+                model_batch,
+                batch_cases,
+                structure_loss_fn,
+                step,
+                train=train,
+            )
+            batch_losses.append(loss)
+            if train:
+                (loss / num_batches).backward()
+            for local_idx, result in enumerate(results):
+                step_results[batch_start + local_idx] = result
+
+    if len(batch_losses) == 1:
+        batch_loss = batch_losses[0]
+    else:
+        batch_loss = torch.stack(batch_losses).mean()
+    return batch_loss, step_results
+
+
+def train(
+    runner,
+    cases,
+    optimizer,
+    scheduler,
+    structure_loss_fn,
+    *,
+    batch_size: int = 1,
+    log_every_nth: int = 1,
+    group_name: str = "train",
+):
+    print(
+        f"[{group_name}] {len(cases)} protein(s), batch_size={batch_size}, "
+        f"{STEPS} steps, lr={LR}"
+    )
     _log_loss_config()
-    histories = [[] for _ in cases]
+    logged_indices = _logged_protein_indices(len(cases), log_every_nth)
+    if log_every_nth > 1:
+        print(f"  logging/visualizing every {log_every_nth}th protein ({len(logged_indices)} total)")
+    histories = {idx: [] for idx in logged_indices}
     hom_label = "/".join(f"H{d}" for d in ACTIVE_HOMS)
     for case in cases:
         tgt_counts = [len(d) for d in case["target_diags"]]
         print(f"  {case['name']}: {case['target_pts'].shape[0]} points  {hom_label}={tgt_counts}")
 
     for step in range(STEPS + 1):
-        loss, step_results = get_step(step)
-        if step % LOG_EVERY == 0 or step == STEPS:
-            _log_step_metrics(step, scheduler, cases, step_results, batch_loss=loss)
-            for history, result in zip(histories, step_results):
-                history.append(_make_history_frame(step, *result))
-
         if step < STEPS:
             optimizer.zero_grad()
-            loss.backward()
+        batch_loss, step_results = _run_batches(
+            runner,
+            cases,
+            structure_loss_fn,
+            step,
+            batch_size=batch_size,
+            train=True,
+        )
+        if step % LOG_EVERY == 0 or step == STEPS:
+            logged_cases = [cases[i] for i in logged_indices]
+            logged_results = [step_results[i] for i in logged_indices]
+            _log_step_metrics(
+                step,
+                scheduler,
+                logged_cases,
+                logged_results,
+                batch_loss=batch_loss,
+            )
+            for idx in logged_indices:
+                histories[idx].append(_make_history_frame(step, *step_results[idx]))
+
+        if step < STEPS:
             optimizer.step()
             scheduler.step()
 
     show_history(
         [
             {
-                "name": case["name"],
-                "target_diags": case["target_diags"],
-                "target_pts": case["target_pts_np"],
-                "history": history,
+                "name": cases[idx]["name"],
+                "target_diags": cases[idx]["target_diags"],
+                "target_pts": cases[idx]["target_pts_np"],
+                "history": histories[idx],
             }
-            for case, history in zip(cases, histories)
+            for idx in logged_indices
+            if histories[idx]
+        ],
+        group_name,
+    )
+
+
+def evaluate(
+    runner,
+    cases,
+    structure_loss_fn,
+    *,
+    batch_size: int = 1,
+    log_every_nth: int = 1,
+    group_name: str = "eval",
+):
+    if not cases:
+        return
+
+    print(
+        f"[{group_name}] {len(cases)} protein(s), batch_size={batch_size} "
+        f"(held out from training)"
+    )
+    logged_indices = _logged_protein_indices(len(cases), log_every_nth)
+    if log_every_nth > 1:
+        print(f"  logging/visualizing every {log_every_nth}th protein ({len(logged_indices)} total)")
+    hom_label = "/".join(f"H{d}" for d in ACTIVE_HOMS)
+    for case in cases:
+        tgt_counts = [len(d) for d in case["target_diags"]]
+        print(f"  {case['name']}: {case['target_pts'].shape[0]} points  {hom_label}={tgt_counts}")
+
+    runner.model.eval()
+    for module in runner._frozen_modules:
+        module.eval()
+
+    batch_loss, step_results = _run_batches(
+        runner,
+        cases,
+        structure_loss_fn,
+        STEPS,
+        batch_size=batch_size,
+        train=False,
+    )
+    logged_cases = [cases[i] for i in logged_indices]
+    logged_results = [step_results[i] for i in logged_indices]
+    _log_step_metrics(
+        STEPS,
+        _NullScheduler(),
+        logged_cases,
+        logged_results,
+        batch_loss=batch_loss,
+    )
+
+    histories = {
+        idx: [_make_history_frame(STEPS, *step_results[idx])]
+        for idx in logged_indices
+    }
+    show_history(
+        [
+            {
+                "name": cases[idx]["name"],
+                "target_diags": cases[idx]["target_diags"],
+                "target_pts": cases[idx]["target_pts_np"],
+                "history": histories[idx],
+            }
+            for idx in logged_indices
         ],
         group_name,
     )
@@ -473,8 +640,13 @@ def _case_step(r_dict, case, index, w, shared_breakdown):
     return protein_total, pred_pts, pred_diags, breakdown, view_pts
 
 
-def _batch_step(runner, model_batch, cases, structure_loss_fn, step):
-    runner._set_training_mode()
+def _batch_step(runner, model_batch, cases, structure_loss_fn, step, *, train=True):
+    if train:
+        runner._set_training_mode()
+    else:
+        runner.model.eval()
+        for module in runner._frozen_modules:
+            module.eval()
     r_dict = runner.model(model_batch, num_recycling=MINIFOLD_RECYCLES)
     w = tda_weight(step)
 
@@ -518,7 +690,13 @@ def _batch_step(runner, model_batch, cases, structure_loss_fn, step):
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    cases = _load_cases(device, n=N_PROTEINS)
+    all_cases = _load_cases(device, n=N_PROTEINS)
+    train_cases, eval_cases = _split_train_eval(all_cases, EVAL_FRACTION, EVAL_SEED)
+    print(
+        f"split {len(all_cases)} proteins -> "
+        f"{len(train_cases)} train, {len(eval_cases)} eval "
+        f"(eval_fraction={EVAL_FRACTION})"
+    )
     runner = MiniFoldRunner(
         MINIFOLD_CACHE_DIR,
         model_size=MINIFOLD_MODEL_SIZE,
@@ -536,16 +714,27 @@ def main():
     )
     scheduler = StepLR(optimizer, step_size=SCHEDULER_STEP, gamma=SCHEDULER_GAMMA)
     structure_loss_fn = AlphaFoldLoss(CONFIG_OF.loss)
-    model_batch = runner.prepare_batch([case["protein"] for case in cases], train=True)
 
-    group_name = f"minifold:{cases[0]['name']}" if len(cases) == 1 else f"minifold x{len(cases)}"
     train(
-        cases,
+        runner,
+        train_cases,
         optimizer,
         scheduler,
-        get_step=lambda step: _batch_step(runner, model_batch, cases, structure_loss_fn, step),
-        group_name=group_name,
+        structure_loss_fn,
+        batch_size=BATCH_SIZE,
+        log_every_nth=LOG_EVERY_NTH_PROTEIN,
+        group_name="train",
     )
+
+    if eval_cases:
+        evaluate(
+            runner,
+            eval_cases,
+            structure_loss_fn,
+            batch_size=BATCH_SIZE,
+            log_every_nth=LOG_EVERY_NTH_PROTEIN,
+            group_name="eval",
+        )
 
 
 if __name__ == "__main__":
