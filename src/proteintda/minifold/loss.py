@@ -226,6 +226,7 @@ class MiniFoldLoss:
         batch: dict,
         *,
         num_recycling: int = 0,
+        include_metrics: bool = False,
     ) -> dict[str, torch.Tensor] | None:
         """Based on minifold.train.model.MiniFold.training_step."""
         try:
@@ -289,13 +290,14 @@ class MiniFoldLoss:
 
         log["total"] = _as_scalar(total)
         result: dict[str, torch.Tensor | float | dict[str, float]] = {"total": total, "log": log}
-        if "plddt" in r_dict:
-            result["plddt"] = r_dict["plddt"].detach()
-        if "final_atom_positions" in r_dict:
-            ca_idx = atom_order["CA"]
-            result["pred_ca"] = (
-                r_dict["final_atom_positions"][:, :, ca_idx].detach().float().cpu()
-            )
+        if include_metrics:
+            if "plddt" in r_dict:
+                result["plddt"] = r_dict["plddt"].detach()
+            if "final_atom_positions" in r_dict:
+                ca_idx = atom_order["CA"]
+                result["pred_ca"] = (
+                    r_dict["final_atom_positions"][:, :, ca_idx].detach().float().cpu()
+                )
         return result
 
     @staticmethod

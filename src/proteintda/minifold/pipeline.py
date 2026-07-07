@@ -78,7 +78,7 @@ def train_epoch(
             grad_clip_norm=grad_clip_norm,
             backward=True,
             include_loss=True,
-            include_metrics=True,
+            include_metrics=False,
         )
         for key, value in batch_totals.items():
             totals[key] += value
