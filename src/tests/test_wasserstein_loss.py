@@ -510,7 +510,7 @@ def _batch_step(runner, model_batch, cases, structure_loss_fn, step):
     if USE_TDA_LOSS and w > 0:
         total = total + torch.stack(protein_totals).mean()
 
-    for _, _, breakdown in results:
+    for _, _, breakdown, _ in results:
         breakdown["batch_total"] = total.detach()
 
     return total, results
