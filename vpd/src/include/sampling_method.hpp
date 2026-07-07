@@ -78,6 +78,7 @@ protected:
 public:
     void add_op();
     void add_op(int amount);
+    void add_op(int64_t amount);
     int64_t ops_per_laplacian_{0};
     int64_t ops_per_theta_sampling_{0};
 };

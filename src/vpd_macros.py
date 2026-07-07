@@ -110,8 +110,9 @@ def _build_kernel_with_progress(sampler, config_line: str):
 
 
 def create_heat_random_fourier_features(
-    n, axis_dim, resolution, R=100, s=1.0, t=1, seed=42, show_progress=True,
+    n, axis_dim, resolution, R=100, s=1.0, t=1, seed=42, device=_cpp.Device.CPU, show_progress=True,
 ):
+    print("HI")
     cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed)
     if cache_path.is_file():
         cached = torch.load(cache_path, weights_only=False)
@@ -126,7 +127,7 @@ def create_heat_random_fourier_features(
     if show_progress:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
         sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
-        sampler.init(kernel, True, seed=seed, device=_cpp.Device.CUDA)
+        sampler.init(kernel, True, seed=seed, device=device)
         _build_kernel_with_progress(
             sampler,
             f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, s, t, seed)}",
@@ -134,7 +135,7 @@ def create_heat_random_fourier_features(
     else:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
         sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
-        sampler.init(kernel, True, seed=seed, device=_cpp.Device.CUDA)
+        sampler.init(kernel, True, seed=seed, device=device)
         sampler.build()
 
     vpd = _cpp.VPD(kernel)

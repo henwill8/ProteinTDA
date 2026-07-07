@@ -36,8 +36,8 @@ def main() -> None:
     run_case("H0 different diagrams", h0rff, pd_a, pd_b)
     run_case("H0 identical diagrams", h0rff, pd_same, pd_same.clone())
 
-    #run_case("H1 different diagrams", h1rff, pd_a, pd_b)
-    #run_case("H1 identical diagrams", h1rff, pd_same, pd_same.clone())
+    run_case("H1 different diagrams", h1rff, pd_a, pd_b)
+    run_case("H1 identical diagrams", h1rff, pd_same, pd_same.clone())
 
 
 if __name__ == "__main__":

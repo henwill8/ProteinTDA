@@ -1,6 +1,7 @@
 #include "sampling_method.hpp"
 
 #include <cmath>
+#include <iostream>
 #include <numbers>
 #include <random>
 #include <sstream>
@@ -178,6 +179,10 @@ void SamplingMethod::add_op() {
 }
 
 void SamplingMethod::add_op(int amount) {
+    completed_ops_.fetch_add(amount, std::memory_order_relaxed);
+}
+
+void SamplingMethod::add_op(int64_t amount) {
     completed_ops_.fetch_add(amount, std::memory_order_relaxed);
 }
 
