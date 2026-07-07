@@ -261,6 +261,19 @@ def patch_loss(path: Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def patch_esm(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    if "attention_mask.unsqueeze(-1).unsqueeze(-1)" in text:
+        return
+    fixed = text.replace(
+        "attention_mask[:, None, None, :, :]",
+        "attention_mask.unsqueeze(-1).unsqueeze(-1)",
+    )
+    if fixed == text:
+        raise SystemExit(f"ESM patch pattern not found in {path}")
+    path.write_text(fixed, encoding="utf-8")
+
+
 def main() -> int:
     WHEELS_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
@@ -269,6 +282,7 @@ def main() -> int:
         (src / "pyproject.toml").write_text(PYPROJECT, encoding="utf-8")
         patch_kernel_file(src / "minifold" / "model" / "kernels" / "gating.py")
         patch_kernel_file(src / "minifold" / "model" / "kernels" / "mlp.py")
+        patch_esm(src / "minifold" / "utils" / "esm.py")
         patch_heads(src / "minifold" / "model" / "heads.py")
         patch_loss(src / "minifold" / "train" / "loss.py")
         subprocess.run(
