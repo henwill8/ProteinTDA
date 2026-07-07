@@ -113,6 +113,7 @@ def create_heat_random_fourier_features(
 ):
     cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, t, seed)
     if cache_path.is_file():
+        print(f"Loading cached heat kernel from {cache_path}...", flush=True)
         cached = torch.load(cache_path, weights_only=False)
         _validate_cached_kernel(
             cached, n=n, axis_dim=axis_dim, resolution=resolution, R=R, seed=seed
@@ -120,6 +121,7 @@ def create_heat_random_fourier_features(
         kernel = _cpp.Heat_Kernel(
             n, axis_dim, resolution, R, s, t, cached["thetas"], cached["weights"],
         )
+        print(f"Loaded heat kernel cache: {cache_path.name}", flush=True)
         return _cpp.VPD(kernel)
 
     if show_progress:
@@ -155,16 +157,14 @@ def create_heat_random_fourier_features(
 
 def create_vpd_kernels(loss_config, heat_rff_config):
     """Create VPD heat kernels only when the corresponding loss term is enabled."""
-    h0rff = (
-        create_heat_random_fourier_features(**heat_rff_config["h0rff"])
-        if loss_config.vpd_h0.enabled
-        else None
-    )
-    h1rff = (
-        create_heat_random_fourier_features(**heat_rff_config["h1rff"])
-        if loss_config.vpd_h1.enabled
-        else None
-    )
+    h0rff = None
+    if loss_config.vpd_h0.enabled:
+        print("Preparing VPD h0 kernel...", flush=True)
+        h0rff = create_heat_random_fourier_features(**heat_rff_config["h0rff"])
+    h1rff = None
+    if loss_config.vpd_h1.enabled:
+        print("Preparing VPD h1 kernel...", flush=True)
+        h1rff = create_heat_random_fourier_features(**heat_rff_config["h1rff"])
     return h0rff, h1rff
 
 

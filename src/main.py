@@ -34,6 +34,7 @@ def main() -> int:
     runner = KFoldRunner(proteins)
 
     if runtime.baseline:
+        print("Starting k-fold baseline evaluation...", flush=True)
         fold_fn = partial(
             run_baseline_fold,
             proteins=proteins,
@@ -44,7 +45,9 @@ def main() -> int:
         )
         log_path = RUN_CONFIG.logging.minifold_log_file
     else:
+        print(f"Building loss function...", flush=True)
         loss_fn = build_loss_fn()
+        print(f"Starting k-fold training...", flush=True)
         fold_fn = partial(
             run_train_fold,
             proteins=proteins,

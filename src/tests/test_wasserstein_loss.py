@@ -121,7 +121,7 @@ def _tm_align(pred_ca, target_ca, seq):
 
 
 def _apply_tm_align(pts, alignment):
-    return pts @ alignment.u + alignment.t
+    return pts @ alignment.u.T + alignment.t
 
 
 def _attach_controls(fig, show, n_steps, *, n_proteins=1):
@@ -297,8 +297,8 @@ def _extra_loss_msg(breakdown):
         parts.append(f"disto={_scalar(breakdown['distogram']):.4f}")
     if "structure" in breakdown:
         parts.append(f"struct={_scalar(breakdown['structure']):.4f}")
-    if "tm" in breakdown:
-        parts.append(f"tm={breakdown['tm']:.4f}")
+    if "tm_score" in breakdown:
+        parts.append(f"tm_score={breakdown['tm_score']:.4f}")
     return f"  {'  '.join(parts)}" if parts else ""
 
 
@@ -466,7 +466,7 @@ def _case_step(r_dict, case, index, w, shared_breakdown):
     with torch.no_grad():
         pred_ca = _ca_from_output(r_dict, index).numpy()
         alignment = _tm_align(pred_ca, case["target_ca_np"], case["seq"])
-        breakdown["tm"] = float(alignment.tm_norm_chain2)
+        breakdown["tm_score"] = float(alignment.tm_norm_chain2)
         view_pts = _apply_tm_align(pred_pts.detach().cpu().numpy(), alignment)
 
     breakdown["total"] = protein_total

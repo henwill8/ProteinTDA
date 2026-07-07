@@ -14,11 +14,12 @@ from proteintda.tda.vpd_kernels import create_vpd_kernels
 
 
 def build_loss_fn() -> MiniFoldLoss:
+    print("Preparing VPD kernels...", flush=True)
     h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
     return MiniFoldLoss(CONFIG_OF, loss_config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
 
 
-_METRIC_KEYS = ("plddt", "tm")
+_METRIC_KEYS = ("plddt", "tm_score")
 
 
 def _format_metrics_line(name: str, metrics: dict[str, float]) -> str:
@@ -166,9 +167,9 @@ def run_baseline_fold(
     )
     print(
         f"fold {fold + 1}/{n_splits}  "
-        f"mean_plddt={metrics['plddt']:.4f}  mean_tm={metrics['tm']:.4f}"
+        f"mean_plddt={metrics['plddt']:.4f}  mean_tm={metrics['tm_score']:.4f}"
     )
-    return metrics["plddt"], metrics["tm"]
+    return metrics["plddt"], metrics["tm_score"]
 
 
 def run_train_fold(
@@ -249,8 +250,8 @@ def run_train_fold(
             num_recycling=runtime.infer_recycles,
             loss_fn=loss_fn,
         )
-        if val_metrics["tm"] > max_val_tm:
-            max_val_tm = val_metrics["tm"]
+        if val_metrics["tm_score"] > max_val_tm:
+            max_val_tm = val_metrics["tm_score"]
             patience = 0
             best_model_weights = runner.snapshot_state_dict()
         else:
@@ -282,6 +283,6 @@ def run_train_fold(
     )
     print(
         f"fold {fold + 1}/{n_splits}  "
-        f"mean_plddt={test_metrics['plddt']:.4f}  mean_tm={test_metrics['tm']:.4f}"
+        f"mean_plddt={test_metrics['plddt']:.4f}  mean_tm={test_metrics['tm_score']:.4f}"
     )
-    return test_metrics["plddt"], test_metrics["tm"]
+    return test_metrics["plddt"], test_metrics["tm_score"]

@@ -270,7 +270,8 @@ class MiniFoldLoss:
                     if name in ("loss", "unscaled_loss"):
                         continue
                     of_weight = self.config_of.loss[name].weight
-                    log[name] = _as_scalar(self.loss_config.structure.weight * of_weight * value)
+                    log_key = "tm_loss" if name == "tm" else name # prevent tm loss and tm score from merging
+                    log[log_key] = _as_scalar(self.loss_config.structure.weight * of_weight * value)
 
             if self.tda_enabled and self.loss_config.tda.enabled:
                 tda_loss, tda_breakdown = self._tda(
