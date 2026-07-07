@@ -18,10 +18,7 @@ def main() -> None:
     timer = time.time()
     print("Creating heat kernels...")
     h0rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h0rff"])
-<<<<<<< HEAD:src/tests/test_vpd_loss.py
-=======
     h1rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h1rff"])
->>>>>>> vpd:src/test_vpd_loss.py
     print(f"Time taken to create heat kernels: {time.time() - timer:.2f} seconds")
 
     print("Running cases...")
@@ -32,12 +29,8 @@ def main() -> None:
     run_case("H0 different diagrams", h0rff, pd_a, pd_b)
     run_case("H0 identical diagrams", h0rff, pd_same, pd_same.clone())
 
-<<<<<<< HEAD:src/tests/test_vpd_loss.py
-=======
     run_case("H1 different diagrams", h1rff, pd_a, pd_b)
     run_case("H1 identical diagrams", h1rff, pd_same, pd_same.clone())
-
->>>>>>> vpd:src/test_vpd_loss.py
 
 if __name__ == "__main__":
     try:
