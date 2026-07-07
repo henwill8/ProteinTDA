@@ -5,8 +5,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from esm.pretrained import load_model_and_alphabet
 from minifold.data import data_pipeline, feature_pipeline
+from minifold.data.config import NUM_RES
 from minifold.data.of_data import of_inference
 from minifold.model.model import MiniFoldModel
 from minifold.utils.residue_constants import atom_order, restype_order_with_x_inverse
@@ -34,6 +36,12 @@ def _download_checkpoint(cache_dir: Path, model_size: str) -> Path:
         print(f"Downloading MiniFold {model_size} weights to {checkpoint}...")
         urllib.request.urlretrieve(MODEL_URLS[model_size], checkpoint)
     return checkpoint
+
+
+def _as_tensor(value) -> torch.Tensor:
+        if isinstance(value, torch.Tensor):
+            return value
+        return torch.as_tensor(value)
 
 
 class MiniFoldRunner:
@@ -211,8 +219,19 @@ class MiniFoldRunner:
             module.eval()
     
 
-    def prepare_batch(self, protein: SCNProtein, *, train: bool = False) -> dict:
-        """Build a batched model input from a SidechainNet protein."""
+    def prepare_batch(
+        self,
+        proteins: SCNProtein | list[SCNProtein],
+        *,
+        train: bool = False,
+    ) -> dict:
+        if not isinstance(proteins, list):
+            proteins = [proteins]
+        singles = [self._prepare_single(protein, train=train) for protein in proteins]
+        return self._collate_batches(singles)
+
+
+    def _prepare_single(self, protein: SCNProtein, *, train: bool = False) -> dict:
         seq = str(protein.seq)
         config = self.config_of.data
 
@@ -249,34 +268,115 @@ class MiniFoldRunner:
                 restype_order_with_x_inverse[x.item()] for x in aatype
             )[:seq_length]
             encoded_seq = torch.tensor(self.alphabet.encode(of_seq), dtype=torch.long)
-            coords = batch_of["all_atom_positions"][:, 0:3, :, 0]
+            coords = _as_tensor(batch_of["all_atom_positions"][:, 0:3, :, 0])
+            batch_of = {k: _as_tensor(v) for k, v in batch_of.items()}
         else:
             batch_of = of_inference(seq, "predict", config)
+            seq_length = batch_of["seq_length"]
+            if isinstance(seq_length, torch.Tensor):
+                seq_length = int(seq_length.reshape(-1)[0].item())
+            else:
+                seq_length = int(seq_length)
             of_seq = "".join(
                 restype_order_with_x_inverse[x.item()] for x in batch_of["aatype"]
-            )[: batch_of["seq_length"]]
+            )[:seq_length]
             encoded_seq = torch.tensor(self.alphabet.encode(of_seq), dtype=torch.long)
-            batch_of = {k: v for k, v in batch_of.items() if k in (
-                "aatype",
-                "seq_mask",
-                "residx_atom37_to_atom14",
-                "atom37_atom_exists",
-            )}
+            batch_of = {
+                k: _as_tensor(v)
+                for k, v in batch_of.items()
+                if k in (
+                    "aatype",
+                    "seq_mask",
+                    "residx_atom37_to_atom14",
+                    "atom37_atom_exists",
+                )
+            }
             coords = None
 
         mask = batch_of["seq_mask"][:, 0].bool()
-        model_batch = {
-            "seq": encoded_seq.unsqueeze(0).to(self.device),
-            "mask": mask.unsqueeze(0).to(self.device),
-            "batch_of": {k: v.unsqueeze(0).to(self.device) for k, v in batch_of.items()},
+        single = {
+            "seq": encoded_seq,
+            "mask": mask,
+            "batch_of": batch_of,
+            "seq_length": seq_length,
         }
         if coords is not None:
-            model_batch["coords"] = coords.unsqueeze(0).to(self.device)
+            single["coords"] = coords
+        return single
+
+    @staticmethod
+    def _pad_residue_tensor(tensor: torch.Tensor, schema: list, target_len: int) -> torch.Tensor:
+        res_dims = [i for i, dim in enumerate(schema) if dim == NUM_RES]
+        if not res_dims:
+            return tensor
+
+        pad_len = target_len - tensor.shape[res_dims[0]]
+        if pad_len <= 0:
+            return tensor
+
+        ndim = tensor.ndim
+        padding = [0, 0] * ndim
+        for res_dim in res_dims:
+            reverse_idx = ndim - 1 - res_dim
+            padding[2 * reverse_idx + 1] = pad_len
+        return F.pad(tensor, tuple(padding))
+
+    def _collate_batch_of(self, items: list[dict], max_len: int) -> dict:
+        schema = self.config_of.data.common.feat
+        keys = items[0].keys()
+        collated: dict[str, torch.Tensor] = {}
+        for key in keys:
+            tensors = [item[key] for item in items]
+            if key in schema and NUM_RES in schema[key]:
+                collated[key] = torch.stack(
+                    [
+                        self._pad_residue_tensor(tensor, schema[key], max_len)
+                        for tensor in tensors
+                    ],
+                    dim=0,
+                )
+            else:
+                collated[key] = torch.stack(tensors, dim=0)
+        return collated
+
+    def _collate_batches(self, singles: list[dict]) -> dict:
+        max_len = max(single["seq_length"] for single in singles)
+        pad_idx = self.alphabet.padding_idx
+
+        seqs = [
+            F.pad(single["seq"], (0, max_len - single["seq"].shape[0]), value=pad_idx)
+            if max_len - single["seq"].shape[0] > 0 else single["seq"]
+            for single in singles
+        ]
+        masks = [
+            F.pad(single["mask"], (0, max_len - single["mask"].shape[0]), value=False)
+            if max_len - single["mask"].shape[0] > 0 else single["mask"]
+            for single in singles
+        ]
+        coords_list = [
+            F.pad(single["coords"], (0, 0, 0, 0, 0, max_len - single["coords"].shape[0]))
+            if max_len - single["coords"].shape[0] > 0 else single["coords"]
+            for single in singles if "coords" in single
+        ]
+
+        model_batch = {
+            "seq": torch.stack(seqs, dim=0).to(self.device),
+            "mask": torch.stack(masks, dim=0).to(self.device),
+            "batch_of": {
+                k: v.to(self.device) for k, v in self._collate_batch_of(
+                    [single["batch_of"] for single in singles],
+                    max_len,
+                ).items()
+            },
+        }
+   
+        if coords_list:
+            model_batch["coords"] = torch.stack(coords_list, dim=0).to(self.device)
         return model_batch
 
     def run_batch(
         self,
-        batch,
+        batch: list[SCNProtein],
         loss_fn: MiniFoldLoss | None = None,
         *,
         optimizer: torch.optim.Optimizer | None = None,
@@ -291,94 +391,101 @@ class MiniFoldRunner:
     ) -> tuple[dict[str, float], int]:
         """Single forward pass with an optional backward pass and optionally reports loss and/or metrics."""
         include_loss = include_loss and loss_fn is not None
+        proteins = list(batch)
+        if not proteins:
+            return {}, 0
 
         if backward:
             self._set_training_mode()
             was_training = True
+            optimizer.zero_grad(set_to_none=True)
         else:
             was_training = self.model.training
             self.model.eval()
 
         totals = defaultdict(float)
-        n = 0
         autocast_device = "cuda" if self.device.type == "cuda" else self.device.type
         autocast_enabled = use_amp if backward else True
         grad_context = nullcontext() if backward else torch.no_grad()
 
-        for protein in batch:
-            if backward:
-                optimizer.zero_grad(set_to_none=True)
-            if randomize_recycles and num_recycling > 0:
-                recycles = MiniFoldLoss.sample_recycles(num_recycling)
-            else:
-                recycles = num_recycling
+        if randomize_recycles and num_recycling > 0:
+            recycles = MiniFoldLoss.sample_recycles(num_recycling)
+        else:
+            recycles = num_recycling
 
-            try:
-                with grad_context, torch.autocast(
-                    autocast_device, dtype=torch.bfloat16, enabled=autocast_enabled
-                ):
-                    outputs = self._forward_outputs(protein, loss_fn, recycles)
-            except torch.cuda.OutOfMemoryError:
-                torch.cuda.empty_cache()
-                print("OOM during MiniFold forward pass; skipping protein.")
-                continue
+        outputs = None
+        try:
+            with grad_context, torch.autocast(
+                autocast_device, dtype=torch.bfloat16, enabled=autocast_enabled
+            ):
+                outputs = self._forward_batch(proteins, loss_fn, recycles)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            print("OOM during MiniFold forward pass; skipping batch.")
 
-            if outputs is None:
-                continue
+        if outputs is None:
+            if not backward and was_training:
+                self._set_training_mode()
+            return dict(totals), 0
 
-            if backward:
-                self._apply_gradients(outputs["total"], optimizer, scaler, grad_clip_norm)
-            if include_loss:
-                for key, value in outputs.get("log", {}).items():
-                    totals[key] += value
-            if include_metrics:
-                self._accumulate_metrics(totals, protein, outputs)
-            n += 1
+        batch_n = outputs.get("batch_size", len(proteins))
 
-            if self.device.type == "cuda":
-                torch.cuda.empty_cache()
-        
+        if backward:
+            self._apply_gradients(outputs["total"], optimizer, scaler, grad_clip_norm)
+        if include_loss:
+            for key, value in outputs.get("log", {}).items():
+                totals[key] += value * batch_n
+        if include_metrics:
+            self._accumulate_metrics(totals, proteins, outputs)
+
         if not backward and was_training:
             self._set_training_mode()
 
-        return dict(totals), n
+        return dict(totals), batch_n
 
-    def _forward_outputs(
+    def _forward_batch(
         self,
-        protein: SCNProtein,
+        proteins: list[SCNProtein],
         loss_fn: MiniFoldLoss | None,
         num_recycling: int,
     ) -> dict | None:
+        train = loss_fn is not None
+        model_batch = self.prepare_batch(proteins, train=train)
         if loss_fn is not None:
-            model_batch = self.prepare_batch(protein, train=True)
-            return loss_fn.compute(self.model, model_batch, num_recycling=num_recycling)
+            result = loss_fn.compute(self.model, model_batch, num_recycling=num_recycling)
+            if result is not None:
+                result["batch_size"] = len(proteins)
+            return result
 
-        model_batch = self.prepare_batch(protein, train=False)
         out = self.model(model_batch, num_recycling=num_recycling)
-        length = len(str(protein.seq))
         ca_idx = atom_order["CA"]
         return {
-            "mean_plddt": float(out["plddt"][0, :length].mean().detach().cpu()),
-            "pred_ca": out["final_atom_positions"][0, :length, ca_idx].detach().float().cpu(),
+            "plddt": out["plddt"].detach(),
+            "pred_ca": out["final_atom_positions"][:, :, ca_idx].detach().float().cpu(),
+            "batch_size": len(proteins),
         }
 
     def _accumulate_metrics(
         self,
         totals: dict[str, float],
-        protein: SCNProtein,
+        proteins: list[SCNProtein],
         outputs: dict,
     ) -> None:
-        if "mean_plddt" in outputs:
-            totals["plddt"] += outputs["mean_plddt"]
-        if "pred_ca" in outputs:
-            exp_ca = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).cpu().numpy()
-            alignment = tm_align(
-                outputs["pred_ca"].numpy(),
-                exp_ca,
-                str(protein.seq),
-                str(protein.seq),
-            )
-            totals["tm"] += alignment.tm_norm_chain2
+        plddt = outputs.get("plddt")
+        pred_ca = outputs.get("pred_ca")
+        for i, protein in enumerate(proteins):
+            length = len(str(protein.seq))
+            if plddt is not None:
+                totals["plddt"] += float(plddt[i, :length].mean().detach().cpu())
+            if pred_ca is not None:
+                exp_ca = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).cpu().numpy()
+                alignment = tm_align(
+                    pred_ca[i, :length].numpy(),
+                    exp_ca,
+                    str(protein.seq),
+                    str(protein.seq),
+                )
+                totals["tm"] += alignment.tm_norm_chain2
 
     def _apply_gradients(
         self,

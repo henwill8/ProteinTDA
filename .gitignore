@@ -17,3 +17,4 @@ vpd/*.egg-info
 *.pyc
 /.venv
 /src/proteintda.egg-info
+/.minifold_extract

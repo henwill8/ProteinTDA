@@ -1,4 +1,5 @@
 import random
+from collections import defaultdict
 
 import torch
 import torch.nn.functional as F
@@ -43,68 +44,126 @@ def _as_scalar(value: torch.Tensor | float) -> float:
     return float(value.detach())
 
 
+_TDA_TERMS = ("wasserstein_h0", "wasserstein_h1", "vpd_h0", "vpd_h1")
+
+
 class TDALoss:
     """Wasserstein and VPD losses on persistence diagrams from distance matrices."""
 
-    def __init__(self, config, h0rff=None, h1rff=None):
+    def __init__(
+        self,
+        config,
+        h0rff=None,
+        h1rff=None,
+        *,
+        tda_atom: SideChainAtom = SideChainAtom.CB,
+    ):
         self.config = config
         self.h0rff = h0rff
         self.h1rff = h1rff
+        self.tda_atom = tda_atom
+        self._atom37 = Atom37.CB if tda_atom is SideChainAtom.CB else Atom37.CA
+        self._enabled = tuple(name for name in _TDA_TERMS if config[name].enabled)
+        if "vpd_h0" in self._enabled and h0rff is None:
+            raise ValueError("vpd_h0 loss is enabled but h0rff was not provided")
+        if "vpd_h1" in self._enabled and h1rff is None:
+            raise ValueError("vpd_h1 loss is enabled but h1rff was not provided")
 
-    def _build_loss_fns(self, out, batch):
-        loss_fns = {}
+    def _create_adjs(
+        self,
+        out: dict,
+        batch: dict,
+        index: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        pred_positions = out["final_atom_positions"][index]
+        pred_mask = out["final_atom_mask"][index]
+        target_positions = batch["all_atom_positions"][index]
+        target_mask = batch["all_atom_mask_true"][index]
+
+        pred_pts = atom_positions_from_atom37(pred_positions, pred_mask, self._atom37)
+        target_pts = atom_positions_from_atom37(target_positions, target_mask, self._atom37)
+        return _distance_matrix(pred_pts), _distance_matrix(target_pts).detach()
+
+    def _term_losses(
+        self,
+        pred_adj: torch.Tensor,
+        target_adj: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
         cfg = self.config
-
-        def add(name, fn):
-            if cfg[name].enabled:
-                loss_fns[name] = fn
-
-        target_diags = pd_from_graph(batch["adj"], **cfg.pd)
-        pred_diags = pd_from_graph(out["adj"], **cfg.pd)
-
+        target_diags = pd_from_graph(target_adj, **cfg.pd)
+        pred_diags = pd_from_graph(pred_adj, **cfg.pd)
         wasserstein = _wasserstein_terms(
-            pred_diags=pred_diags,
-            target_diags=target_diags,
+            pred_diags,
+            target_diags,
             hom_dim=cfg.pd.hom_dim,
         )
-        add("wasserstein_h0", lambda: wasserstein["h0"])
-        add("wasserstein_h1", lambda: wasserstein["h1"])
 
-        if self.h0rff is None and cfg.vpd_h0.enabled:
-            raise ValueError("vpd_h0 loss is enabled but h0rff was not provided")
-        add("vpd_h0", lambda: self.h0rff.vpd_loss(pred_diags[0], target_diags[0]))
+        terms: dict[str, torch.Tensor] = {}
+        for name in self._enabled:
+            if name == "wasserstein_h0":
+                terms[name] = wasserstein["h0"]
+            elif name == "wasserstein_h1":
+                terms[name] = wasserstein["h1"]
+            elif name == "vpd_h0":
+                terms[name] = self.h0rff.vpd_loss(pred_diags[0], target_diags[0])
+            elif name == "vpd_h1":
+                terms[name] = self.h1rff.vpd_loss(pred_diags[1], target_diags[1])
+        return terms
 
-        if self.h1rff is None and cfg.vpd_h1.enabled:
-            raise ValueError("vpd_h1 loss is enabled but h1rff was not provided")
-        add("vpd_h1", lambda: self.h1rff.vpd_loss(pred_diags[1], target_diags[1]))
-
-        return loss_fns
-
-    def __call__(self, out, batch, _return_breakdown=False):
-        loss_fns = self._build_loss_fns(out, batch)
-        if not loss_fns:
-            zero = torch.zeros((), device=out["adj"].device, dtype=out["adj"].dtype, requires_grad=True)
+    def _loss_from_adjs(
+        self,
+        pred_adj: torch.Tensor,
+        target_adj: torch.Tensor,
+        *,
+        _return_breakdown: bool = False,
+    ):
+        if not self._enabled:
+            zero = pred_adj.new_zeros((), requires_grad=True)
             if _return_breakdown:
                 return zero, {}
             return zero
 
-        ref = out["adj"]
+        ref = pred_adj
         cum_loss = ref.new_zeros(())
-        losses = {}
-        for loss_name, loss_fn in loss_fns.items():
-            weight = self.config[loss_name].weight
-            loss = _as_tensor(loss_fn(), ref)
+        losses: dict[str, torch.Tensor] = {}
+        for name, loss in self._term_losses(pred_adj, target_adj).items():
+            loss = _as_tensor(loss, ref)
             if not torch.isfinite(loss).all():
-                print(f"{loss_name} loss is NaN or Inf. Skipping...")
+                print(f"{name} loss is NaN or Inf. Skipping...")
                 loss = loss.new_zeros((), requires_grad=True)
-            cum_loss = cum_loss + weight * loss
-            losses[loss_name] = loss.detach().clone()
+            cum_loss = cum_loss + self.config[name].weight * loss
+            losses[name] = loss.detach().clone()
 
         losses["loss"] = cum_loss.detach().clone()
 
         if not _return_breakdown:
             return cum_loss
         return cum_loss, losses
+
+    def __call__(self, out, batch, _return_breakdown=False):
+        batch_size = out["final_atom_positions"].shape[0]
+        tda_losses: list[torch.Tensor] = []
+        breakdown: defaultdict[str, list[torch.Tensor]] = defaultdict(list)
+
+        for index in range(batch_size):
+            pred_adj, target_adj = self._create_adjs(out, batch, index)
+            loss_i, breakdown_i = self._loss_from_adjs(pred_adj, target_adj, _return_breakdown=True)
+            tda_losses.append(loss_i)
+            for name, value in breakdown_i.items():
+                if name == "loss":
+                    continue
+                breakdown[name].append(value)
+
+        tda_loss = torch.stack(tda_losses).mean()
+        if not _return_breakdown:
+            return tda_loss
+
+        tda_breakdown = {
+            name: torch.stack(values).mean()
+            for name, values in breakdown.items()
+        }
+        tda_breakdown["loss"] = tda_loss.detach().clone()
+        return tda_loss, tda_breakdown
 
 
 class MiniFoldLoss:
@@ -125,14 +184,15 @@ class MiniFoldLoss:
         self.h1rff = h1rff
         self.tda_atom = tda_atom
         self.structure_loss = AlphaFoldLoss(config_of.loss)
-        self._tda = TDALoss(loss_config, h0rff=h0rff, h1rff=h1rff) if loss_config.tda.enabled else None
+        self._tda = (
+            TDALoss(loss_config, h0rff=h0rff, h1rff=h1rff, tda_atom=tda_atom)
+            if loss_config.tda.enabled
+            else None
+        )
 
     @property
     def tda_enabled(self) -> bool:
-        return self._tda is not None and any(
-            self._tda.config[name].enabled
-            for name in ("wasserstein_h0", "wasserstein_h1", "vpd_h0", "vpd_h1")
-        )
+        return self._tda is not None and bool(self._tda._enabled)
 
     @staticmethod
     def _distogram_loss(
@@ -159,18 +219,6 @@ class MiniFoldLoss:
         mean = mean / denom[..., None]
         mean = torch.sum(mean, dim=-1)
         return torch.mean(mean)
-
-    def _add_tda_fields(self, r_dict: dict, batch_of: dict) -> None:
-        atom = Atom37.CB if self.tda_atom is SideChainAtom.CB else Atom37.CA
-        pred_positions = r_dict["final_atom_positions"][0]
-        pred_mask = r_dict["final_atom_mask"][0]
-        target_positions = batch_of["all_atom_positions"][0]
-        target_mask = batch_of["all_atom_mask_true"][0]
-
-        pred_pts = atom_positions_from_atom37(pred_positions, pred_mask, atom)
-        target_pts = atom_positions_from_atom37(target_positions, target_mask, atom)
-        r_dict["adj"] = _distance_matrix(pred_pts)
-        batch_of["adj"] = _distance_matrix(target_pts).detach()
 
     def compute(
         self,
@@ -225,8 +273,11 @@ class MiniFoldLoss:
                     log[name] = _as_scalar(self.loss_config.structure.weight * of_weight * value)
 
             if self.tda_enabled and self.loss_config.tda.enabled:
-                self._add_tda_fields(r_dict, batch_of)
-                tda_loss, tda_breakdown = self._tda(r_dict, batch_of, _return_breakdown=True)
+                tda_loss, tda_breakdown = self._tda(
+                    r_dict,
+                    batch_of,
+                    _return_breakdown=True,
+                )
                 weighted_tda = self.loss_config.tda.weight * tda_loss
                 total = total + weighted_tda
                 for name, value in tda_breakdown.items():
@@ -238,10 +289,12 @@ class MiniFoldLoss:
         log["total"] = _as_scalar(total)
         result: dict[str, torch.Tensor | float | dict[str, float]] = {"total": total, "log": log}
         if "plddt" in r_dict:
-            result["mean_plddt"] = float(r_dict["plddt"].mean().detach().cpu())
+            result["plddt"] = r_dict["plddt"].detach()
         if "final_atom_positions" in r_dict:
             ca_idx = atom_order["CA"]
-            result["pred_ca"] = r_dict["final_atom_positions"][0, :, ca_idx].detach().float().cpu()
+            result["pred_ca"] = (
+                r_dict["final_atom_positions"][:, :, ca_idx].detach().float().cpu()
+            )
         return result
 
     @staticmethod

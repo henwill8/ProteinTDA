@@ -3,9 +3,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.widgets import Button
 import torch
-import torch.nn as nn
+from matplotlib.widgets import Button, Slider
 from minifold.train.loss import AlphaFoldLoss
 from minifold.utils.residue_constants import atom_order
 from minifold.utils.tensor_utils import tensor_tree_map
@@ -24,15 +23,14 @@ from proteintda.utils.conversions import (
 )
 from proteintda.utils.dataset import load_all_proteins
 
-N_POINTS = 100
+N_PROTEINS = 1
+TARGET_LENGTH = 100
 STEPS = 200
 LR = 0.05
 SCHEDULER_STEP = 5
 SCHEDULER_GAMMA = 0.9
 LOG_EVERY = 10
-SEED = 42
 
-MODE = "minifold"  # "points", "mlp", or "minifold"
 MINIFOLD_CACHE_DIR = Path("cache/minifold")
 MINIFOLD_MODEL_SIZE = "12L"  # "12L" or "48L"
 MINIFOLD_RECYCLES = 3
@@ -46,7 +44,6 @@ W_STRUCTURE = 0.2
 TDA_WARMUP_STEPS = 50
 TDA_RAMP_STEPS = 50
 
-HIDDEN_DIM = 256
 USE_H2 = False
 HOM_DIM = 3 if USE_H2 else 2
 ACTIVE_HOMS = (0, 1, 2) if USE_H2 else (0, 1)
@@ -54,6 +51,7 @@ W_H0 = 0.2
 W_H1 = 1.0
 W_H2 = 1.0
 PD_MARKERS = ("o", "^", "s")
+
 
 def _scalar(x):
     return x.item() if hasattr(x, "item") else float(x)
@@ -65,15 +63,10 @@ def _to_numpy(diags, dim):
     return diags[dim].detach().cpu().numpy()
 
 
-def _gudhi_wasserstein_terms(pred_adj, target_diags):
-    pred_diags = pd_from_graph(pred_adj, max_dimension=HOM_DIM, hom_dim=HOM_DIM)
-    terms = _wasserstein_terms(pred_diags, target_diags, hom_dim=HOM_DIM)
-    return terms, pred_diags
-
-
 def wasserstein_loss(pred_pts, target_diags):
     pred_adj = _distance_matrix(pred_pts)
-    terms, pred_diags = _gudhi_wasserstein_terms(pred_adj, target_diags)
+    pred_diags = pd_from_graph(pred_adj, max_dimension=HOM_DIM, hom_dim=HOM_DIM)
+    terms = _wasserstein_terms(pred_diags, target_diags, hom_dim=HOM_DIM)
     loss = W_H0 * terms["h0"] + W_H1 * terms["h1"] + (W_H2 * terms["h2"] if USE_H2 else 0)
     if not isinstance(loss, torch.Tensor):
         loss = pred_adj.new_tensor(loss)
@@ -106,6 +99,8 @@ def _pd_limits(target_diags, history):
         pts.append(_to_numpy(target_diags, dim))
         for frame in history:
             pts.append(frame["pred"][dim])
+    if not any(len(p) for p in pts):
+        return 1.0
     return max(float(p[:, 1].max()) for p in pts if len(p)) * 1.1 + 0.1
 
 
@@ -130,100 +125,125 @@ def _kabsch_align(pred, target):
     return (pred - pc) @ r.T + tc
 
 
-def _view_pred_pts(pred, target_pts, align_pred_pts):
-    if not align_pred_pts:
-        return pred
-    return _kabsch_align(pred, target_pts)
+def _pts_axis_limits(target_pts, pred_pts):
+    return _coords_limits(np.concatenate([target_pts, pred_pts], axis=0))
 
 
-def _pts_limits(target_pts, history, align_pred_pts=False):
-    pred_pts = [_view_pred_pts(f["pts"], target_pts, align_pred_pts) for f in history]
-    return _coords_limits(np.concatenate([target_pts, *pred_pts], axis=0))
-
-
-def _attach_buttons(fig, show, n_frames):
-    state = {"i": 0}
+def _attach_controls(fig, show, n_steps, *, n_proteins=1):
+    state = {"step": 0, "protein": 0}
     holders = []
 
-    def go(i):
-        state["i"] = max(0, min(n_frames - 1, i))
-        show(state["i"])
+    def refresh():
+        show(state["step"], state["protein"])
 
-    fig.subplots_adjust(bottom=0.14)
-    btn_h, btn_y = 0.05, 0.03
-    specs = [
-        ([0.12, btn_y, 0.12, btn_h], "|<", lambda _e: go(0)),
-        ([0.26, btn_y, 0.12, btn_h], "<", lambda _e: go(state["i"] - 1)),
-        ([0.62, btn_y, 0.12, btn_h], ">", lambda _e: go(state["i"] + 1)),
-        ([0.76, btn_y, 0.12, btn_h], ">|", lambda _e: go(n_frames - 1)),
-    ]
-    for rect, label, handler in specs:
-        ax_btn = fig.add_axes(rect)
-        btn = Button(ax_btn, label)
-        btn.on_clicked(handler)
-        holders.extend((btn, ax_btn))
+    def set_step(step_idx):
+        state["step"] = max(0, min(n_steps - 1, step_idx))
+        refresh()
 
-    fig._button_widgets = holders
+    def set_protein(protein_idx):
+        state["protein"] = max(0, min(n_proteins - 1, protein_idx))
+        refresh()
+
+    fig.subplots_adjust(bottom=0.2 if n_proteins > 1 else 0.16)
+
+    ax_slider = fig.add_axes([0.26, 0.06, 0.48, 0.03])
+    slider = Slider(ax_slider, "step", 0, max(n_steps - 1, 0), valinit=0, valstep=1)
+    slider.on_changed(lambda val: set_step(int(val)))
+    holders.extend((slider, ax_slider))
+
+    ax_prev = fig.add_axes([0.12, 0.055, 0.1, 0.04])
+    btn_prev = Button(ax_prev, "<")
+    btn_prev.on_clicked(lambda _e: slider.set_val(max(0, state["step"] - 1)))
+    holders.extend((btn_prev, ax_prev))
+
+    ax_next = fig.add_axes([0.78, 0.055, 0.1, 0.04])
+    btn_next = Button(ax_next, ">")
+    btn_next.on_clicked(lambda _e: slider.set_val(min(n_steps - 1, state["step"] + 1)))
+    holders.extend((btn_next, ax_next))
+
+    if n_proteins > 1:
+        ax_pprev = fig.add_axes([0.12, 0.11, 0.1, 0.04])
+        btn_pprev = Button(ax_pprev, "prot <")
+        btn_pprev.on_clicked(lambda _e: set_protein(state["protein"] - 1))
+        holders.extend((btn_pprev, ax_pprev))
+
+        ax_pnext = fig.add_axes([0.78, 0.11, 0.1, 0.04])
+        btn_pnext = Button(ax_pnext, "prot >")
+        btn_pnext.on_clicked(lambda _e: set_protein(state["protein"] + 1))
+        holders.extend((btn_pnext, ax_pnext))
+
+    fig._nav_widgets = holders
+
+    def go(step_idx=0, protein_idx=0):
+        state["step"] = max(0, min(n_steps - 1, step_idx))
+        state["protein"] = max(0, min(n_proteins - 1, protein_idx))
+        slider.set_val(state["step"])
+        refresh()
+
     return go
 
 
-def show_history(history, target_diags, target_pts, title, *, align_pred_pts=False):
-    if not history:
+def show_history(cases, title):
+    if not cases or not cases[0]["history"]:
         return
 
-    ncols = 2
-    fig = plt.figure(figsize=(6 * ncols, 6))
+    n_proteins = len(cases)
+    n_steps = len(cases[0]["history"])
+    fig = plt.figure(figsize=(12, 6))
 
-    ax_pd = None
-    ax_pts = None
-    ax_pd = fig.add_subplot(1, ncols, 1)
-    lim_hi = _pd_limits(target_diags, history)
-    ax_pd.plot([0, lim_hi], [0, lim_hi], "k--", alpha=0.3, linewidth=1)
-    ax_pd.set_xlim(0, lim_hi)
-    ax_pd.set_ylim(0, lim_hi)
-    ax_pd.set_aspect("equal")
+    ax_pd = fig.add_subplot(1, 2, 1)
+    ax_pts = fig.add_subplot(1, 2, 2, projection="3d")
+    ax_pts.set_autoscale_on(False)
     ax_pd.set_xlabel("birth")
     ax_pd.set_ylabel("death")
-    for dim in ACTIVE_HOMS:
-        tgt = _to_numpy(target_diags, dim)
-        if len(tgt):
-            ax_pd.scatter(
-                tgt[:, 0], tgt[:, 1], c="blue", marker=PD_MARKERS[dim],
-                label=f"target H{dim}", s=40, alpha=0.8, zorder=2,
-            )
-    ax_pd.legend(loc="lower right")
-
-    col = 2
-    ax_pts = fig.add_subplot(1, ncols, col, projection="3d")
-    pts_lo, pts_hi = _pts_limits(target_pts, history, align_pred_pts=align_pred_pts)
-    ax_pts.scatter(
-        target_pts[:, 0], target_pts[:, 1], target_pts[:, 2],
-        c="blue", label="target", s=30, alpha=0.8,
-    )
-    init_pts = _view_pred_pts(history[0]["pts"], target_pts, align_pred_pts)
-    pred_sc = ax_pts.scatter(
-        init_pts[:, 0], init_pts[:, 1], init_pts[:, 2],
-        c="red", label="pred", s=30, alpha=0.8,
-    )
-    ax_pts.set_xlim(pts_lo, pts_hi)
-    ax_pts.set_ylim(pts_lo, pts_hi)
-    ax_pts.set_zlim(pts_lo, pts_hi)
     ax_pts.set_xlabel("x")
     ax_pts.set_ylabel("y")
     ax_pts.set_zlabel("z")
-    ax_pts.legend(loc="upper right")
 
     step_text = fig.text(0.02, 0.96, "", fontsize=10)
     pd_dynamic = []
+    target_scatters = []
+    pred_sc = None
+    diag_line = None
 
     def clear_dynamic():
+        nonlocal pred_sc, diag_line
         for art in pd_dynamic:
             art.remove()
         pd_dynamic.clear()
+        for art in target_scatters:
+            art.remove()
+        target_scatters.clear()
+        if pred_sc is not None:
+            pred_sc.remove()
+            pred_sc = None
+        if diag_line is not None:
+            diag_line.remove()
+            diag_line = None
 
-    def draw_pd(frame_idx):
-        frame = history[frame_idx]
+    def draw_case(step_idx, protein_idx):
+        nonlocal pred_sc, diag_line
+        case = cases[protein_idx]
+        history = case["history"]
+        frame = history[step_idx]
+        target_diags = case["target_diags"]
+        target_pts = case["target_pts"]
+
+        lim_hi = _pd_limits(target_diags, history)
+        diag_line = ax_pd.plot([0, lim_hi], [0, lim_hi], "k--", alpha=0.3, linewidth=1)[0]
+        ax_pd.set_xlim(0, lim_hi)
+        ax_pd.set_ylim(0, lim_hi)
+        ax_pd.set_aspect("equal")
+
         for dim in ACTIVE_HOMS:
+            tgt = _to_numpy(target_diags, dim)
+            if len(tgt):
+                target_scatters.append(
+                    ax_pd.scatter(
+                        tgt[:, 0], tgt[:, 1], c="blue", marker=PD_MARKERS[dim],
+                        label=f"target H{dim}", s=40, alpha=0.8, zorder=2,
+                    )
+                )
             pred = frame["pred"][dim]
             if len(pred):
                 pd_dynamic.append(
@@ -233,34 +253,47 @@ def show_history(history, target_diags, target_pts, title, *, align_pred_pts=Fal
                     )
                 )
 
-    def draw_pts(frame_idx):
-        frame = history[frame_idx]
-        pts = _view_pred_pts(frame["pts"], target_pts, align_pred_pts)
-        pred_sc._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
-        if align_pred_pts:
-            lo, hi = _coords_limits(np.concatenate([target_pts, pts], axis=0))
-            ax_pts.set_xlim(lo, hi)
-            ax_pts.set_ylim(lo, hi)
-            ax_pts.set_zlim(lo, hi)
+        handles, labels = ax_pd.get_legend_handles_labels()
+        if handles:
+            by_label = dict(zip(labels, handles))
+            ax_pd.legend(by_label.values(), by_label.keys(), loc="lower right")
 
-    def show(frame_idx):
-        clear_dynamic()
-        frame = history[frame_idx]
-        if ax_pd is not None:
-            draw_pd(frame_idx)
-        if ax_pts is not None:
-            draw_pts(frame_idx)
+        view_pts = _kabsch_align(frame["pts"], target_pts)
+        lo, hi = _pts_axis_limits(target_pts, view_pts)
+        target_scatters.append(
+            ax_pts.scatter(
+                target_pts[:, 0], target_pts[:, 1], target_pts[:, 2],
+                c="blue", label="target", s=30, alpha=0.8,
+            )
+        )
+        pred_sc = ax_pts.scatter(
+            view_pts[:, 0], view_pts[:, 1], view_pts[:, 2],
+            c="red", label="pred", s=30, alpha=0.8,
+        )
+        ax_pts.set_xlim(lo, hi)
+        ax_pts.set_ylim(lo, hi)
+        ax_pts.set_zlim(lo, hi)
+        ax_pts.legend(loc="upper right")
+
+        protein_msg = ""
+        if n_proteins > 1:
+            protein_msg = f"  protein {protein_idx + 1}/{n_proteins} ({case['name']})"
         step_text.set_text(
-            f"{title}  frame {frame_idx + 1}/{len(history)}  "
+            f"{title}{protein_msg}  frame {step_idx + 1}/{n_steps}  "
             f"step {frame['step']}  loss={frame['loss']:.4f}  "
             f"h0={frame['h0']:.4f}  h1={frame['h1']:.4f}"
             + (f"  h2={frame['h2']:.4f}" if USE_H2 else "")
+            + _extra_loss_msg(frame.get("breakdown", {}))
         )
-        fig.canvas.draw()
+        fig.canvas.draw_idle()
 
-    go = _attach_buttons(fig, show, len(history))
-    fig.subplots_adjust(left=0.05, right=0.95, bottom=0.14, top=0.9, wspace=0.25)
-    go(0)
+    def show(step_idx, protein_idx):
+        clear_dynamic()
+        draw_case(step_idx, protein_idx)
+
+    go = _attach_controls(fig, show, n_steps, n_proteins=n_proteins)
+    fig.subplots_adjust(left=0.05, right=0.95, top=0.9, wspace=0.25)
+    go(0, 0)
     plt.show(block=True)
 
 
@@ -280,9 +313,7 @@ def _log_loss_config():
     if USE_TDA_LOSS:
         parts.append("tda (wasserstein)")
         if TDA_WARMUP_STEPS > 0 or TDA_RAMP_STEPS > 0:
-            parts.append(
-                f"warmup={TDA_WARMUP_STEPS} ramp={TDA_RAMP_STEPS}",
-            )
+            parts.append(f"warmup={TDA_WARMUP_STEPS} ramp={TDA_RAMP_STEPS}")
     if USE_DISTOGRAM_LOSS:
         parts.append(f"distogram (w={W_DISTOGRAM})")
     if USE_STRUCTURE_LOSS:
@@ -291,71 +322,59 @@ def _log_loss_config():
         print(f"  losses: {', '.join(parts)}")
 
 
-def train(
-    name, target_adj, target_pts, optimizer, scheduler, device, *,
-    get_pred_pts=None,
-    get_step=None,
-    align_pred_pts=False,
-):
-    n_pts = target_pts.shape[0]
-    print(f"[{name}] {n_pts} points, {STEPS} steps, lr={LR}")
-    _log_loss_config()
-    history = []
-    target_diags = pd_from_graph(target_adj.detach(), max_dimension=HOM_DIM, hom_dim=HOM_DIM)
-    tgt_counts = [len(d) for d in target_diags]
-    hom_label = "/".join(f"H{d}" for d in ACTIVE_HOMS)
-    print(f"target diagram sizes {hom_label}={tgt_counts}")
+def _make_history_frame(step, pred_pts, pred_diags, breakdown):
+    frame = {
+        "step": step,
+        "loss": _scalar(breakdown["total"]),
+        "h0": _scalar(breakdown["wasserstein_h0"]),
+        "h1": _scalar(breakdown["wasserstein_h1"]),
+        "pred": [_to_numpy(pred_diags, d).copy() for d in ACTIVE_HOMS],
+        "pts": pred_pts.detach().cpu().numpy().copy(),
+        "breakdown": breakdown,
+    }
+    if USE_H2:
+        frame["h2"] = _scalar(breakdown["wasserstein_h2"])
+    return frame
 
-    if get_step is None:
-        if get_pred_pts is None:
-            raise ValueError("train requires get_pred_pts or get_step")
-        def get_step(step):
-            pred_pts = get_pred_pts()
-            w = tda_weight(step)
-            if w > 0:
-                loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
-                if w < 1.0:
-                    loss = w * loss
-            else:
-                with torch.no_grad():
-                    _, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
-                loss = pred_pts.new_zeros(())
-            breakdown["tda_w"] = w
-            breakdown["total"] = loss
-            return loss, pred_pts, pred_diags, breakdown
+
+def _log_step_metrics(step, scheduler, cases, step_results, *, batch_loss):
+    for case, (_, pred_diags, breakdown) in zip(cases, step_results):
+        tgt_counts = [len(d) for d in case["target_diags"]]
+        pred_counts = [len(pred_diags[i]) for i in range(HOM_DIM)]
+        hom_msg = (
+            f"h0={_scalar(breakdown['wasserstein_h0']):.4f}  "
+            f"h1={_scalar(breakdown['wasserstein_h1']):.4f}"
+        )
+        if USE_H2:
+            hom_msg += f"  h2={_scalar(breakdown['wasserstein_h2']):.4f}"
+        tda_w_msg = ""
+        if breakdown.get("tda_w", 1.0) < 1.0:
+            tda_w_msg = f"  tda_w={breakdown['tda_w']:.3f}"
+        prefix = f"[{case['name']}] " if len(cases) > 1 else ""
+        print(
+            f"{prefix}step {step:4d}  lr={scheduler.get_last_lr()[0]:.6g}  "
+            f"loss={_scalar(breakdown['total']):.4f}  {hom_msg}{tda_w_msg}"
+            f"{_extra_loss_msg(breakdown)}  pred_n={pred_counts}  tgt_n={tgt_counts}"
+        )
+    if len(cases) > 1:
+        print(f"  batch_loss={_scalar(batch_loss):.4f}")
+
+
+def train(cases, optimizer, scheduler, *, get_step, group_name="train"):
+    print(f"[{group_name}] {len(cases)} protein(s), {STEPS} steps, lr={LR}")
+    _log_loss_config()
+    histories = [[] for _ in cases]
+    hom_label = "/".join(f"H{d}" for d in ACTIVE_HOMS)
+    for case in cases:
+        tgt_counts = [len(d) for d in case["target_diags"]]
+        print(f"  {case['name']}: {case['target_pts'].shape[0]} points  {hom_label}={tgt_counts}")
 
     for step in range(STEPS + 1):
-        loss, pred_pts, pred_diags, breakdown = get_step(step)
-        log_step = step % LOG_EVERY == 0 or step == STEPS
-        loss_val = _scalar(breakdown["total"])
-
-        if log_step:
-            h0 = _scalar(breakdown["wasserstein_h0"])
-            h1 = _scalar(breakdown["wasserstein_h1"])
-            pred_counts = [len(pred_diags[i]) for i in range(HOM_DIM)]
-            hom_msg = f"h0={h0:.4f}  h1={h1:.4f}"
-            if USE_H2:
-                h2 = _scalar(breakdown["wasserstein_h2"])
-                hom_msg += f"  h2={h2:.4f}"
-            tda_w_msg = ""
-            if breakdown.get("tda_w", 1.0) < 1.0:
-                tda_w_msg = f"  tda_w={breakdown['tda_w']:.3f}"
-            print(
-                f"step {step:4d}  lr={scheduler.get_last_lr()[0]:.6g}  loss={loss_val:.4f}  "
-                f"{hom_msg}{tda_w_msg}{_extra_loss_msg(breakdown)}  "
-                f"pred_n={pred_counts}  tgt_n={tgt_counts}"
-            )
-            frame = {
-                "step": step,
-                "loss": loss_val,
-                "h0": h0,
-                "h1": h1,
-                "pred": [_to_numpy(pred_diags, d).copy() for d in ACTIVE_HOMS],
-                "pts": pred_pts.detach().cpu().numpy().copy(),
-            }
-            if USE_H2:
-                frame["h2"] = h2
-            history.append(frame)
+        loss, step_results = get_step(step)
+        if step % LOG_EVERY == 0 or step == STEPS:
+            _log_step_metrics(step, scheduler, cases, step_results, batch_loss=loss)
+            for history, result in zip(histories, step_results):
+                history.append(_make_history_frame(step, *result))
 
         if step < STEPS:
             optimizer.zero_grad()
@@ -364,91 +383,109 @@ def train(
             scheduler.step()
 
     show_history(
-        history,
-        target_diags,
-        target_pts.detach().cpu().numpy(),
-        name,
-        align_pred_pts=align_pred_pts,
+        [
+            {
+                "name": case["name"],
+                "target_diags": case["target_diags"],
+                "target_pts": case["target_pts_np"],
+                "history": history,
+            }
+            for case, history in zip(cases, histories)
+        ],
+        group_name,
     )
 
 
-def _make_problem(device):
-    torch.manual_seed(SEED)
-    target_pts = torch.randn(N_POINTS, 3, device=device)
-    target_adj = _distance_matrix(target_pts).detach()
-    return target_pts, target_adj
-
-
-def _load_protein(device):
+def _load_cases(device, n=1, target_length=TARGET_LENGTH):
     proteins = load_all_proteins()
     if not proteins:
         raise ValueError("dataset is empty")
-    exact = [p for p in proteins if len(p.seq) == N_POINTS]
-    if exact:
-        protein = exact[0]
-        print(f"selected {protein.id}  len={N_POINTS}  (exact match for N_POINTS={N_POINTS})")
+    if n < 1:
+        raise ValueError(f"n must be >= 1, got {n}")
+
+    selected = sorted(proteins, key=lambda p: (abs(len(p.seq) - target_length), p.id))[:n]
+    if n == 1 and len(selected[0].seq) == target_length:
+        print(f"selected {selected[0].id}  len={target_length}")
     else:
-        protein = min(proteins, key=lambda p: (abs(len(p.seq) - N_POINTS), p.id))
-        n_seq = len(protein.seq)
-        print(
-            f"no protein with length {N_POINTS}; "
-            f"selected {protein.id}  len={n_seq}  "
+        print(f"selected {n} proteins (closest to TARGET_LENGTH={target_length}):")
+        for protein in selected:
+            print(f"  {protein.id}  len={len(protein.seq)}")
+
+    cases = []
+    for protein in selected:
+        target_pts = atom_positions_from_sidechainnet(
+            protein, SideChainAtom.CB, device=device,
         )
-    target_pts = atom_positions_from_sidechainnet(
-        protein, SideChainAtom.CB, device=device,
+        if target_pts.shape[0] != len(protein.seq):
+            raise ValueError(
+                f"protein {protein.id} has {target_pts.shape[0]} C-beta points "
+                f"but len(seq)={len(protein.seq)}",
+            )
+        target_adj = _distance_matrix(target_pts).detach()
+        cases.append({
+            "protein": protein,
+            "name": protein.id,
+            "target_pts": target_pts,
+            "target_adj": target_adj,
+            "target_diags": pd_from_graph(
+                target_adj, max_dimension=HOM_DIM, hom_dim=HOM_DIM,
+            ),
+            "target_pts_np": target_pts.detach().cpu().numpy(),
+        })
+    return cases
+
+
+def _cbeta_from_output(r_dict, index=0):
+    return atom_positions_from_atom37(
+        r_dict["final_atom_positions"][index],
+        r_dict["final_atom_mask"][index],
+        Atom37.CB,
     )
-    n_pts = target_pts.shape[0]
-    if n_pts != len(protein.seq):
-        raise ValueError(
-            f"protein {protein.id} has {n_pts} C-beta points but len(seq)={len(protein.seq)}",
-        )
-    return protein, target_pts
 
 
-def _cbeta_from_minifold_output(r_dict):
-    pred_positions = r_dict["final_atom_positions"][0]
-    pred_mask = r_dict["final_atom_mask"][0]
-    return atom_positions_from_atom37(pred_positions, pred_mask, Atom37.CB)
-
-
-def _ca_from_minifold_output(r_dict):
+def _ca_from_output(r_dict, index=0):
     ca_idx = atom_order["CA"]
-    return r_dict["final_atom_positions"][0, :, ca_idx].detach().float().cpu()
+    return r_dict["final_atom_positions"][index, :, ca_idx].detach().float().cpu()
 
 
 def _tm_score(pred_ca, target_ca, seq):
-    alignment = tm_align(
-        pred_ca.numpy(),
-        target_ca.numpy(),
-        seq,
-        seq,
-    )
+    alignment = tm_align(pred_ca.numpy(), target_ca.numpy(), seq, seq)
     return float(alignment.tm_norm_chain2)
 
 
-def _minifold_step(runner, model_batch, target_diags, structure_loss_fn, protein, step):
-    runner._set_training_mode()
-    r_dict = runner.model(model_batch, num_recycling=MINIFOLD_RECYCLES)
-    pred_pts = _cbeta_from_minifold_output(r_dict)
-    w = tda_weight(step)
-    breakdown = {}
+def _case_step(r_dict, case, index, w, shared_breakdown):
+    pred_pts = _cbeta_from_output(r_dict, index)
+    breakdown = dict(shared_breakdown)
 
     if USE_TDA_LOSS and w > 0:
-        tda_loss, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
-        total = w * tda_loss
+        tda_loss, pred_diags, tda_breakdown = wasserstein_loss(pred_pts, case["target_diags"])
+        protein_total = w * tda_loss
+        breakdown.update(tda_breakdown)
     else:
         with torch.no_grad():
-            _, pred_diags, breakdown = wasserstein_loss(pred_pts, target_diags)
-        total = pred_pts.new_zeros(())
+            _, pred_diags, tda_breakdown = wasserstein_loss(pred_pts, case["target_diags"])
+        protein_total = pred_pts.new_zeros(())
+        breakdown.update(tda_breakdown)
 
     breakdown["tda_w"] = w
-
     with torch.no_grad():
-        pred_ca = _ca_from_minifold_output(r_dict)
+        pred_ca = _ca_from_output(r_dict, index)
         target_ca = atom_positions_from_sidechainnet(
-            protein, SideChainAtom.CA, device=pred_pts.device,
+            case["protein"], SideChainAtom.CA, device=pred_pts.device,
         ).cpu()
-        breakdown["tm"] = _tm_score(pred_ca, target_ca, str(protein.seq))
+        breakdown["tm"] = _tm_score(pred_ca, target_ca, str(case["protein"].seq))
+
+    breakdown["total"] = protein_total
+    return protein_total, pred_pts, pred_diags, breakdown
+
+
+def _batch_step(runner, model_batch, cases, structure_loss_fn, step):
+    runner._set_training_mode()
+    r_dict = runner.model(model_batch, num_recycling=MINIFOLD_RECYCLES)
+    w = tda_weight(step)
+
+    total = r_dict["preds"].new_zeros(())
+    shared_breakdown = {}
 
     if USE_DISTOGRAM_LOSS:
         disto = MiniFoldLoss._distogram_loss(
@@ -459,79 +496,35 @@ def _minifold_step(runner, model_batch, target_diags, structure_loss_fn, protein
             no_bins=r_dict["preds"].shape[-1],
         )
         total = total + W_DISTOGRAM * disto
-        breakdown["distogram"] = disto
+        shared_breakdown["distogram"] = disto
 
     if USE_STRUCTURE_LOSS:
         batch_of = tensor_tree_map(lambda t: t[..., -1], model_batch["batch_of"])
         struct_loss, _ = structure_loss_fn(r_dict, batch_of, _return_breakdown=True)
         total = total + W_STRUCTURE * struct_loss
-        breakdown["structure"] = struct_loss
+        shared_breakdown["structure"] = struct_loss
 
-    breakdown["total"] = total
-    return total, pred_pts, pred_diags, breakdown
-
-
-def _make_optimizer_scheduler(params, lr=LR):
-    optimizer = torch.optim.Adam(params, lr=lr)
-    scheduler = StepLR(optimizer, step_size=SCHEDULER_STEP, gamma=SCHEDULER_GAMMA)
-    return optimizer, scheduler
-
-
-class PointMLP(nn.Module):
-    def __init__(self, n_points, hidden_dim):
-        super().__init__()
-        self.n_points = n_points
-        d = n_points * 3
-        self.net = nn.Sequential(
-            nn.Linear(d, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, d),
+    protein_totals = []
+    results = []
+    for index, case in enumerate(cases):
+        protein_total, pred_pts, pred_diags, breakdown = _case_step(
+            r_dict, case, index, w, shared_breakdown,
         )
+        protein_totals.append(protein_total)
+        results.append((pred_pts, pred_diags, breakdown))
 
-    def forward(self, x):
-        return self.net(x).view(self.n_points, 3)
+    if USE_TDA_LOSS and w > 0:
+        total = total + torch.stack(protein_totals).mean()
 
+    for _, _, breakdown in results:
+        breakdown["batch_total"] = total.detach()
 
-def run_points(device):
-    target_pts, target_adj = _make_problem(device)
-    pred_pts = torch.randn(N_POINTS, 3, device=device, requires_grad=True)
-    optimizer, scheduler = _make_optimizer_scheduler([pred_pts])
-    train(
-        "points",
-        target_adj,
-        target_pts,
-        optimizer,
-        scheduler,
-        device,
-        get_pred_pts=lambda: pred_pts,
-    )
+    return total, results
 
 
-def run_mlp(device):
-    target_pts, target_adj = _make_problem(device)
-    model = PointMLP(N_POINTS, hidden_dim=HIDDEN_DIM).to(device)
-    model_input = torch.randn(1, N_POINTS * 3, device=device)
-    optimizer, scheduler = _make_optimizer_scheduler(model.parameters())
-    train(
-        "mlp",
-        target_adj,
-        target_pts,
-        optimizer,
-        scheduler,
-        device,
-        get_pred_pts=lambda: model(model_input),
-    )
-
-
-def run_minifold(device):
-    if not USE_TDA_LOSS and not USE_DISTOGRAM_LOSS and not USE_STRUCTURE_LOSS:
-        raise ValueError("enable at least one of USE_TDA_LOSS, USE_DISTOGRAM_LOSS, USE_STRUCTURE_LOSS")
-    protein, target_pts = _load_protein(device)
-    target_adj = _distance_matrix(target_pts).detach()
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cases = _load_cases(device, n=N_PROTEINS)
     runner = MiniFoldRunner(
         MINIFOLD_CACHE_DIR,
         model_size=MINIFOLD_MODEL_SIZE,
@@ -543,37 +536,22 @@ def run_minifold(device):
     trainable, total = runner.trainable_parameter_count
     print(f"MiniFold trainable parameters: {trainable:,} / {total:,}")
 
-    trainable_params = [p for p in runner.model.parameters() if p.requires_grad]
-    optimizer, scheduler = _make_optimizer_scheduler(trainable_params)
-    model_batch = runner.prepare_batch(protein, train=True)
+    optimizer = torch.optim.Adam(
+        [p for p in runner.model.parameters() if p.requires_grad],
+        lr=LR,
+    )
+    scheduler = StepLR(optimizer, step_size=SCHEDULER_STEP, gamma=SCHEDULER_GAMMA)
     structure_loss_fn = AlphaFoldLoss(CONFIG_OF.loss)
-    target_diags = pd_from_graph(target_adj.detach(), max_dimension=HOM_DIM, hom_dim=HOM_DIM)
+    model_batch = runner.prepare_batch([case["protein"] for case in cases], train=True)
 
-    def get_step(step):
-        return _minifold_step(runner, model_batch, target_diags, structure_loss_fn, protein, step)
-
+    group_name = f"minifold:{cases[0]['name']}" if len(cases) == 1 else f"minifold x{len(cases)}"
     train(
-        f"minifold:{protein.id}",
-        target_adj,
-        target_pts,
+        cases,
         optimizer,
         scheduler,
-        device,
-        get_step=get_step,
-        align_pred_pts=True,
+        get_step=lambda step: _batch_step(runner, model_batch, cases, structure_loss_fn, step),
+        group_name=group_name,
     )
-
-
-def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if MODE == "points":
-        run_points(device)
-    elif MODE == "mlp":
-        run_mlp(device)
-    elif MODE == "minifold":
-        run_minifold(device)
-    else:
-        raise ValueError(f"unknown MODE={MODE!r}")
 
 
 if __name__ == "__main__":
