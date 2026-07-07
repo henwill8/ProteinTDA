@@ -45,6 +45,8 @@ RUN_CONFIG = mlc.ConfigDict(
             "lr": 1e-5,
             "weight_decay": 0.01,
             "batch_size": 1,
+            "length_bucketing": True,
+            "length_bucket_size": 100,
             "train_proteins_per_epoch": None,
             "val_proteins_per_epoch": None,
             "unfreeze_fold_blocks": 0,
