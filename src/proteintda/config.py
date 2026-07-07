@@ -5,18 +5,18 @@ _EPS = 1e-8
 
 # Shared OpenFold / MiniFold config for feature pipeline, model, and loss.
 CONFIG_OF = model_config(
-    "initial_training",
+    "finetuning",
     train=True,
     low_prec=False,
     long_sequence_inference=False,
 )
 
 with CONFIG_OF.unlocked():
-    CONFIG_OF.model.heads.tm.enabled = True
-    CONFIG_OF.loss.tm.enabled = True
-    CONFIG_OF.loss.tm.weight = 0.1
-    CONFIG_OF.loss.violation.weight = 1.0
-    CONFIG_OF.loss.experimentally_resolved.weight = 0.01
+    # CONFIG_OF.model.heads.tm.enabled = True
+    # CONFIG_OF.loss.tm.enabled = True
+    # CONFIG_OF.loss.tm.weight = 0.1
+    # CONFIG_OF.loss.violation.weight = 1.0
+    # CONFIG_OF.loss.experimentally_resolved.weight = 0.01
     CONFIG_OF.data.train.crop_size = None
 
 RUN_CONFIG = mlc.ConfigDict(
@@ -34,7 +34,7 @@ RUN_CONFIG = mlc.ConfigDict(
             "device": None,  # 'cuda', 'cpu', or None for auto-detection
             "infer_recycles": 3,
             "minifold_cache_dir": "cache/minifold",
-            "model_size": "48L",  # '48L' or '12L'
+            "model_size": "12L",  # '48L' or '12L'
         },
         "kfold": {
             "n_splits": 5,
@@ -42,7 +42,7 @@ RUN_CONFIG = mlc.ConfigDict(
         },
         "training": {
             "seed": 42,
-            "lr": 1e-4,
+            "lr": 1e-5,
             "weight_decay": 0.01,
             "batch_size": 1,
             "train_proteins_per_epoch": None,

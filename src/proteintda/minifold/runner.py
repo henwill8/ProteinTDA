@@ -485,7 +485,7 @@ class MiniFoldRunner:
                     str(protein.seq),
                     str(protein.seq),
                 )
-                totals["tm"] += alignment.tm_norm_chain2
+                totals["tm_score"] += alignment.tm_norm_chain2
 
     def _apply_gradients(
         self,
