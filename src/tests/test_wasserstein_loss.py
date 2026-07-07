@@ -10,6 +10,7 @@ from minifold.train.loss import AlphaFoldLoss
 from minifold.utils.residue_constants import atom_order
 from minifold.utils.tensor_utils import tensor_tree_map
 from torch.optim.lr_scheduler import StepLR
+from tqdm import tqdm
 from tmtools import tm_align
 
 from proteintda.config import CONFIG_OF
@@ -392,14 +393,19 @@ def _run_batches(
     *,
     batch_size: int,
     train: bool,
+    progress_desc: str | None = None,
 ):
     num_batches = max(1, (len(cases) + batch_size - 1) // batch_size)
     batch_losses = []
     step_results: dict[int, tuple] = {}
 
+    batch_starts = range(0, len(cases), batch_size)
+    if progress_desc is not None:
+        batch_starts = tqdm(batch_starts, desc=progress_desc, leave=False, total=num_batches)
+
     grad_context = nullcontext() if train else torch.no_grad()
     with grad_context:
-        for batch_start in range(0, len(cases), batch_size):
+        for batch_start in batch_starts:
             batch_cases = cases[batch_start : batch_start + batch_size]
             model_batch = runner.prepare_batch(
                 [case["protein"] for case in batch_cases],
@@ -461,6 +467,7 @@ def train(
             step,
             batch_size=batch_size,
             train=True,
+            progress_desc=f"epoch {step + 1}/{STEPS + 1}",
         )
         if step % LOG_EVERY == 0 or step == STEPS:
             logged_cases = [cases[i] for i in logged_indices]
@@ -529,6 +536,7 @@ def evaluate(
         STEPS,
         batch_size=batch_size,
         train=False,
+        progress_desc="eval",
     )
     logged_cases = [cases[i] for i in logged_indices]
     logged_results = [step_results[i] for i in logged_indices]
