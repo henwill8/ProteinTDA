@@ -121,7 +121,7 @@ def _tm_align(pred_ca, target_ca, seq):
 
 
 def _apply_tm_align(pts, alignment):
-    return pts @ alignment.u + alignment.t
+    return pts @ alignment.u.T + alignment.t
 
 
 def _attach_controls(fig, show, n_steps, *, n_proteins=1):
