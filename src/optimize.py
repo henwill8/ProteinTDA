@@ -31,36 +31,55 @@ def resolve_device() -> torch.device:
 
 def suggest_params(trial: optuna.Trial) -> dict:
     optuna_cfg = RUN_CONFIG.optuna
-    return {
-        "w_wasserstein_h0": trial.suggest_float(
+    params: dict = {}
+
+    if optuna_cfg.tune_wasserstein:
+        params["w_wasserstein_h0"] = trial.suggest_float(
             "w_wasserstein_h0", optuna_cfg.w_min, optuna_cfg.w_max, log=True
-        ),
-        "w_wasserstein_h1": trial.suggest_float(
+        )
+        params["w_wasserstein_h1"] = trial.suggest_float(
             "w_wasserstein_h1", optuna_cfg.w_min, optuna_cfg.w_max, log=True
-        ),
-        # "w_vpd_h0": trial.suggest_float("w_vpd_h0", optuna_cfg.w_min, optuna_cfg.w_max, log=True),
-        # "w_vpd_h1": trial.suggest_float("w_vpd_h1", optuna_cfg.w_min, optuna_cfg.w_max, log=True),
-        # "t_h0": trial.suggest_float("t_h0", optuna_cfg.t_min, optuna_cfg.t_max, log=True),
-        # "t_h1": trial.suggest_float("t_h1", optuna_cfg.t_min, optuna_cfg.t_max, log=True),
-    }
+        )
+
+    if optuna_cfg.tune_vpd:
+        params["w_vpd_h0"] = trial.suggest_float(
+            "w_vpd_h0", optuna_cfg.w_min, optuna_cfg.w_max, log=True
+        )
+        params["w_vpd_h1"] = trial.suggest_float(
+            "w_vpd_h1", optuna_cfg.w_min, optuna_cfg.w_max, log=True
+        )
+
+    return params
 
 
-def build_params(params: dict) -> tuple:
+def build_loss_cfg(params: dict):
     loss_cfg = copy.deepcopy(LOSS_CONFIG)
+
+    if RUN_CONFIG.optuna.tune_wasserstein:
+        loss_cfg.wasserstein_h0.weight = params["w_wasserstein_h0"]
+        loss_cfg.wasserstein_h1.weight = params["w_wasserstein_h1"]
+
+    if RUN_CONFIG.optuna.tune_vpd:
+        loss_cfg.vpd_h0.weight = params["w_vpd_h0"]
+        loss_cfg.vpd_h1.weight = params["w_vpd_h1"]
+
+    return loss_cfg
+
+
+def build_heat_cfg(params: dict):
     heat_cfg = copy.deepcopy(HEAT_RFF_CONFIG)
 
-    loss_cfg.wasserstein_h0.weight = params["w_wasserstein_h0"]
-    loss_cfg.wasserstein_h1.weight = params["w_wasserstein_h1"]
-    # loss_cfg.vpd_h0.weight = params["w_vpd_h0"]
-    # loss_cfg.vpd_h1.weight = params["w_vpd_h1"]
-    # heat_cfg.h0rff.t = params["t_h0"]
-    # heat_cfg.h1rff.t = params["t_h1"]
+    if RUN_CONFIG.optuna.tune_vpd:
+        heat_cfg.h0rff.t = params["t_h0"]
+        heat_cfg.h1rff.t = params["t_h1"]
 
-    return loss_cfg, heat_cfg
+    return heat_cfg
 
 
 def build_loss_fn(loss_cfg, heat_cfg) -> MiniFoldLoss:
-    h0rff, h1rff = create_vpd_kernels(loss_cfg, heat_cfg)
+    h0rff = h1rff = None
+    if loss_cfg.vpd_h0.enabled or loss_cfg.vpd_h1.enabled:
+        h0rff, h1rff = create_vpd_kernels(loss_cfg, heat_cfg)
     return MiniFoldLoss(CONFIG_OF, loss_config=loss_cfg, h0rff=h0rff, h1rff=h1rff)
 
 
@@ -97,9 +116,10 @@ def run_optuna_fold(
     val_loader = make_loader(val_proteins, training.batch_size, shuffle=False)
     test_loader = make_loader(test_proteins, training.batch_size, shuffle=False)
 
-    optimizer = runner.build_optimizer(
-        base_lr=training.base_lr,
-        struct_lr=training.struct_lr,
+    optimizer = torch.optim.AdamW(
+        [p for p in runner.model.parameters() if p.requires_grad],
+        lr=training.lr,
+        weight_decay=training.weight_decay,
     )
     best_model_weights = None
     max_val_tm = 0.0
@@ -124,11 +144,13 @@ def run_optuna_fold(
             use_amp=training.amp,
             grad_clip_norm=training.grad_clip_norm,
         )
-        _, val_tm_score = evaluate_loader(
+        val_metrics = evaluate_loader(
             runner,
             val_loader,
+            loss_fn,
             num_recycling=runtime.infer_recycles,
         )
+        val_tm_score = val_metrics["tm"]
 
         best_val_tm = max(max_val_tm, val_tm_score)
         trial.report(best_val_tm, report_num)
@@ -152,11 +174,13 @@ def run_optuna_fold(
     if best_model_weights is not None:
         runner.load_state_dict(best_model_weights)
 
-    _, tm_score = evaluate_loader(
+    test_metrics = evaluate_loader(
         runner,
         test_loader,
+        loss_fn=None,
         num_recycling=runtime.infer_recycles,
     )
+    tm_score = test_metrics["tm"]
 
     del runner
     if device.type == "cuda":
@@ -171,7 +195,8 @@ def create_objective(device: torch.device, proteins: list):
 
     def objective(trial: optuna.Trial) -> float:
         params = suggest_params(trial)
-        loss_cfg, heat_cfg = build_params(params)
+        loss_cfg = build_loss_cfg(params)
+        heat_cfg = build_heat_cfg(params)
         loss_fn = build_loss_fn(loss_cfg, heat_cfg)
 
         kf = KFold(n_splits=kfold.n_splits, shuffle=True, random_state=training.seed)
@@ -204,9 +229,19 @@ def main() -> int:
 
     optuna_cfg = RUN_CONFIG.optuna
     training = RUN_CONFIG.training
+    if not optuna_cfg.tune_wasserstein and not optuna_cfg.tune_vpd:
+        raise ValueError("Enable tune_wasserstein and/or tune_vpd")
+
     device = resolve_device()
     set_seed(training.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
+
+    tuned = []
+    if optuna_cfg.tune_wasserstein:
+        tuned.append("wasserstein")
+    if optuna_cfg.tune_vpd:
+        tuned.append("vpd")
+    print(f"Optuna tuning: {', '.join(tuned)}")
 
     proteins = load_dataset()
 

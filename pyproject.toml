@@ -26,6 +26,7 @@ dependencies = [
 
 [project.scripts]
 proteintda = "main:main"
+proteintda-optuna = "optimize:main"
 
 [tool.setuptools.package-dir]
 "" = "src"
