@@ -37,6 +37,7 @@ int Heat_Kernel::points_per_axis() const {
 
 void Heat_Kernel::init_dim() {
     const int ppa = points_per_axis();
+    this->ppa = points_per_axis();
     if (this->n == 1) {
         this->dim = ppa;
     } else if (this->n == 2) {

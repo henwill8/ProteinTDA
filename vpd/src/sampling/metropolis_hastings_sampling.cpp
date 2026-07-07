@@ -7,12 +7,12 @@
 void MetropolisHastingsSampling::reset_progress() {
     SamplingMethod::reset_progress();
     const int64_t initial_ops = ops_per_theta_sampling_ + ops_per_laplacian_;
-    const int64_t ops_per_mcmc_pass = static_cast<int64_t>(kernel->dim) * kernel->dim; // goes through all thetas, and each calls delta_laplacian_symbol
+    const int64_t ops_per_mcmc_pass = static_cast<int64_t>(kernel->dim) * (kernel->dim + 1); // goes through all thetas, and each calls delta_laplacian_symbol
     const int64_t mcmc_passes = static_cast<int64_t>(mcmc_burn_in) + static_cast<int64_t>(kernel->R) * mcmc_thinning;
     set_total_ops(initial_ops + mcmc_passes * ops_per_mcmc_pass);
 }
 
-void MetropolisHastingsSampling::sample() {
+void MetropolisHastingsSampling::cpu_sample() {
     const double TWO_PI = 2.0 * std::numbers::pi;
     const int total = kernel->R * kernel->dim;
 
@@ -62,6 +62,32 @@ void MetropolisHastingsSampling::sample() {
 
     kernel->thetas = std::move(total_thetas);
     kernel->weights = std::move(weights);
+}
+
+void MetropolisHastingsSampling::sample() {
+    switch(this->device) {
+        case Device::CPU:
+            cpu_sample();
+            break;
+        case Device::CUDA:
+            Heat_Kernel_device cuda_kernel = Heat_Kernel_device{
+                kernel->n,
+                kernel->axis_dim,
+                kernel->ppa,
+                kernel->resolution,
+                kernel->R,
+                kernel->s,
+                kernel->t,
+                kernel->dim
+            };
+            if (this->normalized_lambdas) {
+                int edge_weight_total = this->edge_weight_total; 
+            } else { 
+                int edge_weight_total = 0;
+            }
+            kernel->thetas = cuda_sample(this->mcmc_sigma, this->mcmc_burn_in, this->mcmc_thinning, this->normalized_lambdas, edge_weight_total, this->seed, cuda_kernel, *this);
+            break;
+    }
 }
 
 MetropolisHastingsSampling::MetropolisHastingsSampling(

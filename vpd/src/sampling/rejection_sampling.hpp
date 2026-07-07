@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sampling_method.hpp"
+#include "rejection_sampling_cuda.hpp"
 
 /**
  * @brief Rejection sampling for heat kernel weight generation.
@@ -11,6 +12,7 @@ private:
     std::atomic<int64_t> committed_ops_{0};
     std::atomic<int> attempts_completed_{0};
 
+    void cpu_sample();
     void reset_progress() override;
     void sample() override;
     void update_total_ops();
