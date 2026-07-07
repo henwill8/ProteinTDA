@@ -33,8 +33,33 @@ def _download_checkpoint(cache_dir: Path, model_size: str) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = cache_dir / f"minifold_{model_size}.ckpt"
     if not checkpoint.exists():
-        print(f"Downloading MiniFold {model_size} weights to {checkpoint}...")
-        urllib.request.urlretrieve(MODEL_URLS[model_size], checkpoint)
+        url = MODEL_URLS[model_size]
+        print(f"Downloading MiniFold {model_size} weights to {checkpoint}...", flush=True)
+        print(f"  from {url}", flush=True)
+
+        last_pct = [-1]
+
+        def _reporthook(block_num: int, block_size: int, total_size: int) -> None:
+            if total_size <= 0:
+                downloaded_mb = block_num * block_size / (1024 * 1024)
+                print(f"\r  downloaded {downloaded_mb:.1f} MiB", end="", flush=True)
+                return
+            downloaded = min(block_num * block_size, total_size)
+            pct = int(100 * downloaded / total_size)
+            if pct != last_pct[0] and pct % 5 == 0:
+                last_pct[0] = pct
+                print(
+                    f"\r  downloaded {downloaded / (1024 * 1024):.1f} / "
+                    f"{total_size / (1024 * 1024):.1f} MiB ({pct}%)",
+                    end="",
+                    flush=True,
+                )
+
+        urllib.request.urlretrieve(url, checkpoint, reporthook=_reporthook)
+        print(flush=True)
+        print(f"Download complete: {checkpoint}", flush=True)
+    else:
+        print(f"Using cached MiniFold checkpoint: {checkpoint}", flush=True)
     return checkpoint
 
 
@@ -60,7 +85,7 @@ class MiniFoldRunner:
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        print(f"Loading MiniFold ({model_size}) on {device}...")
+        print(f"Loading MiniFold ({model_size}) on {device}...", flush=True)
 
         checkpoint = _download_checkpoint(cache_dir, model_size)
         torch.hub.set_dir(cache_dir)
@@ -68,6 +93,7 @@ class MiniFoldRunner:
         if kernels:
             torch._dynamo.config.cache_size_limit = 64
 
+        print(f"Loading checkpoint weights from {checkpoint}...", flush=True)
         ckpt = torch.load(checkpoint, map_location="cpu")
         hparams = ckpt["hyper_parameters"]
         model = MiniFoldModel(
@@ -78,7 +104,10 @@ class MiniFoldRunner:
             use_structure_module=True, # Note: They only used structure module in second stage
             kernels=kernels,
         )
-        _, alphabet = load_model_and_alphabet(hparams["esm_model_name"])
+        esm_name = hparams["esm_model_name"]
+        print(f"Loading ESM backbone ({esm_name})...", flush=True)
+        _, alphabet = load_model_and_alphabet(esm_name)
+        print("ESM backbone loaded.", flush=True)
 
         state_dict = ckpt["state_dict"]
         state_dict = {k: v for k, v in state_dict.items() if "boundaries" not in k}

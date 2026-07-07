@@ -14,6 +14,7 @@ from proteintda.tda.vpd_kernels import create_vpd_kernels
 
 
 def build_loss_fn() -> MiniFoldLoss:
+    print("Preparing VPD kernels...", flush=True)
     h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
     return MiniFoldLoss(CONFIG_OF, loss_config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
 
