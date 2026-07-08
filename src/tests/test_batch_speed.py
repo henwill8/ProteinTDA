@@ -1,25 +1,29 @@
-"""Quick batch-size timing check. Run: python src/tests/test_batch_speed.py"""
-
 import time
 from pathlib import Path
 
 import ml_collections as mlc
 import torch
 
-from proteintda.config import CONFIG_OF, HEAT_RFF_CONFIG, LOSS_CONFIG
+from proteintda.config import CONFIG_OF, HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG
 from proteintda.minifold.loss import MiniFoldLoss
 from proteintda.minifold.pipeline import build_loss_fn
 from proteintda.minifold.runner import MiniFoldRunner
 from proteintda.tda.vpd_kernels import create_vpd_kernels
-from proteintda.utils.dataset import load_dataset, make_loader, set_seed
+from proteintda.utils.dataset import load_proteins, make_loader, set_seed
 
-# --- edit these ---
 MATCH_PIPELINE = True
 N_PROTEINS = 100
 BATCH_SIZES = [1, 2, 4, 8]
 WARMUP_STEPS = 2
 TIMED_STEPS = 16
 TARGET_LENGTH = 100
+
+CASP_VERSION = None
+SCN_DIR = None
+CASP_THINNING = None
+MAX_PROTEIN_LENGTH = TARGET_LENGTH + 20
+ALLOW_INCOMPLETE = None
+
 CACHE_DIR = Path("cache/minifold")
 MODEL_SIZE = "12L"
 SEED = 42
@@ -34,7 +38,7 @@ LENGTH_BUCKETING = True
 LENGTH_BUCKET_SIZE = 10
 UNFREEZE_FOLD_BLOCKS = 0
 UNFREEZE_STRUCTURE_MODULE = True
-DEVICE = None  # None = auto-detect cuda/cpu
+DEVICE = None
 
 
 def _sync(device):
@@ -45,6 +49,22 @@ def _sync(device):
 def _pick_proteins(proteins, n, target_len):
     ranked = sorted(proteins, key=lambda p: abs(len(p.seq) - target_len))
     return ranked[:n]
+
+
+def _load_proteins():
+    data = RUN_CONFIG.data
+    return load_proteins(
+        casp_version=data.casp_version if CASP_VERSION is None else CASP_VERSION,
+        scn_dir=data.scn_dir if SCN_DIR is None else SCN_DIR,
+        casp_thinning=data.casp_thinning if CASP_THINNING is None else CASP_THINNING,
+        max_protein_length=(
+            data.max_protein_length if MAX_PROTEIN_LENGTH is None else MAX_PROTEIN_LENGTH
+        ),
+        allow_incomplete=(
+            data.allow_incomplete if ALLOW_INCOMPLETE is None else ALLOW_INCOMPLETE
+        ),
+        max_proteins=None,
+    )
 
 
 def _make_loss(with_tda):
@@ -243,7 +263,7 @@ def main():
         device = torch.device(DEVICE)
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    proteins = _pick_proteins(load_dataset(), N_PROTEINS, TARGET_LENGTH)
+    proteins = _pick_proteins(_load_proteins(), N_PROTEINS, TARGET_LENGTH)
     print(
         f"{len(proteins)} proteins, lengths "
         f"{min(len(p.seq) for p in proteins)}-{max(len(p.seq) for p in proteins)}, "

@@ -13,7 +13,7 @@ from torch.optim.lr_scheduler import StepLR
 from tqdm import tqdm
 from tmtools import tm_align
 
-from proteintda.config import CONFIG_OF
+from proteintda.config import CONFIG_OF, RUN_CONFIG
 from proteintda.minifold.loss import MiniFoldLoss, _distance_matrix, _wasserstein_terms
 from proteintda.minifold.runner import MiniFoldRunner
 from proteintda.tda.persistence import pd_from_graph
@@ -567,7 +567,13 @@ def evaluate(
 
 
 def _load_cases(device, n=1, target_length=TARGET_LENGTH):
-    proteins = load_all_proteins()
+    data = RUN_CONFIG.data
+    proteins = load_all_proteins(
+        casp_version=data.casp_version,
+        scn_dir=data.scn_dir,
+        casp_thinning=data.casp_thinning,
+        allow_incomplete=data.allow_incomplete,
+    )
     if not proteins:
         raise ValueError("dataset is empty")
     if n < 1:

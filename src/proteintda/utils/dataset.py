@@ -17,17 +17,22 @@ def set_seed(seed: int) -> None:
 
 def _load_sidechainnet_proteins(
     *,
+    casp_version: str,
+    scn_dir: str,
+    casp_thinning: int,
     max_proteins: int | None,
     max_protein_length: int | None,
     allow_incomplete: bool,
 ) -> list:
-    data = RUN_CONFIG.data
-    print("Loading SidechainNet...")
+    print(
+        f"Loading SidechainNet casp={casp_version}, thinning={casp_thinning}, "
+        f"dir={scn_dir}..."
+    )
     dataset = scn.load(
-        casp_version=data.casp_version,
-        casp_thinning=data.casp_thinning,
+        casp_version=casp_version,
+        casp_thinning=casp_thinning,
         scn_dataset=True,
-        scn_dir=data.scn_dir,
+        scn_dir=scn_dir,
         force_download=False,
         complete_structures_only=not allow_incomplete,
     )
@@ -65,8 +70,36 @@ def _load_sidechainnet_proteins(
     return dataset
 
 
-def load_all_proteins(allow_incomplete: bool = False) -> list:
+def load_proteins(
+    *,
+    casp_version: str = "debug",
+    scn_dir: str = "./data/sidechainnet",
+    casp_thinning: int = 30,
+    max_proteins: int | None = None,
+    max_protein_length: int | None = None,
+    allow_incomplete: bool = False,
+) -> list:
     return _load_sidechainnet_proteins(
+        casp_version=casp_version,
+        scn_dir=scn_dir,
+        casp_thinning=casp_thinning,
+        max_proteins=max_proteins,
+        max_protein_length=max_protein_length,
+        allow_incomplete=allow_incomplete,
+    )
+
+
+def load_all_proteins(
+    *,
+    casp_version: str = "debug",
+    scn_dir: str = "./data/sidechainnet",
+    casp_thinning: int = 30,
+    allow_incomplete: bool = False,
+) -> list:
+    return load_proteins(
+        casp_version=casp_version,
+        scn_dir=scn_dir,
+        casp_thinning=casp_thinning,
         max_proteins=None,
         max_protein_length=None,
         allow_incomplete=allow_incomplete,
@@ -75,7 +108,10 @@ def load_all_proteins(allow_incomplete: bool = False) -> list:
 
 def load_dataset() -> list:
     data = RUN_CONFIG.data
-    return _load_sidechainnet_proteins(
+    return load_proteins(
+        casp_version=data.casp_version,
+        scn_dir=data.scn_dir,
+        casp_thinning=data.casp_thinning,
         max_proteins=data.max_proteins,
         max_protein_length=data.max_protein_length,
         allow_incomplete=data.allow_incomplete,
