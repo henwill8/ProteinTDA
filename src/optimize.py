@@ -13,7 +13,11 @@ from sklearn.model_selection import KFold, train_test_split
 
 from proteintda.config import CONFIG_OF, HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG
 from proteintda.minifold.loss import MiniFoldLoss
-from proteintda.minifold.pipeline import evaluate_loader, train_epoch
+from proteintda.minifold.pipeline import (
+    evaluate_loader,
+    format_epoch_metrics,
+    train_epoch,
+)
 from proteintda.minifold.runner import MiniFoldRunner
 from proteintda.tda.vpd_kernels import create_vpd_kernels
 from proteintda.utils.dataset import load_dataset, make_loader, set_seed
@@ -126,6 +130,9 @@ def run_optuna_fold(
     patience = 0
     report_num = 0
 
+    n_splits = RUN_CONFIG.kfold.n_splits
+    print(f"trial {trial.number}  fold {fold + 1}/{n_splits}")
+
     for epoch in range(training.epochs):
         report_num += 1
         train_loader = make_loader(
@@ -134,7 +141,7 @@ def run_optuna_fold(
             shuffle=True,
             rng=fold_rng,
         )
-        train_epoch(
+        train_metrics = train_epoch(
             runner,
             train_loader,
             optimizer,
@@ -152,9 +159,24 @@ def run_optuna_fold(
         )
         val_tm_score = val_metrics["tm_score"]
 
+        print(
+            format_epoch_metrics(
+                epoch=epoch + 1,
+                epochs=training.epochs,
+                fold=fold,
+                n_splits=n_splits,
+                train=train_metrics,
+                val=val_metrics,
+            )
+        )
+
         best_val_tm = max(max_val_tm, val_tm_score)
         trial.report(best_val_tm, report_num)
         if trial.should_prune():
+            print(
+                f"Pruned trial {trial.number} fold {fold + 1} "
+                f"at epoch {epoch + 1}  best_val_tm={best_val_tm:.4f}"
+            )
             del runner
             if device.type == "cuda":
                 torch.cuda.empty_cache()
@@ -181,6 +203,12 @@ def run_optuna_fold(
         num_recycling=runtime.infer_recycles,
     )
     tm_score = test_metrics["tm_score"]
+    print(
+        f"trial {trial.number}  fold {fold + 1}/{n_splits}  "
+        f"test tm={tm_score:.4f}  best_val_tm={max_val_tm:.4f}"
+    )
+    if "plddt" in test_metrics:
+        print(f"  test plddt={test_metrics['plddt']:.4f}")
 
     del runner
     if device.type == "cuda":
@@ -217,9 +245,14 @@ def create_objective(device: torch.device, proteins: list):
                 trial=trial,
             )
             fold_tm_scores.append(tm_score)
+            print(
+                f"trial {trial.number}: fold scores so far = "
+                f"{[round(s, 4) for s in fold_tm_scores]}"
+            )
 
-        print(fold_tm_scores)
-        return float(np.mean(fold_tm_scores)) if fold_tm_scores else 0.0
+        mean_tm = float(np.mean(fold_tm_scores)) if fold_tm_scores else 0.0
+        print(f"trial {trial.number}: mean test tm={mean_tm:.4f}")
+        return mean_tm
 
     return objective
 
