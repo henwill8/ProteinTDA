@@ -409,7 +409,7 @@ def _run_batches(
             batch_cases = cases[batch_start : batch_start + batch_size]
             model_batch = runner.prepare_batch(
                 [case["protein"] for case in batch_cases],
-                train=train,
+                train=True,
             )
             loss, results = _batch_step(
                 runner,
