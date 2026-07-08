@@ -746,7 +746,7 @@ def main():
             eval_cases,
             structure_loss_fn,
             batch_size=BATCH_SIZE,
-            log_every_nth=LOG_EVERY_NTH_PROTEIN,
+            log_every_nth=1,
             group_name="eval",
         )
 

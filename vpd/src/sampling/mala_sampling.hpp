@@ -1,8 +1,11 @@
 #pragma once
 
-#include "sampling_method.hpp"
-#include "mala_sampling_cuda.hpp"
 #include <utility>
+#include "sampling_method.hpp"
+
+#ifdef VPD_WITH_CUDA
+#include "mala_sampling_cuda.hpp"
+#endif
 
 /**
  * @brief Metropolis Adjusted Langevin Algorithm for heat kernel theta generation.

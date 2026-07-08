@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <cstdint>
-#include <iostream>
 #include <numbers>
 #include <random>
 #include <vector>
@@ -30,7 +29,7 @@ void MALASampling::cpu_sample() {
         double curr_lambda = laplacian_symbol(thetas);
         grad_laplacian_symbol(thetas, grad_U);
         double dUdL = (kernel->t - kernel->s/(std::expm1(kernel->s * curr_lambda)));
-#pragma omp simd 
+#pragma omp simd
         for (int j = 0; j < kernel->dim; ++j) grad_U[j] *= dUdL;
         add_op(kernel->dim);
         const double U = kernel->t * curr_lambda - std::log1p(-std::exp(-kernel->s * curr_lambda));
@@ -85,7 +84,6 @@ void MALASampling::cpu_sample() {
         for (int s = 0; s < this->mala_thinning; ++s) mala_pass(false);
         std::copy(curr_thetas.begin(), curr_thetas.end(), total_thetas.begin() + r * kernel->dim);
     }
-    std::cout << "Thetas: " << total_thetas.size() << std::endl;
     kernel->thetas = total_thetas;
 }
 
@@ -99,13 +97,12 @@ void MALASampling::reset_progress() {
 }
 
 void MALASampling::sample() {
-    std::cout << "Device: " << static_cast<int>(this->device) << std::endl;
+#ifdef VPD_WITH_CUDA
     switch(this->device) {
         case Device::CPU: 
             cpu_sample();
             break;
         case Device::CUDA:
-            std::cout << "CUDA" << std::endl;
             Heat_Kernel_device cuda_kernel = Heat_Kernel_device{
                 kernel->n,
                 kernel->axis_dim,
@@ -124,6 +121,9 @@ void MALASampling::sample() {
             kernel->thetas = cuda_sample(this->mala_sigma, this->mala_burn_in, this->mala_thinning, this->tune_sigma, this->normalized_lambdas, edge_weight_total, this->seed, cuda_kernel, *this);
             break;
     }
+#else
+    cpu_sample();
+#endif
 }
 
 MALASampling::MALASampling(

@@ -1,7 +1,10 @@
 #pragma once
 
 #include "sampling_method.hpp"
+
+#ifdef VPD_WITH_CUDA
 #include "rejection_sampling_cuda.hpp"
+#endif
 
 /**
  * @brief Rejection sampling for heat kernel weight generation.
