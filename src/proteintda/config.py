@@ -1,6 +1,8 @@
 import ml_collections as mlc
 from minifold.data.config import model_config
 
+from vpd import _cpp
+
 _EPS = 1e-8
 
 # Shared OpenFold / MiniFold config for feature pipeline, model, and loss.
@@ -72,21 +74,23 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
         "h0rff": {
             "n": 1,
             "axis_dim": 10,
-            "resolution": 1000,
+            "resolution": 100,
             "R": 1000,
-            "t": 7e-9,
-            "s": 1.0,
+            "t": 10,
+            "s": 100,
             "seed": 42,
+            "device": _cpp.Device.CPU
         },
         "h1rff": {
             "n": 2,
             "axis_dim": 10,
             "resolution": 10,
             "R": 1000,
-            "t": 1e-10,
-            "s": 1.0,
+            "t": 10,
+            "s": 100,
             "seed": 42,
-        },
+            "device": _cpp.Device.CUDA
+        }
     }
 )
 
