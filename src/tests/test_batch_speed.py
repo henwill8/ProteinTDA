@@ -1,25 +1,40 @@
-import sys
+"""Quick batch-size timing check. Run: python src/tests/test_batch_speed.py"""
+
 import time
 from pathlib import Path
 
 import ml_collections as mlc
 import torch
 
-from proteintda.config import CONFIG_OF, HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG
+from proteintda.config import CONFIG_OF, HEAT_RFF_CONFIG, LOSS_CONFIG
 from proteintda.minifold.loss import MiniFoldLoss
 from proteintda.minifold.pipeline import build_loss_fn
 from proteintda.minifold.runner import MiniFoldRunner
 from proteintda.tda.vpd_kernels import create_vpd_kernels
 from proteintda.utils.dataset import load_dataset, make_loader, set_seed
 
+# --- edit these ---
 MATCH_PIPELINE = True
 N_PROTEINS = 100
 BATCH_SIZES = [1, 2, 4, 8]
 WARMUP_STEPS = 2
 TIMED_STEPS = 16
 TARGET_LENGTH = 100
-CACHE_DIR = Path(RUN_CONFIG.runtime.minifold_cache_dir)
-MODEL_SIZE = RUN_CONFIG.runtime.model_size
+CACHE_DIR = Path("cache/minifold")
+MODEL_SIZE = "12L"
+SEED = 42
+LR = 1e-5
+WEIGHT_DECAY = 0.01
+TRAIN_RECYCLES = 3
+INFER_RECYCLES = 3
+RANDOMIZE_RECYCLES = True
+AMP = True
+GRAD_CLIP_NORM = 1.0
+LENGTH_BUCKETING = True
+LENGTH_BUCKET_SIZE = 10
+UNFREEZE_FOLD_BLOCKS = 0
+UNFREEZE_STRUCTURE_MODULE = True
+DEVICE = None  # None = auto-detect cuda/cpu
 
 
 def _sync(device):
@@ -46,23 +61,31 @@ def _make_loss(with_tda):
 
 
 def _make_runner(device):
-    training = RUN_CONFIG.training
     return MiniFoldRunner(
         CACHE_DIR,
         model_size=MODEL_SIZE,
         device=device,
         train=True,
-        unfreeze_fold_blocks=training.unfreeze_fold_blocks,
-        unfreeze_structure_module=training.unfreeze_structure_module,
+        unfreeze_fold_blocks=UNFREEZE_FOLD_BLOCKS,
+        unfreeze_structure_module=UNFREEZE_STRUCTURE_MODULE,
     )
 
 
 def _make_optimizer(runner):
-    training = RUN_CONFIG.training
     return torch.optim.AdamW(
         [p for p in runner.model.parameters() if p.requires_grad],
-        lr=training.lr,
-        weight_decay=training.weight_decay,
+        lr=LR,
+        weight_decay=WEIGHT_DECAY,
+    )
+
+
+def _make_loader(proteins, batch_size, *, shuffle):
+    return make_loader(
+        proteins,
+        batch_size,
+        shuffle=shuffle,
+        length_bucketing=LENGTH_BUCKETING,
+        length_bucket_size=LENGTH_BUCKET_SIZE,
     )
 
 
@@ -89,7 +112,7 @@ def _time_microbenchmark(runner, proteins, loss_fn, batch_size, device):
         for i in range(0, len(proteins), batch_size)
     ]
     optimizer = _make_optimizer(runner)
-    use_amp = RUN_CONFIG.training.amp and device.type == "cuda"
+    use_amp = AMP and device.type == "cuda"
 
     def run_pass():
         proteins_seen = 0
@@ -98,7 +121,7 @@ def _time_microbenchmark(runner, proteins, loss_fn, batch_size, device):
                 batch,
                 loss_fn,
                 optimizer=optimizer,
-                num_recycling=RUN_CONFIG.training.train_recycles,
+                num_recycling=TRAIN_RECYCLES,
                 randomize_recycles=False,
                 use_amp=use_amp,
                 backward=True,
@@ -116,10 +139,9 @@ def _time_microbenchmark(runner, proteins, loss_fn, batch_size, device):
 
 
 def _time_pipeline_train(runner, proteins, loss_fn, batch_size, device):
-    training = RUN_CONFIG.training
-    loader = make_loader(proteins, batch_size, shuffle=True)
+    loader = _make_loader(proteins, batch_size, shuffle=True)
     optimizer = _make_optimizer(runner)
-    use_amp = training.amp and device.type == "cuda"
+    use_amp = AMP and device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     def run_pass():
@@ -131,10 +153,10 @@ def _time_pipeline_train(runner, proteins, loss_fn, batch_size, device):
                 loss_fn,
                 optimizer=optimizer,
                 scaler=scaler,
-                num_recycling=training.train_recycles,
-                randomize_recycles=training.randomize_recycles,
+                num_recycling=TRAIN_RECYCLES,
+                randomize_recycles=RANDOMIZE_RECYCLES,
                 use_amp=use_amp,
-                grad_clip_norm=training.grad_clip_norm,
+                grad_clip_norm=GRAD_CLIP_NORM,
                 backward=True,
                 include_loss=True,
                 include_metrics=False,
@@ -152,8 +174,7 @@ def _time_pipeline_train(runner, proteins, loss_fn, batch_size, device):
 
 
 def _time_pipeline_eval(runner, proteins, loss_fn, batch_size, device):
-    runtime = RUN_CONFIG.runtime
-    loader = make_loader(proteins, batch_size, shuffle=False)
+    loader = _make_loader(proteins, batch_size, shuffle=False)
 
     def run_pass():
         proteins_seen = 0
@@ -162,7 +183,7 @@ def _time_pipeline_eval(runner, proteins, loss_fn, batch_size, device):
             _, n = runner.run_batch(
                 batch,
                 loss_fn,
-                num_recycling=runtime.infer_recycles,
+                num_recycling=INFER_RECYCLES,
                 backward=False,
                 include_loss=True,
                 include_metrics=True,
@@ -197,13 +218,12 @@ def _run_microbenchmark(runner, proteins, device):
 
 
 def _run_pipeline_benchmark(runner, proteins, loss_fn, device):
-    training = RUN_CONFIG.training
     print(
         "\nPipeline-matched settings:"
-        f" full LOSS_CONFIG, make_loader (length_bucketing={training.length_bucketing}),"
-        f" train_recycles={training.train_recycles},"
-        f" randomize_recycles={training.randomize_recycles},"
-        f" amp={training.amp}, grad_clip={training.grad_clip_norm}"
+        f" full LOSS_CONFIG, length_bucketing={LENGTH_BUCKETING},"
+        f" train_recycles={TRAIN_RECYCLES},"
+        f" randomize_recycles={RANDOMIZE_RECYCLES},"
+        f" amp={AMP}, grad_clip={GRAD_CLIP_NORM}"
     )
     print(f"\n{'mode':<10} {'bs':>4}  {'s/step':>8}  {'s/protein':>10}")
     for label, timer in [
@@ -218,12 +238,11 @@ def _run_pipeline_benchmark(runner, proteins, loss_fn, device):
 
 
 def main():
-    set_seed(RUN_CONFIG.training.seed)
-    device = torch.device(
-        RUN_CONFIG.runtime.device
-        if RUN_CONFIG.runtime.device is not None
-        else ("cuda" if torch.cuda.is_available() else "cpu")
-    )
+    set_seed(SEED)
+    if DEVICE is not None:
+        device = torch.device(DEVICE)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     proteins = _pick_proteins(load_dataset(), N_PROTEINS, TARGET_LENGTH)
     print(
         f"{len(proteins)} proteins, lengths "
