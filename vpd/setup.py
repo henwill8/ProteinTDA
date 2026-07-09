@@ -53,10 +53,10 @@ else:
 
 if USE_OPENMP:
     if os.name == "nt":
-        cxx_args += ["/openmp", "-openmp:experimental"]
+        cxx_args += ["/openmp", "/openmp:experimental"]
         nvcc_args += ["-Xcompiler", "/openmp"]
     else:
-        cxx_args += ["-fopenmp", "-openmp:experimental"]
+        cxx_args.append("-fopenmp")
         nvcc_args += ["-Xcompiler", "-fopenmp"]
         extra_link_args.append("-fopenmp")
 
