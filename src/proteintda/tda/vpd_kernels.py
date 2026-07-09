@@ -112,7 +112,6 @@ def _build_kernel_with_progress(sampler, config_line: str):
 def create_heat_random_fourier_features(
     n, axis_dim, resolution, R=100, s=1.0, t=1, seed=42, device=_cpp.Device.CPU, show_progress=True,
 ):
-    print("HI")
     cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed)
     if cache_path.is_file():
         print(f"Loading cached heat kernel from {cache_path}...", flush=True)
