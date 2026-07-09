@@ -9,12 +9,12 @@ from matplotlib.widgets import Button, Slider
 from minifold.train.loss import AlphaFoldLoss
 from minifold.utils.residue_constants import atom_order
 from minifold.utils.tensor_utils import tensor_tree_map
-from torch.optim.lr_scheduler import StepLR
 from tqdm import tqdm
 from tmtools import tm_align
 
-from proteintda.config import CONFIG_OF, RUN_CONFIG
-from proteintda.minifold.loss import MiniFoldLoss, _distance_matrix, _wasserstein_terms
+from proteintda.config import CONFIG_OF, LOSS_CONFIG, RUN_CONFIG
+from proteintda.minifold.loss import MiniFoldLoss, _distance_matrix
+from proteintda.minifold.pipeline import _current_lr, build_loss_fn, build_lr_scheduler
 from proteintda.minifold.runner import MiniFoldRunner
 from proteintda.tda.persistence import pd_from_graph
 from proteintda.utils.conversions import (
@@ -23,40 +23,17 @@ from proteintda.utils.conversions import (
     atom_positions_from_atom37,
     atom_positions_from_sidechainnet,
 )
-from proteintda.utils.dataset import load_all_proteins
+from proteintda.utils.dataset import load_dataset
 
-N_PROTEINS = 200
-BATCH_SIZE = 8
 LOG_EVERY_NTH_PROTEIN = 20
 EVAL_FRACTION = 0.2
 EVAL_SEED = 42
-TARGET_LENGTH = 100
-STEPS = 200
-LR = 0.05
-SCHEDULER_STEP = 5
-SCHEDULER_GAMMA = 0.9
 LOG_EVERY = 10
-
-MINIFOLD_CACHE_DIR = Path("cache/minifold")
-MINIFOLD_MODEL_SIZE = "12L"  # "12L" or "48L"
-MINIFOLD_RECYCLES = 3
-MINIFOLD_UNFREEZE_FOLD_BLOCKS = 0
-MINIFOLD_UNFREEZE_STRUCTURE_MODULE = True
-USE_DISTOGRAM_LOSS = False
-USE_STRUCTURE_LOSS = False
-USE_TDA_LOSS = True
-W_DISTOGRAM = 0.8
-W_STRUCTURE = 0.2
 TDA_WARMUP_STEPS = 50
 TDA_RAMP_STEPS = 50
 
-USE_H2 = False
-HOM_DIM = 3 if USE_H2 else 2
-ACTIVE_HOMS = (0, 1, 2) if USE_H2 else (0, 1)
-W_H0 = 0.2
-W_H1 = 1.0
-W_H2 = 1.0
 PD_MARKERS = ("o", "^", "s")
+_TDA_BREAKDOWN_KEYS = ("wasserstein_h0", "wasserstein_h1", "vpd_h0", "vpd_h1")
 
 
 def _scalar(x):
@@ -69,24 +46,7 @@ def _to_numpy(diags, dim):
     return diags[dim].detach().cpu().numpy()
 
 
-def wasserstein_loss(pred_pts, target_diags):
-    pred_adj = _distance_matrix(pred_pts)
-    pred_diags = pd_from_graph(pred_adj, max_dimension=HOM_DIM, hom_dim=HOM_DIM)
-    terms = _wasserstein_terms(pred_diags, target_diags, hom_dim=HOM_DIM)
-    loss = W_H0 * terms["h0"] + W_H1 * terms["h1"] + (W_H2 * terms["h2"] if USE_H2 else 0)
-    if not isinstance(loss, torch.Tensor):
-        loss = pred_adj.new_tensor(loss)
-    breakdown = {
-        "wasserstein_h0": terms["h0"],
-        "wasserstein_h1": terms["h1"],
-        "total": loss,
-    }
-    if USE_H2:
-        breakdown["wasserstein_h2"] = terms["h2"]
-    return loss, pred_diags, breakdown
-
-
-def tda_weight(step):
+def tda_weight(step: int) -> float:
     if TDA_WARMUP_STEPS == 0 and TDA_RAMP_STEPS == 0:
         return 1.0
     if step < TDA_WARMUP_STEPS:
@@ -101,7 +61,7 @@ def tda_weight(step):
 
 def _pd_limits(target_diags, history):
     pts = []
-    for dim in ACTIVE_HOMS:
+    for dim in range(LOSS_CONFIG.pd.hom_dim):
         pts.append(_to_numpy(target_diags, dim))
         for frame in history:
             pts.append(frame["pred"][dim])
@@ -115,19 +75,6 @@ def _point_view_limits(target_pts):
     hi = target_pts.max(axis=0)
     pad = (hi - lo) * 0.1 + 0.1
     return lo - pad, hi + pad
-
-
-def _tm_align(pred_ca, target_ca, seq):
-    return tm_align(
-        np.asarray(pred_ca, dtype=float),
-        np.asarray(target_ca, dtype=float),
-        seq,
-        seq,
-    )
-
-
-def _apply_tm_align(pts, alignment):
-    return pts @ alignment.u.T + alignment.t
 
 
 def _attach_controls(fig, show, n_steps, *, n_proteins=1):
@@ -184,6 +131,14 @@ def _attach_controls(fig, show, n_steps, *, n_proteins=1):
     return go
 
 
+def _tda_terms_msg(breakdown: dict) -> str:
+    parts = []
+    for key in _TDA_BREAKDOWN_KEYS:
+        if key in breakdown:
+            parts.append(f"{key}={_scalar(breakdown[key]):.4f}")
+    return "  ".join(parts)
+
+
 def show_history(cases, title):
     if not cases or not cases[0]["history"]:
         return
@@ -206,6 +161,7 @@ def show_history(cases, title):
     target_scatters = []
     pred_sc = None
     diag_line = None
+    active_homs = range(LOSS_CONFIG.pd.hom_dim)
 
     def clear_dynamic():
         nonlocal pred_sc, diag_line
@@ -236,7 +192,7 @@ def show_history(cases, title):
         ax_pd.set_ylim(0, lim_hi)
         ax_pd.set_aspect("equal")
 
-        for dim in ACTIVE_HOMS:
+        for dim in active_homs:
             tgt = _to_numpy(target_diags, dim)
             if len(tgt):
                 target_scatters.append(
@@ -281,9 +237,8 @@ def show_history(cases, title):
         step_text.set_text(
             f"{title}{protein_msg}  frame {step_idx + 1}/{n_steps}  "
             f"step {frame['step']}  loss={frame['loss']:.4f}  "
-            f"h0={frame['h0']:.4f}  h1={frame['h1']:.4f}"
-            + (f"  h2={frame['h2']:.4f}" if USE_H2 else "")
-            + _extra_loss_msg(frame.get("breakdown", {}))
+            f"{_tda_terms_msg(frame.get('breakdown', {}))}"
+            f"{_extra_loss_msg(frame.get('breakdown', {}))}"
         )
         fig.canvas.draw_idle()
 
@@ -310,42 +265,39 @@ def _extra_loss_msg(breakdown):
 
 def _log_loss_config():
     parts = []
-    if USE_TDA_LOSS:
-        parts.append("tda (wasserstein)")
+    if LOSS_CONFIG.tda.enabled:
+        tda_terms = [
+            name
+            for name in _TDA_BREAKDOWN_KEYS
+            if LOSS_CONFIG[name].enabled
+        ]
+        if tda_terms:
+            parts.append(f"tda ({', '.join(tda_terms)})")
         if TDA_WARMUP_STEPS > 0 or TDA_RAMP_STEPS > 0:
             parts.append(f"warmup={TDA_WARMUP_STEPS} ramp={TDA_RAMP_STEPS}")
-    if USE_DISTOGRAM_LOSS:
-        parts.append(f"distogram (w={W_DISTOGRAM})")
-    if USE_STRUCTURE_LOSS:
-        parts.append(f"structure (w={W_STRUCTURE})")
+    if LOSS_CONFIG.distogram.enabled:
+        parts.append(f"distogram (w={LOSS_CONFIG.distogram.weight})")
+    if LOSS_CONFIG.structure.enabled:
+        parts.append(f"structure (w={LOSS_CONFIG.structure.weight})")
     if parts:
         print(f"  losses: {', '.join(parts)}")
 
 
 def _make_history_frame(step, pred_pts, pred_diags, breakdown, view_pts):
-    frame = {
+    hom_dim = LOSS_CONFIG.pd.hom_dim
+    return {
         "step": step,
         "loss": _scalar(breakdown["total"]),
-        "h0": _scalar(breakdown["wasserstein_h0"]),
-        "h1": _scalar(breakdown["wasserstein_h1"]),
-        "pred": [_to_numpy(pred_diags, d).copy() for d in ACTIVE_HOMS],
+        "pred": [_to_numpy(pred_diags, d).copy() for d in range(hom_dim)],
         "pts": pred_pts.detach().cpu().numpy().copy(),
         "view_pts": np.asarray(view_pts, dtype=float).copy(),
         "breakdown": breakdown,
     }
-    if USE_H2:
-        frame["h2"] = _scalar(breakdown["wasserstein_h2"])
-    return frame
 
 
 def _logged_protein_indices(n_proteins: int, every_nth: int) -> list[int]:
     stride = max(1, every_nth)
     return list(range(0, n_proteins, stride))
-
-
-class _NullScheduler:
-    def get_last_lr(self):
-        return [0.0]
 
 
 def _split_train_eval(cases, eval_fraction: float, seed: int):
@@ -362,23 +314,20 @@ def _split_train_eval(cases, eval_fraction: float, seed: int):
     return train_cases, eval_cases
 
 
-def _log_step_metrics(step, scheduler, cases, step_results, *, batch_loss):
+def _log_step_metrics(epoch, cases, step_results, *, batch_loss, optimizer=None):
+    hom_dim = LOSS_CONFIG.pd.hom_dim
+    lr = _current_lr(optimizer) if optimizer is not None else 0.0
     for case, (_, pred_diags, breakdown, _) in zip(cases, step_results):
         tgt_counts = [len(d) for d in case["target_diags"]]
-        pred_counts = [len(pred_diags[i]) for i in range(HOM_DIM)]
-        hom_msg = (
-            f"h0={_scalar(breakdown['wasserstein_h0']):.4f}  "
-            f"h1={_scalar(breakdown['wasserstein_h1']):.4f}"
-        )
-        if USE_H2:
-            hom_msg += f"  h2={_scalar(breakdown['wasserstein_h2']):.4f}"
+        pred_counts = [len(pred_diags[i]) for i in range(hom_dim)]
         tda_w_msg = ""
         if breakdown.get("tda_w", 1.0) < 1.0:
             tda_w_msg = f"  tda_w={breakdown['tda_w']:.3f}"
         prefix = f"[{case['name']}] " if len(cases) > 1 else ""
         print(
-            f"{prefix}step {step:4d}  lr={scheduler.get_last_lr()[0]:.6g}  "
-            f"loss={_scalar(breakdown['total']):.4f}  {hom_msg}{tda_w_msg}"
+            f"{prefix}epoch {epoch:4d}  lr={lr:.6g}  "
+            f"loss={_scalar(breakdown['total']):.4f}  "
+            f"{_tda_terms_msg(breakdown)}{tda_w_msg}"
             f"{_extra_loss_msg(breakdown)}  pred_n={pred_counts}  tgt_n={tgt_counts}"
         )
     if len(cases) > 1:
@@ -388,6 +337,7 @@ def _log_step_metrics(step, scheduler, cases, step_results, *, batch_loss):
 def _run_batches(
     runner,
     cases,
+    loss_fn,
     structure_loss_fn,
     step,
     *,
@@ -415,6 +365,7 @@ def _run_batches(
                 runner,
                 model_batch,
                 batch_cases,
+                loss_fn,
                 structure_loss_fn,
                 step,
                 train=train,
@@ -437,54 +388,59 @@ def train(
     cases,
     optimizer,
     scheduler,
+    loss_fn,
     structure_loss_fn,
     *,
+    epochs: int,
+    lr: float,
     batch_size: int = 1,
     log_every_nth: int = 1,
     group_name: str = "train",
 ):
     print(
         f"[{group_name}] {len(cases)} protein(s), batch_size={batch_size}, "
-        f"{STEPS} steps, lr={LR}"
+        f"{epochs} epochs, lr={lr}"
     )
     _log_loss_config()
     logged_indices = _logged_protein_indices(len(cases), log_every_nth)
     if log_every_nth > 1:
         print(f"  logging/visualizing every {log_every_nth}th protein ({len(logged_indices)} total)")
     histories = {idx: [] for idx in logged_indices}
-    hom_label = "/".join(f"H{d}" for d in ACTIVE_HOMS)
+    hom_label = "/".join(f"H{d}" for d in range(LOSS_CONFIG.pd.hom_dim))
     for case in cases:
         tgt_counts = [len(d) for d in case["target_diags"]]
         print(f"  {case['name']}: {case['target_pts'].shape[0]} points  {hom_label}={tgt_counts}")
 
-    for step in range(STEPS + 1):
-        if step < STEPS:
+    for epoch in range(epochs + 1):
+        if epoch < epochs:
             optimizer.zero_grad()
         batch_loss, step_results = _run_batches(
             runner,
             cases,
+            loss_fn,
             structure_loss_fn,
-            step,
+            epoch,
             batch_size=batch_size,
             train=True,
-            progress_desc=f"epoch {step + 1}/{STEPS + 1}",
+            progress_desc=f"epoch {epoch + 1}/{epochs + 1}",
         )
-        if step % LOG_EVERY == 0 or step == STEPS:
+        if epoch % LOG_EVERY == 0 or epoch == epochs:
             logged_cases = [cases[i] for i in logged_indices]
             logged_results = [step_results[i] for i in logged_indices]
             _log_step_metrics(
-                step,
-                scheduler,
+                epoch,
                 logged_cases,
                 logged_results,
                 batch_loss=batch_loss,
+                optimizer=optimizer
             )
             for idx in logged_indices:
-                histories[idx].append(_make_history_frame(step, *step_results[idx]))
+                histories[idx].append(_make_history_frame(epoch, *step_results[idx]))
 
-        if step < STEPS:
+        if epoch < epochs:
             optimizer.step()
-            scheduler.step()
+            if scheduler is not None:
+                scheduler.step()
 
     show_history(
         [
@@ -504,8 +460,10 @@ def train(
 def evaluate(
     runner,
     cases,
+    loss_fn,
     structure_loss_fn,
     *,
+    epochs: int,
     batch_size: int = 1,
     log_every_nth: int = 1,
     group_name: str = "eval",
@@ -520,7 +478,7 @@ def evaluate(
     logged_indices = _logged_protein_indices(len(cases), log_every_nth)
     if log_every_nth > 1:
         print(f"  logging/visualizing every {log_every_nth}th protein ({len(logged_indices)} total)")
-    hom_label = "/".join(f"H{d}" for d in ACTIVE_HOMS)
+    hom_label = "/".join(f"H{d}" for d in range(LOSS_CONFIG.pd.hom_dim))
     for case in cases:
         tgt_counts = [len(d) for d in case["target_diags"]]
         print(f"  {case['name']}: {case['target_pts'].shape[0]} points  {hom_label}={tgt_counts}")
@@ -532,8 +490,9 @@ def evaluate(
     batch_loss, step_results = _run_batches(
         runner,
         cases,
+        loss_fn,
         structure_loss_fn,
-        STEPS,
+        epochs,
         batch_size=batch_size,
         train=False,
         progress_desc="eval",
@@ -541,15 +500,14 @@ def evaluate(
     logged_cases = [cases[i] for i in logged_indices]
     logged_results = [step_results[i] for i in logged_indices]
     _log_step_metrics(
-        STEPS,
-        _NullScheduler(),
+        epochs,
         logged_cases,
         logged_results,
         batch_loss=batch_loss,
     )
 
     histories = {
-        idx: [_make_history_frame(STEPS, *step_results[idx])]
+        idx: [_make_history_frame(epochs, *step_results[idx])]
         for idx in logged_indices
     }
     show_history(
@@ -566,24 +524,30 @@ def evaluate(
     )
 
 
-def _load_cases(device, n=1, target_length=TARGET_LENGTH):
+def _load_cases(device):
     data = RUN_CONFIG.data
-    proteins = load_all_proteins(
-        casp_version=data.casp_version,
-        scn_dir=data.scn_dir,
-        casp_thinning=data.casp_thinning,
-        allow_incomplete=data.allow_incomplete,
-    )
+    pd_cfg = LOSS_CONFIG.pd
+    target_length = data.max_protein_length
+    proteins = load_dataset()
     if not proteins:
         raise ValueError("dataset is empty")
-    if n < 1:
-        raise ValueError(f"n must be >= 1, got {n}")
 
-    selected = sorted(proteins, key=lambda p: (abs(len(p.seq) - target_length), p.id))[:n]
-    if n == 1 and len(selected[0].seq) == target_length:
+    def _sort_key(protein):
+        if target_length is None:
+            return (0, protein.id)
+        return (abs(len(protein.seq) - target_length), protein.id)
+
+    selected = sorted(proteins, key=_sort_key)
+    n = len(selected)
+    if target_length is None:
+        print(f"selected {n} proteins (max_proteins={data.max_proteins})")
+    elif n == 1 and len(selected[0].seq) == target_length:
         print(f"selected {selected[0].id}  len={target_length}")
     else:
-        print(f"selected {n} proteins (closest to TARGET_LENGTH={target_length}):")
+        print(
+            f"selected {n} proteins closest to max_protein_length={target_length} "
+            f"(max_proteins={data.max_proteins})"
+        )
         for protein in selected:
             print(f"  {protein.id}  len={len(protein.seq)}")
 
@@ -608,9 +572,7 @@ def _load_cases(device, n=1, target_length=TARGET_LENGTH):
             "target_pts": target_pts,
             "target_ca_np": target_ca.detach().cpu().numpy(),
             "target_adj": target_adj,
-            "target_diags": pd_from_graph(
-                target_adj, max_dimension=HOM_DIM, hom_dim=HOM_DIM,
-            ),
+            "target_diags": pd_from_graph(target_adj, **pd_cfg),
             "target_pts_np": target_pts.detach().cpu().numpy(),
         })
     return cases
@@ -629,45 +591,64 @@ def _ca_from_output(r_dict, index=0):
     return r_dict["final_atom_positions"][index, :, ca_idx].detach().float().cpu()
 
 
-def _case_step(r_dict, case, index, w, shared_breakdown):
+def _case_step(r_dict, case, index, w, shared_breakdown, tda_loss_fn):
     pred_pts = _cbeta_from_output(r_dict, index)
     breakdown = dict(shared_breakdown)
+    pred_adj = _distance_matrix(pred_pts)
+    pred_diags = pd_from_graph(pred_adj, **LOSS_CONFIG.pd)
 
-    if USE_TDA_LOSS and w > 0:
-        tda_loss, pred_diags, tda_breakdown = wasserstein_loss(pred_pts, case["target_diags"])
-        protein_total = w * tda_loss
-        breakdown.update(tda_breakdown)
+    if LOSS_CONFIG.tda.enabled and w > 0 and tda_loss_fn is not None and tda_loss_fn._enabled:
+        tda_loss, tda_breakdown = tda_loss_fn._loss_from_adjs(
+            pred_adj,
+            case["target_adj"],
+            _return_breakdown=True,
+        )
+        protein_total = w * LOSS_CONFIG.tda.weight * tda_loss
+        for name, value in tda_breakdown.items():
+            if name == "loss":
+                continue
+            breakdown[name] = value
     else:
         with torch.no_grad():
-            _, pred_diags, tda_breakdown = wasserstein_loss(pred_pts, case["target_diags"])
+            if tda_loss_fn is not None and tda_loss_fn._enabled:
+                _, tda_breakdown = tda_loss_fn._loss_from_adjs(
+                    pred_adj,
+                    case["target_adj"],
+                    _return_breakdown=True,
+                )
+                for name, value in tda_breakdown.items():
+                    if name != "loss":
+                        breakdown[name] = value
         protein_total = pred_pts.new_zeros(())
-        breakdown.update(tda_breakdown)
 
     breakdown["tda_w"] = w
     with torch.no_grad():
         pred_ca = _ca_from_output(r_dict, index).numpy()
-        alignment = _tm_align(pred_ca, case["target_ca_np"], case["seq"])
+        alignment = tm_align(pred_ca, case["target_ca_np"], case["seq"], case["seq"])
         breakdown["tm_score"] = float(alignment.tm_norm_chain2)
-        view_pts = _apply_tm_align(pred_pts.detach().cpu().numpy(), alignment)
+        view_pts = pred_pts.detach().cpu().numpy() @ alignment.u.T + alignment.t
 
     breakdown["total"] = protein_total
     return protein_total, pred_pts, pred_diags, breakdown, view_pts
 
 
-def _batch_step(runner, model_batch, cases, structure_loss_fn, step, *, train=True):
+def _batch_step(runner, model_batch, cases, loss_fn, structure_loss_fn, step, *, train=True):
+    training = RUN_CONFIG.training
+
     if train:
         runner._set_training_mode()
     else:
         runner.model.eval()
         for module in runner._frozen_modules:
             module.eval()
-    r_dict = runner.model(model_batch, num_recycling=MINIFOLD_RECYCLES)
+    r_dict = runner.model(model_batch, num_recycling=training.train_recycles)
     w = tda_weight(step)
+    tda_loss_fn = loss_fn._tda if loss_fn is not None else None
 
     total = r_dict["preds"].new_zeros(())
     shared_breakdown = {}
 
-    if USE_DISTOGRAM_LOSS:
+    if LOSS_CONFIG.distogram.enabled:
         disto = MiniFoldLoss._distogram_loss(
             r_dict["preds"],
             model_batch["coords"],
@@ -675,25 +656,25 @@ def _batch_step(runner, model_batch, cases, structure_loss_fn, step, *, train=Tr
             runner.model.boundaries,
             no_bins=r_dict["preds"].shape[-1],
         )
-        total = total + W_DISTOGRAM * disto
+        total = total + LOSS_CONFIG.distogram.weight * disto
         shared_breakdown["distogram"] = disto
 
-    if USE_STRUCTURE_LOSS:
+    if LOSS_CONFIG.structure.enabled:
         batch_of = tensor_tree_map(lambda t: t[..., -1], model_batch["batch_of"])
         struct_loss, _ = structure_loss_fn(r_dict, batch_of, _return_breakdown=True)
-        total = total + W_STRUCTURE * struct_loss
+        total = total + LOSS_CONFIG.structure.weight * struct_loss
         shared_breakdown["structure"] = struct_loss
 
     protein_totals = []
     results = []
     for index, case in enumerate(cases):
         protein_total, pred_pts, pred_diags, breakdown, view_pts = _case_step(
-            r_dict, case, index, w, shared_breakdown,
+            r_dict, case, index, w, shared_breakdown, tda_loss_fn,
         )
         protein_totals.append(protein_total)
         results.append((pred_pts, pred_diags, breakdown, view_pts))
 
-    if USE_TDA_LOSS and w > 0:
+    if LOSS_CONFIG.tda.enabled and w > 0 and protein_totals:
         total = total + torch.stack(protein_totals).mean()
 
     for _, _, breakdown, _ in results:
@@ -702,31 +683,48 @@ def _batch_step(runner, model_batch, cases, structure_loss_fn, step, *, train=Tr
     return total, results
 
 
+def _resolve_device() -> torch.device:
+    device = RUN_CONFIG.runtime.device
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.device(device)
+
+
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    all_cases = _load_cases(device, n=N_PROTEINS)
+    training = RUN_CONFIG.training
+    runtime = RUN_CONFIG.runtime
+
+    device = _resolve_device()
+    all_cases = _load_cases(device)
     train_cases, eval_cases = _split_train_eval(all_cases, EVAL_FRACTION, EVAL_SEED)
     print(
         f"split {len(all_cases)} proteins -> "
         f"{len(train_cases)} train, {len(eval_cases)} eval "
         f"(eval_fraction={EVAL_FRACTION})"
     )
+
+    loss_fn = build_loss_fn()
+    if not loss_fn.tda_enabled:
+        raise ValueError(
+            "No TDA loss terms enabled. Enable wasserstein and/or vpd in LOSS_CONFIG."
+        )
+
     runner = MiniFoldRunner(
-        MINIFOLD_CACHE_DIR,
-        model_size=MINIFOLD_MODEL_SIZE,
+        Path(runtime.minifold_cache_dir),
+        model_size=runtime.model_size,
         device=device,
         train=True,
-        unfreeze_fold_blocks=MINIFOLD_UNFREEZE_FOLD_BLOCKS,
-        unfreeze_structure_module=MINIFOLD_UNFREEZE_STRUCTURE_MODULE,
+        unfreeze_fold_blocks=training.unfreeze_fold_blocks,
+        unfreeze_structure_module=training.unfreeze_structure_module,
     )
     trainable, total = runner.trainable_parameter_count
     print(f"MiniFold trainable parameters: {trainable:,} / {total:,}")
 
     optimizer = torch.optim.Adam(
         [p for p in runner.model.parameters() if p.requires_grad],
-        lr=LR,
+        lr=training.lr,
     )
-    scheduler = StepLR(optimizer, step_size=SCHEDULER_STEP, gamma=SCHEDULER_GAMMA)
+    scheduler = build_lr_scheduler(optimizer)
     structure_loss_fn = AlphaFoldLoss(CONFIG_OF.loss)
 
     train(
@@ -734,8 +732,11 @@ def main():
         train_cases,
         optimizer,
         scheduler,
+        loss_fn,
         structure_loss_fn,
-        batch_size=BATCH_SIZE,
+        epochs=training.epochs,
+        lr=training.lr,
+        batch_size=training.batch_size,
         log_every_nth=LOG_EVERY_NTH_PROTEIN,
         group_name="train",
     )
@@ -744,8 +745,10 @@ def main():
         evaluate(
             runner,
             eval_cases,
+            loss_fn,
             structure_loss_fn,
-            batch_size=BATCH_SIZE,
+            epochs=training.epochs,
+            batch_size=training.batch_size,
             log_every_nth=1,
             group_name="eval",
         )

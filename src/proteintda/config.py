@@ -123,7 +123,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             "enabled": True,
         },
         "wasserstein_h1": {
-            "weight": 0.9,
+            "weight": 0.08,
             "enabled": True,
         },
         "vpd_h0": {
