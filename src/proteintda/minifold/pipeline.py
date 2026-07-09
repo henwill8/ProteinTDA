@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from sklearn.model_selection import train_test_split
+from torch.optim.lr_scheduler import LRScheduler, StepLR
 from tqdm import tqdm
 
 from proteintda.config import CONFIG_OF, HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG
@@ -17,6 +18,21 @@ def build_loss_fn() -> MiniFoldLoss:
     print("Preparing VPD kernels...", flush=True)
     h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
     return MiniFoldLoss(CONFIG_OF, loss_config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
+
+
+def build_lr_scheduler(optimizer: torch.optim.Optimizer) -> LRScheduler | None:
+    sched_cfg = RUN_CONFIG.training.get("scheduler", {})
+    if not sched_cfg.get("enabled", False):
+        return None
+    return StepLR(
+        optimizer,
+        step_size=int(sched_cfg.get("step_size", 5)),
+        gamma=float(sched_cfg.get("gamma", 0.9)),
+    )
+
+
+def _current_lr(optimizer: torch.optim.Optimizer) -> float:
+    return float(optimizer.param_groups[0]["lr"])
 
 
 _METRIC_KEYS = ("plddt", "tm_score")
@@ -44,11 +60,15 @@ def format_epoch_metrics(
     n_splits: int,
     train: dict[str, float],
     val: dict[str, float],
+    lr: float | None = None,
 ) -> str:
-    lines = [f"epoch {epoch}/{epochs}  fold {fold + 1}/{n_splits}"]
+    header = f"epoch {epoch}/{epochs}  fold {fold + 1}/{n_splits}"
+    if lr is not None:
+        header += f"  lr={lr:.6g}"
+    lines = [header]
     lines.append(_format_metrics_line("train", train))
     lines.append(_format_metrics_line("val", val))
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def train_epoch(
@@ -78,7 +98,7 @@ def train_epoch(
             grad_clip_norm=grad_clip_norm,
             backward=True,
             include_loss=True,
-            include_metrics=False,
+            include_metrics=True,
         )
         for key, value in batch_totals.items():
             totals[key] += value
@@ -92,7 +112,7 @@ def train_epoch(
 def evaluate_loader(
     runner: MiniFoldRunner,
     loader,
-    loss_fn: MiniFoldLoss,
+    loss_fn: MiniFoldLoss | None,
     *,
     num_recycling: int,
     include_loss: bool = True,
@@ -220,6 +240,7 @@ def run_train_fold(
         lr=training.lr,
         weight_decay=training.weight_decay,
     )
+    scheduler = build_lr_scheduler(optimizer)
     best_model_weights = None
     max_val_tm = 0.0
     patience = 0
@@ -265,8 +286,12 @@ def run_train_fold(
                 n_splits=n_splits,
                 train=metrics,
                 val=val_metrics,
+                lr=_current_lr(optimizer),
             )
         )
+
+        if scheduler is not None:
+            scheduler.step()
 
         if patience > training.patience:
             print(f"Early stopping at epoch {epoch + 1}")

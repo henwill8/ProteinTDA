@@ -51,7 +51,7 @@ RUN_CONFIG = mlc.ConfigDict(
             "length_bucket_size": 10,
             "train_proteins_per_epoch": None,
             "val_proteins_per_epoch": None,
-            "unfreeze_fold_blocks": 0,
+            "unfreeze_fold_blocks": 12,
             "unfreeze_structure_module": True,
             "train_recycles": 3,
             "randomize_recycles": True,
@@ -60,6 +60,11 @@ RUN_CONFIG = mlc.ConfigDict(
             "amp": True,
             "grad_clip_norm": 1.0,
             "dropout": False,
+            "scheduler": {
+                "enabled": True,
+                "step_size": 5,
+                "gamma": 0.9,
+            },
         },
         "logging": {
             "baseline_log_file": "logs/esmfold_baseline.log",
