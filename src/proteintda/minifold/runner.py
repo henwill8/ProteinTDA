@@ -300,7 +300,6 @@ class MiniFoldRunner:
                 dtype=np.float32,
             )
             raw_features["is_distillation"] = np.array(0.0, dtype=np.float32)
-            # "train" may crop; "eval" keeps the full chain for metrics.
             mode = "train" if crop else "eval"
             batch_of = self._feature_pipeline.process_features(
                 raw_features,

@@ -31,6 +31,7 @@ EVAL_SEED = 42
 LOG_EVERY = 10
 TDA_WARMUP_STEPS = 50
 TDA_RAMP_STEPS = 50
+CHECKPOINT_DIR = Path("logs/tda_loss")
 
 PD_MARKERS = ("o", "^", "s")
 _TDA_BREAKDOWN_KEYS = ("wasserstein_h0", "wasserstein_h1", "vpd_h0", "vpd_h1")
@@ -234,9 +235,12 @@ def show_history(cases, title):
         protein_msg = ""
         if n_proteins > 1:
             protein_msg = f"  protein {protein_idx + 1}/{n_proteins} ({case['name']})"
+        frame_label = frame.get("label")
+        if frame_label is None:
+            frame_label = f"step {frame['step']}"
         step_text.set_text(
             f"{title}{protein_msg}  frame {step_idx + 1}/{n_steps}  "
-            f"step {frame['step']}  loss={frame['loss']:.4f}  "
+            f"{frame_label}  loss={frame['loss']:.4f}  "
             f"{_tda_terms_msg(frame.get('breakdown', {}))}"
             f"{_extra_loss_msg(frame.get('breakdown', {}))}"
         )
@@ -467,9 +471,11 @@ def evaluate(
     batch_size: int = 1,
     log_every_nth: int = 1,
     group_name: str = "eval",
+    frame_label: str | None = None,
+    show: bool = True,
 ):
     if not cases:
-        return
+        return []
 
     print(
         f"[{group_name}] {len(cases)} protein(s), batch_size={batch_size} "
@@ -495,7 +501,7 @@ def evaluate(
         epochs,
         batch_size=batch_size,
         train=False,
-        progress_desc="eval",
+        progress_desc=group_name,
     )
     logged_cases = [cases[i] for i in logged_indices]
     logged_results = [step_results[i] for i in logged_indices]
@@ -506,22 +512,66 @@ def evaluate(
         batch_loss=batch_loss,
     )
 
-    histories = {
-        idx: [_make_history_frame(epochs, *step_results[idx])]
-        for idx in logged_indices
-    }
-    show_history(
-        [
+    plot_cases = []
+    for idx in logged_indices:
+        frame = _make_history_frame(epochs, *step_results[idx])
+        if frame_label is not None:
+            frame["label"] = frame_label
+        plot_cases.append(
             {
                 "name": cases[idx]["name"],
                 "target_diags": cases[idx]["target_diags"],
                 "target_pts": cases[idx]["target_ca_np"],
-                "history": histories[idx],
+                "history": [frame],
             }
-            for idx in logged_indices
-        ],
-        group_name,
+        )
+    if show:
+        show_history(plot_cases, group_name)
+    return plot_cases
+
+
+def _merge_baseline_finetuned(baseline_cases, finetuned_cases):
+    if len(baseline_cases) != len(finetuned_cases):
+        raise ValueError(
+            f"baseline/finetuned eval size mismatch: "
+            f"{len(baseline_cases)} vs {len(finetuned_cases)}"
+        )
+    merged = []
+    for baseline, finetuned in zip(baseline_cases, finetuned_cases):
+        if baseline["name"] != finetuned["name"]:
+            raise ValueError(
+                f"eval protein order mismatch: {baseline['name']} vs {finetuned['name']}"
+            )
+        bl_frame = dict(baseline["history"][0])
+        bl_frame["label"] = "baseline"
+        bl_frame["step"] = 0
+        ft_frame = dict(finetuned["history"][0])
+        ft_frame["label"] = "finetuned"
+        ft_frame["step"] = 1
+        merged.append(
+            {
+                "name": baseline["name"],
+                "target_diags": baseline["target_diags"],
+                "target_pts": baseline["target_pts"],
+                "history": [bl_frame, ft_frame],
+            }
+        )
+    return merged
+
+
+def _save_finetuned_checkpoint(path: Path, state_dict: dict, *, epochs: int, model_size: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "state_dict": state_dict,
+            "epochs": epochs,
+            "model_size": model_size,
+            "lr": RUN_CONFIG.training.lr,
+            "batch_size": RUN_CONFIG.training.batch_size,
+        },
+        path,
     )
+    print(f"Saved finetuned checkpoint to {path}")
 
 
 def _load_cases(device):
@@ -726,6 +776,7 @@ def main():
     )
     scheduler = build_lr_scheduler(optimizer)
     structure_loss_fn = AlphaFoldLoss(CONFIG_OF.loss)
+    baseline_state = runner.snapshot_state_dict()
 
     train(
         runner,
@@ -741,8 +792,16 @@ def main():
         group_name="train",
     )
 
+    finetuned_state = runner.snapshot_state_dict()
+    _save_finetuned_checkpoint(
+        CHECKPOINT_DIR / f"finetuned_{runtime.model_size}.pt",
+        finetuned_state,
+        epochs=training.epochs,
+        model_size=runtime.model_size,
+    )
+
     if eval_cases:
-        evaluate(
+        finetuned_eval = evaluate(
             runner,
             eval_cases,
             loss_fn,
@@ -750,8 +809,28 @@ def main():
             epochs=training.epochs,
             batch_size=training.batch_size,
             log_every_nth=1,
-            group_name="eval",
+            group_name="eval-finetuned",
+            frame_label="finetuned",
+            show=False,
         )
+        runner.load_state_dict(baseline_state)
+        baseline_eval = evaluate(
+            runner,
+            eval_cases,
+            loss_fn,
+            structure_loss_fn,
+            epochs=training.epochs,
+            batch_size=training.batch_size,
+            log_every_nth=1,
+            group_name="eval-baseline",
+            frame_label="baseline",
+            show=False,
+        )
+        show_history(
+            _merge_baseline_finetuned(baseline_eval, finetuned_eval),
+            "eval",
+        )
+        runner.load_state_dict(finetuned_state)
 
 
 if __name__ == "__main__":
