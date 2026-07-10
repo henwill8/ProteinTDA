@@ -338,6 +338,10 @@ def _log_step_metrics(epoch, cases, step_results, *, batch_loss, optimizer=None)
         print(f"  batch_loss={_scalar(batch_loss):.4f}")
 
 
+def _cropping_enabled() -> bool:
+    return CONFIG_OF.data.train.crop_size is not None
+
+
 def _run_batches(
     runner,
     cases,
@@ -347,8 +351,11 @@ def _run_batches(
     *,
     batch_size: int,
     train: bool,
+    crop: bool | None = None,
     progress_desc: str | None = None,
 ):
+    if crop is None:
+        crop = train and _cropping_enabled()
     num_batches = max(1, (len(cases) + batch_size - 1) // batch_size)
     batch_losses = []
     step_results: dict[int, tuple] = {}
@@ -364,6 +371,7 @@ def _run_batches(
             model_batch = runner.prepare_batch(
                 [case["protein"] for case in batch_cases],
                 train=True,
+                crop=crop,
             )
             loss, results = _batch_step(
                 runner,
@@ -401,11 +409,17 @@ def train(
     log_every_nth: int = 1,
     group_name: str = "train",
 ):
+    cropping = _cropping_enabled()
     print(
         f"[{group_name}] {len(cases)} protein(s), batch_size={batch_size}, "
         f"{epochs} epochs, lr={lr}"
     )
     _log_loss_config()
+    if cropping:
+        print(
+            f"  cropping enabled (crop_size={CONFIG_OF.data.train.crop_size}); "
+            "log steps run a full-length eval pass for TM/plots"
+        )
     logged_indices = _logged_protein_indices(len(cases), log_every_nth)
     if log_every_nth > 1:
         print(f"  logging/visualizing every {log_every_nth}th protein ({len(logged_indices)} total)")
@@ -426,11 +440,26 @@ def train(
             epoch,
             batch_size=batch_size,
             train=True,
+            crop=cropping,
             progress_desc=f"epoch {epoch + 1}/{epochs + 1}",
         )
         if epoch % LOG_EVERY == 0 or epoch == epochs:
             logged_cases = [cases[i] for i in logged_indices]
-            logged_results = [step_results[i] for i in logged_indices]
+            if cropping:
+                _, eval_results = _run_batches(
+                    runner,
+                    logged_cases,
+                    loss_fn,
+                    structure_loss_fn,
+                    epoch,
+                    batch_size=batch_size,
+                    train=False,
+                    crop=False,
+                    progress_desc=f"eval log {epoch}",
+                )
+                logged_results = [eval_results[i] for i in range(len(logged_cases))]
+            else:
+                logged_results = [step_results[i] for i in logged_indices]
             _log_step_metrics(
                 epoch,
                 logged_cases,
@@ -438,8 +467,8 @@ def train(
                 batch_loss=batch_loss,
                 optimizer=optimizer
             )
-            for idx in logged_indices:
-                histories[idx].append(_make_history_frame(epoch, *step_results[idx]))
+            for hist_i, idx in enumerate(logged_indices):
+                histories[idx].append(_make_history_frame(epoch, *logged_results[hist_i]))
 
         if epoch < epochs:
             optimizer.step()
@@ -501,6 +530,7 @@ def evaluate(
         epochs,
         batch_size=batch_size,
         train=False,
+        crop=False,
         progress_desc=group_name,
     )
     logged_cases = [cases[i] for i in logged_indices]
