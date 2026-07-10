@@ -381,6 +381,7 @@ def _run_batches(
                 structure_loss_fn,
                 step,
                 train=train,
+                crop=crop,
             )
             batch_losses.append(loss)
             if train:
@@ -671,16 +672,39 @@ def _ca_from_output(r_dict, index=0):
     return r_dict["final_atom_positions"][index, :, ca_idx].detach().float().cpu()
 
 
-def _case_step(r_dict, case, index, w, shared_breakdown, tda_loss_fn):
-    pred_pts = _cbeta_from_output(r_dict, index)
+def _case_step(
+    r_dict,
+    case,
+    index,
+    w,
+    shared_breakdown,
+    tda_loss_fn,
+    *,
+    model_batch: dict,
+    compute_tm: bool,
+):
+    length = int(model_batch["mask"][index].sum().item())
+    pred_pts = _cbeta_from_output(r_dict, index)[:length]
     breakdown = dict(shared_breakdown)
+
+    if compute_tm:
+        target_adj = case["target_adj"]
+    else:
+        batch_of = tensor_tree_map(lambda t: t[..., -1], model_batch["batch_of"])
+        target_pts = atom_positions_from_atom37(
+            batch_of["all_atom_positions"][index],
+            batch_of["all_atom_mask_true"][index],
+            Atom37.CB,
+        )[:length]
+        target_adj = _distance_matrix(target_pts).detach()
+
     pred_adj = _distance_matrix(pred_pts)
     pred_diags = pd_from_graph(pred_adj, **LOSS_CONFIG.pd)
 
     if LOSS_CONFIG.tda.enabled and w > 0 and tda_loss_fn is not None and tda_loss_fn._enabled:
         tda_loss, tda_breakdown = tda_loss_fn._loss_from_adjs(
             pred_adj,
-            case["target_adj"],
+            target_adj,
             _return_breakdown=True,
         )
         protein_total = w * LOSS_CONFIG.tda.weight * tda_loss
@@ -693,7 +717,7 @@ def _case_step(r_dict, case, index, w, shared_breakdown, tda_loss_fn):
             if tda_loss_fn is not None and tda_loss_fn._enabled:
                 _, tda_breakdown = tda_loss_fn._loss_from_adjs(
                     pred_adj,
-                    case["target_adj"],
+                    target_adj,
                     _return_breakdown=True,
                 )
                 for name, value in tda_breakdown.items():
@@ -703,16 +727,30 @@ def _case_step(r_dict, case, index, w, shared_breakdown, tda_loss_fn):
 
     breakdown["tda_w"] = w
     with torch.no_grad():
-        pred_ca = _ca_from_output(r_dict, index).numpy()
-        alignment = tm_align(pred_ca, case["target_ca_np"], case["seq"], case["seq"])
-        breakdown["tm_score"] = float(alignment.tm_norm_chain2)
-        view_pts = pred_ca @ alignment.u.T + alignment.t
+        if compute_tm:
+            pred_ca = _ca_from_output(r_dict, index).numpy()[:length]
+            alignment = tm_align(pred_ca, case["target_ca_np"], case["seq"], case["seq"])
+            breakdown["tm_score"] = float(alignment.tm_norm_chain2)
+            view_pts = pred_ca @ alignment.u.T + alignment.t
+        else:
+            breakdown["tm_score"] = float("nan")
+            view_pts = np.zeros((0, 3), dtype=float)
 
     breakdown["total"] = protein_total
     return protein_total, pred_pts, pred_diags, breakdown, view_pts
 
 
-def _batch_step(runner, model_batch, cases, loss_fn, structure_loss_fn, step, *, train=True):
+def _batch_step(
+    runner,
+    model_batch,
+    cases,
+    loss_fn,
+    structure_loss_fn,
+    step,
+    *,
+    train: bool = True,
+    crop: bool = False,
+):
     training = RUN_CONFIG.training
 
     if train:
@@ -749,7 +787,14 @@ def _batch_step(runner, model_batch, cases, loss_fn, structure_loss_fn, step, *,
     results = []
     for index, case in enumerate(cases):
         protein_total, pred_pts, pred_diags, breakdown, view_pts = _case_step(
-            r_dict, case, index, w, shared_breakdown, tda_loss_fn,
+            r_dict,
+            case,
+            index,
+            w,
+            shared_breakdown,
+            tda_loss_fn,
+            model_batch=model_batch,
+            compute_tm=not crop,
         )
         protein_totals.append(protein_total)
         results.append((pred_pts, pred_diags, breakdown, view_pts))
