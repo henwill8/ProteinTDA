@@ -119,11 +119,11 @@ LOSS_CONFIG = mlc.ConfigDict(
             "max_edge_length": 10,
         },
         "wasserstein_h0": {
-            "weight": 0.01,
+            "weight": 0.001,
             "enabled": True,
         },
         "wasserstein_h1": {
-            "weight": 0.08,
+            "weight": 0.008,
             "enabled": True,
         },
         "vpd_h0": {

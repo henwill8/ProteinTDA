@@ -316,7 +316,10 @@ def _profile_batch_size(
 
 def _print_batch_report(batch_size: int, totals: ProfileTotals) -> None:
     total_ms = totals.total_per_step_ms()
-    print(f"\nbatch_size={batch_size}  steps={totals.steps}  proteins={totals.proteins}")
+    print(
+        f"\nbatch_size={batch_size}  steps={totals.steps}  proteins={totals.proteins}  "
+        f"max_protein_length={RUN_CONFIG.data.max_protein_length}"
+    )
     print(f"{'section':<22} {'ms/step':>10} {'ms/protein':>12} {'%':>7}")
     for key in PROFILE_KEYS:
         ms_step = totals.per_step_ms(key)

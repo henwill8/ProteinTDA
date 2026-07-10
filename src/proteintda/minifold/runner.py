@@ -258,8 +258,11 @@ class MiniFoldRunner:
     ) -> dict:
         if not isinstance(proteins, list):
             proteins = [proteins]
+        # Random crops should not be cached
+        crop_size = self.config_of.data.train.crop_size
+        use_cache = not (train and crop_size is not None)
         singles = [
-            self._prepare_single(protein, train=train, use_cache=True)
+            self._prepare_single(protein, train=train, use_cache=use_cache)
             for protein in proteins
         ]
         return self._collate_batches(singles)
