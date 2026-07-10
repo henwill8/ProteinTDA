@@ -447,7 +447,7 @@ def train(
             {
                 "name": cases[idx]["name"],
                 "target_diags": cases[idx]["target_diags"],
-                "target_pts": cases[idx]["target_pts_np"],
+                "target_pts": cases[idx]["target_ca_np"],
                 "history": histories[idx],
             }
             for idx in logged_indices
@@ -515,7 +515,7 @@ def evaluate(
             {
                 "name": cases[idx]["name"],
                 "target_diags": cases[idx]["target_diags"],
-                "target_pts": cases[idx]["target_pts_np"],
+                "target_pts": cases[idx]["target_ca_np"],
                 "history": histories[idx],
             }
             for idx in logged_indices
@@ -626,7 +626,7 @@ def _case_step(r_dict, case, index, w, shared_breakdown, tda_loss_fn):
         pred_ca = _ca_from_output(r_dict, index).numpy()
         alignment = tm_align(pred_ca, case["target_ca_np"], case["seq"], case["seq"])
         breakdown["tm_score"] = float(alignment.tm_norm_chain2)
-        view_pts = pred_pts.detach().cpu().numpy() @ alignment.u.T + alignment.t
+        view_pts = pred_ca @ alignment.u.T + alignment.t
 
     breakdown["total"] = protein_total
     return protein_total, pred_pts, pred_diags, breakdown, view_pts

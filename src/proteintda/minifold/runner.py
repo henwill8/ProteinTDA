@@ -255,14 +255,16 @@ class MiniFoldRunner:
         proteins: SCNProtein | list[SCNProtein],
         *,
         train: bool = False,
+        crop: bool | None = None,
     ) -> dict:
         if not isinstance(proteins, list):
             proteins = [proteins]
+        if crop is None:
+            crop = train and self.config_of.data.train.crop_size is not None
         # Random crops should not be cached
-        crop_size = self.config_of.data.train.crop_size
-        use_cache = not (train and crop_size is not None)
+        use_cache = not crop
         singles = [
-            self._prepare_single(protein, train=train, use_cache=use_cache)
+            self._prepare_single(protein, train=train, crop=crop, use_cache=use_cache)
             for protein in proteins
         ]
         return self._collate_batches(singles)
@@ -272,9 +274,10 @@ class MiniFoldRunner:
         protein: SCNProtein,
         *,
         train: bool = False,
+        crop: bool = False,
         use_cache: bool = True,
     ) -> dict:
-        cache_key = (str(protein.id), train)
+        cache_key = (str(protein.id), train, crop)
         if use_cache and cache_key in self._prepare_cache:
             return self._prepare_cache[cache_key]
         seq = str(protein.seq)
@@ -297,9 +300,11 @@ class MiniFoldRunner:
                 dtype=np.float32,
             )
             raw_features["is_distillation"] = np.array(0.0, dtype=np.float32)
+            # "train" may crop; "eval" keeps the full chain for metrics.
+            mode = "train" if crop else "eval"
             batch_of = self._feature_pipeline.process_features(
                 raw_features,
-                "train",
+                mode,
             )
             seq_length = batch_of["seq_length"]
             if isinstance(seq_length, torch.Tensor):
@@ -483,6 +488,7 @@ class MiniFoldRunner:
                     loss_fn,
                     recycles,
                     include_metrics=include_metrics,
+                    crop=backward,
                 )
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
@@ -515,9 +521,10 @@ class MiniFoldRunner:
         num_recycling: int,
         *,
         include_metrics: bool = False,
+        crop: bool = False,
     ) -> dict | None:
         train = loss_fn is not None
-        model_batch = self.prepare_batch(proteins, train=train)
+        model_batch = self.prepare_batch(proteins, train=train, crop=crop and train)
         if loss_fn is not None:
             result = loss_fn.compute(
                 self.model,
