@@ -21,7 +21,7 @@ std::vector<double> cuda_sample(bool normalize, int edge_weights_total, int seed
     double* final_thetas;
     CUDA_CHECK(cudaMallocHost(&final_thetas, array_size * kernel.R));
 
-    curandState* rand_states;
+    curandState *rand_states;
     CUDA_CHECK(cudaMalloc(&rand_states, dim * sizeof(curandState)));
 
     const int THREADSPERBLOCK = 256;

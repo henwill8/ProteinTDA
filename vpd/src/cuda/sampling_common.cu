@@ -36,3 +36,4 @@ __global__ void laplacian_symbol(const double* theta, double* lambda, const Heat
 
     atomicAdd(lambda, lambda_i);
 }
+

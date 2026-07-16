@@ -78,17 +78,17 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
     {
         "h0rff": {
             "n": 1,
-            "axis_dim": 10,
-            "resolution": 100,
-            "R": 1000,
-            "t": 10,
-            "s": 100,
+            "axis_dim": 5,
+            "resolution": 10,
+            "R": 10000,
+            "t": 1,
+            "s": 1,
             "seed": 42,
-            "device": _cpp.Device.CPU
+            "device": _cpp.Device.CUDA
         },
         "h1rff": {
             "n": 2,
-            "axis_dim": 10,
+            "axis_dim": 2,
             "resolution": 10,
             "R": 1000,
             "t": 10,
