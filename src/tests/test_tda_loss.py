@@ -25,12 +25,19 @@ from proteintda.utils.conversions import (
 )
 from proteintda.utils.dataset import load_dataset
 
+MODE = "mlp"  # "points", "mlp", or "minifold"
+N_POINTS = 100
+MLP_STEPS = 500
+MLP_LR = 0.0001
+HIDDEN_DIM = 256
+SEED = 42
+
 LOG_EVERY_NTH_PROTEIN = 20
 EVAL_FRACTION = 0.2
 EVAL_SEED = 42
-LOG_EVERY = 10
-TDA_WARMUP_STEPS = 50
-TDA_RAMP_STEPS = 50
+LOG_EVERY = 1
+TDA_WARMUP_STEPS = 0
+TDA_RAMP_STEPS = 0
 CHECKPOINT_DIR = Path("logs/tda_loss")
 
 PD_MARKERS = ("o", "^", "s")
@@ -813,6 +820,148 @@ def _resolve_device() -> torch.device:
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     return torch.device(device)
+
+
+class PointMLP(nn.Module):
+    def __init__(self, n_points, hidden_dim):
+        super().__init__()
+        self.n_points = n_points
+        d = n_points * 3
+        self.net = nn.Sequential(
+            nn.Linear(d, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, d),
+        )
+
+    def forward(self, x):
+        return self.net(x).view(self.n_points, 3)
+
+
+def _make_problem(device):
+    torch.manual_seed(SEED)
+    target_pts = torch.randn(N_POINTS, 3, device=device)
+    target_adj = _distance_matrix(target_pts).detach()
+    return target_pts, target_adj
+
+
+def _train_point_cloud(name, target_adj, target_pts, optimizer, scheduler, *, get_pred_pts, loss_fn):
+    """Overfit TDA loss on a fixed target point cloud (points / MLP modes)."""
+    n_pts = target_pts.shape[0]
+    print(f"[{name}] {n_pts} points, {MLP_STEPS} steps, lr={MLP_LR}")
+    _log_loss_config()
+
+    tda_loss_fn = loss_fn._tda if loss_fn.tda_enabled else None
+    if tda_loss_fn is None or not tda_loss_fn._enabled:
+        raise ValueError(
+            "No TDA loss terms enabled. Enable wasserstein and/or vpd in LOSS_CONFIG."
+        )
+
+    target_diags = pd_from_graph(target_adj, **LOSS_CONFIG.pd)
+    tgt_counts = [len(d) for d in target_diags]
+    hom_label = "/".join(f"H{d}" for d in range(LOSS_CONFIG.pd.hom_dim))
+    print(f"target diagram sizes {hom_label}={tgt_counts}")
+
+    history = []
+    target_pts_np = target_pts.detach().cpu().numpy()
+
+    for step in range(MLP_STEPS + 1):
+        pred_pts = get_pred_pts()
+        pred_adj = _distance_matrix(pred_pts)
+        pred_diags = pd_from_graph(pred_adj, **LOSS_CONFIG.pd)
+        w = 1
+
+        if w > 0:
+            tda_loss, tda_breakdown = tda_loss_fn._loss_from_adjs(
+                pred_adj,
+                target_adj,
+                _return_breakdown=True,
+            )
+            loss = w * LOSS_CONFIG.tda.weight * tda_loss
+            breakdown = dict(tda_breakdown)
+        else:
+            with torch.no_grad():
+                _, tda_breakdown = tda_loss_fn._loss_from_adjs(
+                    pred_adj,
+                    target_adj,
+                    _return_breakdown=True,
+                )
+            loss = pred_pts.new_zeros(())
+            breakdown = dict(tda_breakdown)
+
+        breakdown["tda_w"] = w
+        breakdown["total"] = loss
+
+        if step % LOG_EVERY == 0 or step == MLP_STEPS:
+            tda_w_msg = ""
+            if w < 1.0:
+                tda_w_msg = f"  tda_w={w:.3f}"
+            pred_counts = [len(pred_diags[i]) for i in range(LOSS_CONFIG.pd.hom_dim)]
+            lr = _current_lr(optimizer) if optimizer is not None else MLP_LR
+            print(
+                f"step {step:4d}  lr={lr:.6g}  loss={_scalar(breakdown['total']):.4f}  "
+                f"{_tda_terms_msg(breakdown)}{tda_w_msg}  "
+                f"pred_n={pred_counts}  tgt_n={tgt_counts}"
+            )
+            view_pts = pred_pts.detach().cpu().numpy()
+            history.append(
+                _make_history_frame(step, pred_pts, pred_diags, breakdown, view_pts)
+            )
+
+        if step < MLP_STEPS:
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
+
+    show_history(
+        [
+            {
+                "name": name,
+                "target_diags": target_diags,
+                "target_pts": target_pts_np,
+                "history": history,
+            }
+        ],
+        name,
+    )
+
+
+def run_points(device, loss_fn):
+    target_pts, target_adj = _make_problem(device)
+    pred_pts = torch.randn(N_POINTS, 3, device=device, requires_grad=True)
+    optimizer = torch.optim.Adam([pred_pts], lr=MLP_LR)
+    scheduler = build_lr_scheduler(optimizer)
+    _train_point_cloud(
+        "points",
+        target_adj,
+        target_pts,
+        optimizer,
+        scheduler,
+        get_pred_pts=lambda: pred_pts,
+        loss_fn=loss_fn,
+    )
+
+
+def run_mlp(device, loss_fn):
+    target_pts, target_adj = _make_problem(device)
+    model = PointMLP(N_POINTS, hidden_dim=HIDDEN_DIM).to(device)
+    model_input = torch.randn(1, N_POINTS * 3, device=device) * 20
+    optimizer = torch.optim.Adam(model.parameters(), lr=MLP_LR)
+    scheduler = build_lr_scheduler(optimizer)
+    _train_point_cloud(
+        "mlp",
+        target_adj,
+        target_pts,
+        optimizer,
+        scheduler,
+        get_pred_pts=lambda: model(model_input),
+        loss_fn=loss_fn,
+    )
 
 
 def main():

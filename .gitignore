@@ -18,3 +18,4 @@ vpd/*.egg-info
 /.venv
 /src/proteintda.egg-info
 /.minifold_extract
+/tda
