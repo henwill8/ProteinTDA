@@ -70,16 +70,6 @@ def build_loss_cfg(params: dict):
     return loss_cfg
 
 
-def build_heat_cfg(params: dict):
-    heat_cfg = copy.deepcopy(HEAT_RFF_CONFIG)
-
-    if RUN_CONFIG.optuna.tune_vpd:
-        heat_cfg.h0rff.t = params["t_h0"]
-        heat_cfg.h1rff.t = params["t_h1"]
-
-    return heat_cfg
-
-
 def build_loss_fn(loss_cfg, heat_cfg) -> MiniFoldLoss:
     h0rff = h1rff = None
     if loss_cfg.vpd_h0.enabled or loss_cfg.vpd_h1.enabled:
@@ -224,8 +214,7 @@ def create_objective(device: torch.device, proteins: list):
     def objective(trial: optuna.Trial) -> float:
         params = suggest_params(trial)
         loss_cfg = build_loss_cfg(params)
-        heat_cfg = build_heat_cfg(params)
-        loss_fn = build_loss_fn(loss_cfg, heat_cfg)
+        loss_fn = build_loss_fn(loss_cfg, copy.deepcopy(HEAT_RFF_CONFIG))
 
         kf = KFold(n_splits=kfold.n_splits, shuffle=True, random_state=training.seed)
         fold_tm_scores: list[float] = []

@@ -81,8 +81,6 @@ RUN_CONFIG = mlc.ConfigDict(
             "tune_vpd": False,
             "w_min": 0.001,
             "w_max": 2.0,
-            "t_min": 1e-25,
-            "t_max": 1e-5,
         },
     }
 )
