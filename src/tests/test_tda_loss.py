@@ -5,6 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn as nn
 from matplotlib.widgets import Button, Slider
 from minifold.train.loss import AlphaFoldLoss
 from minifold.utils.residue_constants import atom_order
@@ -27,7 +28,7 @@ from proteintda.utils.dataset import load_dataset
 
 MODE = "mlp"  # "points", "mlp", or "minifold"
 N_POINTS = 100
-MLP_STEPS = 500
+MLP_STEPS = 100
 MLP_LR = 0.0001
 HIDDEN_DIM = 256
 SEED = 42
@@ -969,6 +970,20 @@ def main():
     runtime = RUN_CONFIG.runtime
 
     device = _resolve_device()
+
+    loss_fn = build_loss_fn()
+    if not loss_fn.tda_enabled:
+        raise ValueError(
+            "No TDA loss terms enabled. Enable wasserstein and/or vpd in LOSS_CONFIG."
+        )
+
+    if MODE == "mlp":
+        run_mlp(device, loss_fn)
+        return
+    elif MODE == "points":
+        run_points(device, loss_fn)
+        return
+    
     all_cases = _load_cases(device)
     train_cases, eval_cases = _split_train_eval(all_cases, EVAL_FRACTION, EVAL_SEED)
     print(
@@ -976,12 +991,6 @@ def main():
         f"{len(train_cases)} train, {len(eval_cases)} eval "
         f"(eval_fraction={EVAL_FRACTION})"
     )
-
-    loss_fn = build_loss_fn()
-    if not loss_fn.tda_enabled:
-        raise ValueError(
-            "No TDA loss terms enabled. Enable wasserstein and/or vpd in LOSS_CONFIG."
-        )
 
     runner = MiniFoldRunner(
         Path(runtime.minifold_cache_dir),
