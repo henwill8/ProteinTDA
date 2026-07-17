@@ -44,7 +44,7 @@ def _as_scalar(value: torch.Tensor | float) -> float:
     return float(value.detach())
 
 
-_TDA_TERMS = ("wasserstein_h0", "wasserstein_h1", "vpd_h0", "vpd_h1")
+_TDA_TERMS = ("wasserstein_h0", "wasserstein_h1", "wasserstein_h2", "vpd_h0", "vpd_h1", "vpd_h2")
 
 
 class TDALoss:
@@ -66,8 +66,8 @@ class TDALoss:
         self._enabled = tuple(name for name in _TDA_TERMS if config[name].enabled)
         if "vpd_h0" in self._enabled and h0rff is None:
             raise ValueError("vpd_h0 loss is enabled but h0rff was not provided")
-        if "vpd_h1" in self._enabled and h1rff is None:
-            raise ValueError("vpd_h1 loss is enabled but h1rff was not provided")
+        if any(term in self._enabled for term in ["vpd_h1", "vpd_h2"]) and h1rff is None:
+            raise ValueError("vpd_h1 or vpd_h2 loss is enabled but h1rff was not provided")
 
     def _create_adjs(
         self,
@@ -104,10 +104,14 @@ class TDALoss:
                 terms[name] = wasserstein["h0"]
             elif name == "wasserstein_h1":
                 terms[name] = wasserstein["h1"]
+            elif name == "wasserstein_h2":
+                terms[name] = wasserstein["h2"]
             elif name == "vpd_h0":
                 terms[name] = self.h0rff.vpd_loss(pred_diags[0], target_diags[0])
             elif name == "vpd_h1":
                 terms[name] = self.h1rff.vpd_loss(pred_diags[1], target_diags[1])
+            elif name == "vpd_h2":
+                terms[name] = self.h1rff.vpd_loss(pred_diags[2], target_diags[2])
         return terms
 
     def _loss_from_adjs(
