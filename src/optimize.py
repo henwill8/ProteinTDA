@@ -25,10 +25,6 @@ from proteintda.utils.dataset import load_dataset, make_loader, set_seed
 warnings.filterwarnings("ignore")
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
-# Temporary: eval untrained checkpoint on train/val splits (eval mode, no optimizer steps).
-# Set False to restore normal Optuna training.
-SANITY_CHECK_BASELINE = True
-
 
 def resolve_device() -> torch.device:
     device = RUN_CONFIG.runtime.device
@@ -89,67 +85,6 @@ def build_loss_fn(loss_cfg, heat_cfg) -> MiniFoldLoss:
     if loss_cfg.vpd_h0.enabled or loss_cfg.vpd_h1.enabled:
         h0rff, h1rff = create_vpd_kernels(loss_cfg, heat_cfg)
     return MiniFoldLoss(CONFIG_OF, loss_config=loss_cfg, h0rff=h0rff, h1rff=h1rff)
-
-
-def run_baseline_sanity_check(device: torch.device, proteins: list) -> None:
-    """Eval fresh pretrained weights on the same train/val proteins used per fold."""
-    training = RUN_CONFIG.training
-    runtime = RUN_CONFIG.runtime
-    kfold = RUN_CONFIG.kfold
-    optuna_cfg = RUN_CONFIG.optuna
-    n_splits = kfold.n_splits
-    cache_dir = Path(runtime.minifold_cache_dir)
-    loss_fn = build_loss_fn(copy.deepcopy(LOSS_CONFIG), copy.deepcopy(HEAT_RFF_CONFIG))
-
-    print("Sanity check: untrained model, eval mode, no training")
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=training.seed)
-    for fold, (train_idx, test_idx) in enumerate(kf.split(proteins)):
-        if fold >= optuna_cfg.n_folds:
-            break
-
-        set_seed(training.seed + fold)
-        train_idx, val_idx = train_test_split(train_idx, test_size=0.25)
-        train_proteins = [proteins[i] for i in train_idx]
-        val_proteins = [proteins[i] for i in val_idx]
-
-        runner = MiniFoldRunner(
-            cache_dir,
-            model_size=runtime.model_size,
-            device=device,
-            train=True,
-            unfreeze_fold_blocks=training.unfreeze_fold_blocks,
-            unfreeze_structure_module=training.unfreeze_structure_module,
-        )
-        train_loader = make_loader(train_proteins, training.batch_size, shuffle=False)
-        val_loader = make_loader(val_proteins, training.batch_size, shuffle=False)
-
-        print(f"fold {fold + 1}/{n_splits}  train proteins={len(train_proteins)}  val proteins={len(val_proteins)}")
-        baseline_train = evaluate_loader(
-            runner,
-            train_loader,
-            loss_fn,
-            num_recycling=runtime.infer_recycles,
-        )
-        baseline_val = evaluate_loader(
-            runner,
-            val_loader,
-            loss_fn,
-            num_recycling=runtime.infer_recycles,
-        )
-        print(
-            format_epoch_metrics(
-                epoch=0,
-                epochs=training.epochs,
-                fold=fold,
-                n_splits=n_splits,
-                train=baseline_train,
-                val=baseline_val,
-            )
-        )
-
-        del runner
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
 
 
 def run_optuna_fold(
@@ -333,10 +268,6 @@ def main() -> int:
     torch.backends.cuda.matmul.allow_tf32 = True
 
     proteins = load_dataset()
-
-    if SANITY_CHECK_BASELINE:
-        run_baseline_sanity_check(device, proteins)
-        return 0
 
     if not optuna_cfg.tune_wasserstein and not optuna_cfg.tune_vpd:
         raise ValueError("Enable tune_wasserstein and/or tune_vpd")
