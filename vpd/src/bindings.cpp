@@ -1,6 +1,7 @@
 #include <torch/extension.h>
 #include "heat_kernel.hpp"
 #include "sampling_method.hpp"
+#include "random_sampling.hpp"
 #include "rejection_sampling.hpp"
 #include "metropolis_hastings_sampling.hpp"
 #include "mala_sampling.hpp"
@@ -9,7 +10,11 @@
 namespace py = pybind11;
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  py::enum_<Device>(m, "Device")
+    .value("CPU", Device::CPU)
+    .value("CUDA", Device::CUDA);
   py::class_<Heat_Kernel, std::shared_ptr<Heat_Kernel>>(m, "Heat_Kernel")
+
     .def(py::init<int, int, double, int, double, double>(),
         py::arg("n"),
         py::arg("axis_dim"),
@@ -33,13 +38,17 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def("init", &SamplingMethod::init,
         py::arg("kernel"),
         py::arg("normalized_lambdas") = true,
-        py::arg("seed") = 42)
+        py::arg("seed") = 42,
+        py::arg("device") = Device::CPU)
     .def("build", &SamplingMethod::build, py::call_guard<py::gil_scoped_release>())
     .def_property_readonly("completed_ops", &SamplingMethod::completed_ops)
     .def_property_readonly("total_ops", &SamplingMethod::total_ops)
     .def_property_readonly("weights_completed", &SamplingMethod::weights_completed)
     .def_property_readonly("total_weights", &SamplingMethod::total_weights)
     .def("progress_postfix", &SamplingMethod::progress_postfix);
+
+  py::class_<RandomSampling, SamplingMethod, std::shared_ptr<RandomSampling>>(m, "RandomSamplingKernel")
+      .def(py::init<>());
 
   py::class_<RejectionSampling, SamplingMethod, std::shared_ptr<RejectionSampling>>(m, "RejectionSamplingKernel")
     .def(py::init<>())

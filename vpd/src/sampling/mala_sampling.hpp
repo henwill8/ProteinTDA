@@ -1,7 +1,11 @@
 #pragma once
 
-#include "sampling_method.hpp"
 #include <utility>
+#include "sampling_method.hpp"
+
+#ifdef VPD_WITH_CUDA
+#include "mala_sampling_cuda.hpp"
+#endif
 
 /**
  * @brief Metropolis Adjusted Langevin Algorithm for heat kernel theta generation.
@@ -13,6 +17,7 @@ private:
     int mala_thinning;
     bool tune_sigma;
 
+    void cpu_sample();
     void reset_progress() override;
     void sample() override;
 

@@ -2,6 +2,10 @@
 
 #include "sampling_method.hpp"
 
+#ifdef VPD_WITH_CUDA
+#include "metropolis_hastings_sampling_cuda.hpp"
+#endif
+
 /**
  * @brief Metropolis-Hastings sampling for heat kernel theta generation.
  */
@@ -11,6 +15,7 @@ private:
     int mcmc_burn_in;
     int mcmc_thinning;
 
+    void cpu_sample();
     void reset_progress() override;
     void sample() override;
 

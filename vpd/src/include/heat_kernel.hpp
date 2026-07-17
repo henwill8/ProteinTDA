@@ -5,6 +5,7 @@
 struct Heat_Kernel {
     int n;
     int axis_dim;
+    int ppa;
     double resolution;
     int R;
     double s;

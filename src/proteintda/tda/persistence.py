@@ -5,16 +5,25 @@ import gudhi.wasserstein
 import torch
 
 
-def pd_from_graph(adj_tensor: torch.Tensor, max_dimension: int, hom_dim: int = 2) -> list[torch.Tensor]:
+def pd_from_graph(
+    adj_tensor: torch.Tensor,
+    max_dimension: int,
+    hom_dim: int = 2,
+    max_edge_length: float | None = None,
+) -> list[torch.Tensor]:
     """
     Persistence diagrams whose birth/death values remain attached to ``adj_tensor`` for autograd.
 
     ``adj_tensor`` is a symmetric distance matrix (diagonal zero).
+    ``max_edge_length`` truncates the Vietoris-Rips filtration; ``None`` uses the full matrix.
     """
     diagrams: list[torch.Tensor] = []
     adj_matrix = adj_tensor.detach().cpu().numpy()
 
-    rips_complex = gd.RipsComplex(distance_matrix=adj_matrix)
+    rips_kwargs: dict = {"distance_matrix": adj_matrix}
+    if max_edge_length is not None:
+        rips_kwargs["max_edge_length"] = max_edge_length
+    rips_complex = gd.RipsComplex(**rips_kwargs)
     st = rips_complex.create_simplex_tree(max_dimension=max_dimension)
     st.compute_persistence()
     generators = st.flag_persistence_generators()

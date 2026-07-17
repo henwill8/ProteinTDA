@@ -21,6 +21,7 @@ def _run_config(*, num_proteins: int) -> dict[str, Any]:
     training = RUN_CONFIG.training
     kfold = RUN_CONFIG.kfold
     runtime = RUN_CONFIG.runtime
+    sched = training.get("scheduler", {})
     return {
         "baseline": runtime.baseline,
         "n_splits": kfold.n_splits,
@@ -31,6 +32,8 @@ def _run_config(*, num_proteins: int) -> dict[str, Any]:
         "max_proteins": data.max_proteins,
         "model_size": runtime.model_size,
         "infer_recycles": runtime.infer_recycles,
+        "lr": training.lr,
+        "scheduler": dict(sched) if sched else None,
     }
 
 

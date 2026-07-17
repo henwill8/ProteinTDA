@@ -6,11 +6,7 @@
 #include <random>
 #include <vector>
 
-void MALASampling::reset_progress() {
-   SamplingMethod::reset_progress();
-}
-
-void MALASampling::sample() {
+void MALASampling::cpu_sample() {
     const double TWO_PI = 2.0 * std::numbers::pi;
     const int total = kernel->R * kernel->dim;
     
@@ -23,23 +19,25 @@ void MALASampling::sample() {
     };
 
     auto wrap_pi = [&](double x) {
-        x = std::fmod(x, std::numbers::pi); if (x < 0) x += std::numbers::pi; return x;
+        x = std::fmod(x, TWO_PI); if (x <= -std::numbers::pi) x += TWO_PI; else if (x > std::numbers::pi) x -= TWO_PI; return x;
     };
 
     std::vector<double> curr_thetas(kernel->dim);
     sample_thetas(curr_thetas, gen);
 
-    auto compute_grad = [&](double *grad_U) {
-        double curr_lambda = laplacian_symbol(curr_thetas.data());
-        grad_laplacian_symbol(curr_thetas.data(), grad_U);
-        double dUdL = 2 * (kernel->t + kernel->s/(std::expm1(kernel->s * curr_lambda)));
+    auto compute_grad = [&](double *thetas, double *grad_U) {
+        double curr_lambda = laplacian_symbol(thetas);
+        grad_laplacian_symbol(thetas, grad_U);
+        double dUdL = (kernel->t - kernel->s/(std::expm1(kernel->s * curr_lambda)));
+#pragma omp simd
         for (int j = 0; j < kernel->dim; ++j) grad_U[j] *= dUdL;
+        add_op(kernel->dim);
         const double U = kernel->t * curr_lambda - std::log1p(-std::exp(-kernel->s * curr_lambda));
         return std::make_pair(U, curr_lambda);
     };
     
     std::vector<double> curr_grad(kernel->dim);
-    auto [curr_U, curr_lambda] = compute_grad(curr_grad.data());
+    auto [curr_U, curr_lambda] = compute_grad(curr_thetas.data(), curr_grad.data());
 
     std::vector<double> total_thetas(total);
     std::vector<double> weights(kernel->R, 1.0);
@@ -49,20 +47,23 @@ void MALASampling::sample() {
     auto mala_pass = [&](bool tune) {
         std::vector<double> prop(kernel->dim);
         for (int i = 0; i < kernel->dim; ++i) {
-            double drift = this->mala_sigma * curr_grad[i];
+            double drift = - this->mala_sigma * curr_grad[i];
             double brownian = std::sqrt(2 * this->mala_sigma) * gaussian(gen);
             prop[i] = wrap_2pi(curr_thetas[i] + drift + brownian);
         }
+        add_op(kernel->dim);
         std::vector<double> prop_grad(kernel->dim);
-        auto [prop_U, prop_lambda] = compute_grad(prop_grad.data());
+        auto [prop_U, prop_lambda] = compute_grad(prop.data(), prop_grad.data());
         double q_fwd = 0.0;
         double q_bwd = 0.0;
+#pragma omp parallel for schedule(static) reduction (+:q_fwd,q_bwd)
         for (int i = 0; i < kernel->dim; ++i) {
             double d = wrap_pi(curr_thetas[i] - prop[i]);
-            q_fwd += (-d - this->mala_sigma * curr_grad[i]) * (-d  -this->mala_sigma * curr_grad[i]);
-            q_bwd += (d - this->mala_sigma * prop_grad[i]) * (d  -this->mala_sigma * prop_grad[i]);
+            q_fwd += (d - this->mala_sigma * curr_grad[i]) * (d  -this->mala_sigma * curr_grad[i]);
+            q_bwd += (-d - this->mala_sigma * prop_grad[i]) * (-d  -this->mala_sigma * prop_grad[i]);
         }
-        double alpha_log =  (q_fwd - q_bwd) / 4*(this->mala_sigma) - kernel->t * (prop_lambda - curr_lambda) + std::log1p(-std::exp(-kernel->s * prop_lambda)) - std::log1p(-std::exp(-kernel->s * curr_lambda));
+        add_op(kernel->dim);
+        double alpha_log =  (q_fwd - q_bwd) / (4 * (this->mala_sigma)) - kernel->t * (prop_lambda - curr_lambda) + std::log1p(-std::exp(-kernel->s * prop_lambda)) - std::log1p(-std::exp(-kernel->s * curr_lambda));
         double alpha = std::min(1.0, std::exp(alpha_log));
         if (std::log(uniform_dist(gen)) < alpha_log) {
             curr_thetas.swap(prop);
@@ -84,6 +85,45 @@ void MALASampling::sample() {
         std::copy(curr_thetas.begin(), curr_thetas.end(), total_thetas.begin() + r * kernel->dim);
     }
     kernel->thetas = total_thetas;
+}
+
+void MALASampling::reset_progress() {
+    SamplingMethod::reset_progress();
+    const int64_t ops_per_compute_grad = ops_per_laplacian_ + static_cast<int64_t>(kernel->dim) * kernel ->dim + static_cast<int64_t>(2 * kernel->dim);
+    const int64_t initial_ops = ops_per_theta_sampling_ + ops_per_compute_grad;
+    const int64_t ops_per_mala_pass = static_cast<int64_t>(2 * kernel->dim) + ops_per_compute_grad;
+    const int64_t mala_passes = static_cast<int64_t>(mala_burn_in) + static_cast<int64_t>(kernel->R) * mala_thinning;
+    set_total_ops(initial_ops + mala_passes * ops_per_mala_pass);
+}
+
+void MALASampling::sample() {
+#ifdef VPD_WITH_CUDA
+    switch(this->device) {
+        case Device::CPU: 
+            cpu_sample();
+            break;
+        case Device::CUDA:
+            Heat_Kernel_device cuda_kernel = Heat_Kernel_device{
+                kernel->n,
+                kernel->axis_dim,
+                kernel->ppa,
+                kernel->resolution,
+                kernel->R,
+                kernel->s,
+                kernel->t,
+                kernel->dim
+            };
+            if (this->normalized_lambdas) {
+                int edge_weight_total = this->edge_weight_total; 
+            } else { 
+                int edge_weight_total = 0;
+            }
+            kernel->thetas = cuda_sample(this->mala_sigma, this->mala_burn_in, this->mala_thinning, this->tune_sigma, this->normalized_lambdas, edge_weight_total, this->seed, cuda_kernel, *this);
+            break;
+    }
+#else
+    cpu_sample();
+#endif
 }
 
 MALASampling::MALASampling(

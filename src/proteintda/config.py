@@ -1,6 +1,8 @@
 import ml_collections as mlc
 from minifold.data.config import model_config
 
+from vpd import _cpp
+
 _EPS = 1e-8
 
 # Shared OpenFold / MiniFold config for feature pipeline, model, and loss.
@@ -45,9 +47,11 @@ RUN_CONFIG = mlc.ConfigDict(
             "lr": 1e-5,
             "weight_decay": 0.01,
             "batch_size": 1,
+            "length_bucketing": True,
+            "length_bucket_size": 10,
             "train_proteins_per_epoch": None,
             "val_proteins_per_epoch": None,
-            "unfreeze_fold_blocks": 0,
+            "unfreeze_fold_blocks": 12,
             "unfreeze_structure_module": True,
             "train_recycles": 3,
             "randomize_recycles": True,
@@ -56,6 +60,11 @@ RUN_CONFIG = mlc.ConfigDict(
             "amp": True,
             "grad_clip_norm": 1.0,
             "dropout": False,
+            "scheduler": {
+                "enabled": True,
+                "step_size": 5,
+                "gamma": 0.9,
+            },
         },
         "logging": {
             "baseline_log_file": "logs/esmfold_baseline.log",
@@ -83,21 +92,23 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
         "h0rff": {
             "n": 1,
             "axis_dim": 10,
-            "resolution": 1000,
+            "resolution": 5,
             "R": 1000,
-            "t": 7e-9,
-            "s": 1.0,
+            "t": 2,
+            "s": 0.4,
             "seed": 42,
+            "device": _cpp.Device.CUDA
         },
         "h1rff": {
             "n": 2,
             "axis_dim": 10,
-            "resolution": 10,
+            "resolution": 3,
             "R": 1000,
-            "t": 1e-10,
-            "s": 1.0,
+            "t": 2,
+            "s": 0.4,
             "seed": 42,
-        },
+            "device": _cpp.Device.CUDA
+        }
     }
 )
 
@@ -118,21 +129,22 @@ LOSS_CONFIG = mlc.ConfigDict(
         "pd": {
             "max_dimension": 2,
             "hom_dim": 2,
+            "max_edge_length": 10,
         },
         "wasserstein_h0": {
-            "weight": 0.01,
+            "weight": 0.1,
             "enabled": True,
         },
         "wasserstein_h1": {
-            "weight": 0.9,
+            "weight": 0.8,
             "enabled": True,
         },
         "vpd_h0": {
-            "weight": 1.0,
+            "weight": 0.001,
             "enabled": True,
         },
         "vpd_h1": {
-            "weight": 1.0,
+            "weight": 0.008,
             "enabled": True,
         },
         "eps": _EPS,

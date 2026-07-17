@@ -168,6 +168,8 @@ class MiniFoldRunner:
         self.cache_dir = cache_dir
         self.model_size = model_size
         self._frozen_modules: list[torch.nn.Module] = []
+        self._feature_pipeline = feature_pipeline.FeaturePipeline(CONFIG_OF.data)
+        self._prepare_cache: dict[tuple[str, bool], dict] = {}
 
         if train:
             self.prepare_for_training(
@@ -291,14 +293,31 @@ class MiniFoldRunner:
         proteins: SCNProtein | list[SCNProtein],
         *,
         train: bool = False,
+        crop: bool | None = None,
     ) -> dict:
         if not isinstance(proteins, list):
             proteins = [proteins]
-        singles = [self._prepare_single(protein, train=train) for protein in proteins]
+        if crop is None:
+            crop = train and self.config_of.data.train.crop_size is not None
+        # Random crops should not be cached
+        use_cache = not crop
+        singles = [
+            self._prepare_single(protein, train=train, crop=crop, use_cache=use_cache)
+            for protein in proteins
+        ]
         return self._collate_batches(singles)
 
-
-    def _prepare_single(self, protein: SCNProtein, *, train: bool = False) -> dict:
+    def _prepare_single(
+        self,
+        protein: SCNProtein,
+        *,
+        train: bool = False,
+        crop: bool = False,
+        use_cache: bool = True,
+    ) -> dict:
+        cache_key = (str(protein.id), train, crop)
+        if use_cache and cache_key in self._prepare_cache:
+            return self._prepare_cache[cache_key]
         seq = str(protein.seq)
         config = self.config_of.data
 
@@ -319,9 +338,10 @@ class MiniFoldRunner:
                 dtype=np.float32,
             )
             raw_features["is_distillation"] = np.array(0.0, dtype=np.float32)
-            batch_of = feature_pipeline.FeaturePipeline(config).process_features(
+            mode = "train" if crop else "eval"
+            batch_of = self._feature_pipeline.process_features(
                 raw_features,
-                "train",
+                mode,
             )
             seq_length = batch_of["seq_length"]
             if isinstance(seq_length, torch.Tensor):
@@ -369,6 +389,8 @@ class MiniFoldRunner:
         }
         if coords is not None:
             single["coords"] = coords
+        if use_cache:
+            self._prepare_cache[cache_key] = single
         return single
 
     @staticmethod
@@ -407,6 +429,19 @@ class MiniFoldRunner:
         return collated
 
     def _collate_batches(self, singles: list[dict]) -> dict:
+        if len(singles) == 1:
+            single = singles[0]
+            model_batch = {
+                "seq": single["seq"].unsqueeze(0).to(self.device),
+                "mask": single["mask"].unsqueeze(0).to(self.device),
+                "batch_of": {
+                    k: v.unsqueeze(0).to(self.device) for k, v in single["batch_of"].items()
+                },
+            }
+            if "coords" in single:
+                model_batch["coords"] = single["coords"].unsqueeze(0).to(self.device)
+            return model_batch
+
         max_len = max(single["seq_length"] for single in singles)
         pad_idx = self.alphabet.padding_idx
 
@@ -485,7 +520,13 @@ class MiniFoldRunner:
             with grad_context, torch.autocast(
                 autocast_device, dtype=torch.bfloat16, enabled=autocast_enabled
             ):
-                outputs = self._forward_batch(proteins, loss_fn, recycles)
+                outputs = self._forward_batch(
+                    proteins,
+                    loss_fn,
+                    recycles,
+                    include_metrics=include_metrics,
+                    crop=backward,
+                )
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
             print("OOM during MiniFold forward pass; skipping batch.")
@@ -515,11 +556,19 @@ class MiniFoldRunner:
         proteins: list[SCNProtein],
         loss_fn: MiniFoldLoss | None,
         num_recycling: int,
+        *,
+        include_metrics: bool = False,
+        crop: bool = False,
     ) -> dict | None:
         train = loss_fn is not None
-        model_batch = self.prepare_batch(proteins, train=train)
+        model_batch = self.prepare_batch(proteins, train=train, crop=crop and train)
         if loss_fn is not None:
-            result = loss_fn.compute(self.model, model_batch, num_recycling=num_recycling)
+            result = loss_fn.compute(
+                self.model,
+                model_batch,
+                num_recycling=num_recycling,
+                include_metrics=include_metrics,
+            )
             if result is not None:
                 result["batch_size"] = len(proteins)
             return result

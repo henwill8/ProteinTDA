@@ -12,8 +12,8 @@ from proteintda.config import HEAT_RFF_CONFIG, LOSS_CONFIG
 _CACHE_DIR = Path(__file__).resolve().parents[3] / "cache" / "heat_rff"
 
 
-def _heat_rff_cache_path(n, axis_dim, resolution, R, t, seed):
-    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_t-{t}-R-{R}_seed-{seed}.pt")
+def _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed):
+    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_s-{s}_t-{t}-R-{R}_seed-{seed}.pt")
 
 
 def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed) -> None:
@@ -31,12 +31,13 @@ def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed) -
             )
 
 
-def _format_kernel_config(n, axis_dim, resolution, R, t, seed) -> str:
+def _format_kernel_config(n, axis_dim, resolution, R, s, t, seed) -> str:
     parts = [
         f"n={n}",
         f"R={R}",
         f"axis_dim={axis_dim}",
         f"resolution={resolution}",
+        f"s={s}",
         f"t={t}",
         f"seed={seed}",
     ]
@@ -109,9 +110,9 @@ def _build_kernel_with_progress(sampler, config_line: str):
 
 
 def create_heat_random_fourier_features(
-    n, axis_dim, resolution, R=100, s=1.0, t=1, seed=42, show_progress=True,
+    n, axis_dim, resolution, R=100, s=1.0, t=1, seed=42, device=_cpp.Device.CPU, show_progress=True,
 ):
-    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, t, seed)
+    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed)
     if cache_path.is_file():
         print(f"Loading cached heat kernel from {cache_path}...", flush=True)
         cached = torch.load(cache_path, weights_only=False)
@@ -127,15 +128,15 @@ def create_heat_random_fourier_features(
     if show_progress:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
         sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
-        sampler.init(kernel, seed=seed)
+        sampler.init(kernel, True, seed=seed, device=device)
         _build_kernel_with_progress(
             sampler,
-            f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, t, seed)}",
+            f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, s, t, seed)}",
         )
     else:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
         sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
-        sampler.init(kernel, seed=seed)
+        sampler.init(kernel, True, seed=seed, device=device)
         sampler.build()
 
     vpd = _cpp.VPD(kernel)

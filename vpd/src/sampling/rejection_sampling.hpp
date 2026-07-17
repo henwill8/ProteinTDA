@@ -2,6 +2,10 @@
 
 #include "sampling_method.hpp"
 
+#ifdef VPD_WITH_CUDA
+#include "rejection_sampling_cuda.hpp"
+#endif
+
 /**
  * @brief Rejection sampling for heat kernel weight generation.
  */
@@ -11,6 +15,7 @@ private:
     std::atomic<int64_t> committed_ops_{0};
     std::atomic<int> attempts_completed_{0};
 
+    void cpu_sample();
     void reset_progress() override;
     void sample() override;
     void update_total_ops();
