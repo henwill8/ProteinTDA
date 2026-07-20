@@ -216,7 +216,7 @@ def _load_sidechainnet_proteins(
             raise ValueError(
                 "baseline_tm_scores_path is required when max_baseline_tm is set"
             )
-        dataset = _select_with_baseline_tm_cap(
+        dataset = _select_with_tm_filter(
             dataset,
             max_proteins=max_proteins,
             max_baseline_tm=float(max_baseline_tm),
