@@ -30,6 +30,8 @@ RUN_CONFIG = mlc.ConfigDict(
             "scn_dir": "./data/sidechainnet",
             "max_proteins": 1000,
             "max_protein_length": None,
+            "max_baseline_tm": 0.7,  # filter proteins with a high baseline tm score
+            "baseline_tm_scores_path": "cache/baseline_tm_scores.json",
         },
         "runtime": {
             "baseline": False,  # True = pretrained eval only, False = fine-tune

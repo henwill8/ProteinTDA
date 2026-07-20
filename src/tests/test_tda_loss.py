@@ -28,6 +28,7 @@ from proteintda.utils.dataset import load_dataset
 
 MODE = "mlp"  # "points", "mlp", or "minifold"
 N_POINTS = 100
+POINT_SCALE = 4.0
 MLP_STEPS = 100
 MLP_LR = 0.0001
 HIDDEN_DIM = 256
@@ -837,14 +838,16 @@ class PointMLP(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, d),
         )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, x):
-        return self.net(x).view(self.n_points, 3)
+        return (x + self.net(x)).view(self.n_points, 3)
 
 
 def _make_problem(device):
     torch.manual_seed(SEED)
-    target_pts = torch.randn(N_POINTS, 3, device=device)
+    target_pts = torch.randn(N_POINTS, 3, device=device) * POINT_SCALE
     target_adj = _distance_matrix(target_pts).detach()
     return target_pts, target_adj
 
@@ -934,7 +937,7 @@ def _train_point_cloud(name, target_adj, target_pts, optimizer, scheduler, *, ge
 
 def run_points(device, loss_fn):
     target_pts, target_adj = _make_problem(device)
-    pred_pts = torch.randn(N_POINTS, 3, device=device, requires_grad=True)
+    pred_pts = (torch.randn(N_POINTS, 3, device=device) * POINT_SCALE).requires_grad_(True)
     optimizer = torch.optim.Adam([pred_pts], lr=MLP_LR)
     scheduler = build_lr_scheduler(optimizer)
     _train_point_cloud(
@@ -951,7 +954,7 @@ def run_points(device, loss_fn):
 def run_mlp(device, loss_fn):
     target_pts, target_adj = _make_problem(device)
     model = PointMLP(N_POINTS, hidden_dim=HIDDEN_DIM).to(device)
-    model_input = torch.randn(1, N_POINTS * 3, device=device) * 20
+    model_input = torch.randn(1, N_POINTS * 3, device=device) * POINT_SCALE
     optimizer = torch.optim.Adam(model.parameters(), lr=MLP_LR)
     scheduler = build_lr_scheduler(optimizer)
     _train_point_cloud(
