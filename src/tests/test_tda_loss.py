@@ -1066,6 +1066,13 @@ def main():
             _merge_baseline_finetuned(baseline_eval, finetuned_eval),
             "eval",
         )
+        baseline_tm = float(np.nanmean([
+            case["history"][0]["breakdown"]["tm_score"] for case in baseline_eval
+        ]))
+        finetuned_tm = float(np.nanmean([
+            case["history"][0]["breakdown"]["tm_score"] for case in finetuned_eval
+        ]))
+        print(f"eval mean_tm  baseline={baseline_tm:.4f}  finetuned={finetuned_tm:.4f}")
         runner.load_state_dict(finetuned_state)
 
 
