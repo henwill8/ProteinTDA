@@ -57,17 +57,9 @@ def _resolve_device() -> torch.device:
     return torch.device(device)
 
 
-def _compute_baseline_tm_scores(proteins: list) -> dict[str, float]:
-    from proteintda.minifold.runner import MiniFoldRunner
-
+def _compute_baseline_tm_scores(proteins: list, *, runner) -> dict[str, float]:
     runtime = RUN_CONFIG.runtime
-    training = RUN_CONFIG.training
-    runner = MiniFoldRunner(
-        Path(runtime.minifold_cache_dir),
-        model_size=runtime.model_size,
-        device=_resolve_device(),
-    )
-    batch_size = max(1, int(training.batch_size))
+    batch_size = max(1, int(RUN_CONFIG.training.batch_size))
     scores: dict[str, float] = {}
 
     print(
@@ -100,41 +92,71 @@ def _compute_baseline_tm_scores(proteins: list) -> dict[str, float]:
     return scores
 
 
-def _ensure_baseline_tm_scores(proteins: list, scores_path: Path) -> dict[str, float]:
-    scores = _load_baseline_tm_scores(scores_path)
-    missing = [protein for protein in proteins if str(protein.id) not in scores]
-    if not missing:
-        return scores
-    computed = _compute_baseline_tm_scores(missing)
-    scores.update(computed)
-    _save_baseline_tm_scores(scores_path, scores)
-    return scores
-
-
-def _filter_by_baseline_tm(
+def _select_with_tm_filter(
     dataset: list,
     *,
+    max_proteins: int | None,
     max_baseline_tm: float,
-    scores_path: str | Path,
+    scores_path: Path,
 ) -> list:
-    scores = _ensure_baseline_tm_scores(dataset, Path(scores_path))
-    before = len(dataset)
-    kept = []
-    removed_examples = []
-    for protein in dataset:
-        tm = scores.get(str(protein.id))
-        if tm is None:
-            kept.append(protein)
-            continue
-        if tm <= max_baseline_tm:
-            kept.append(protein)
-        elif len(removed_examples) < 5:
-            removed_examples.append((protein.id, tm))
-    removed = before - len(kept)
+    """Keep up to max_proteins with baseline TM <= threshold."""
+    scores = _load_baseline_tm_scores(scores_path)
+    update_scores = False
+    runner = None
+    batch_size = max(1, int(RUN_CONFIG.training.batch_size))
+
+    kept: list = []
+    removed = 0
+    removed_examples: list[tuple[str, float]] = []
+    next_idx = len(dataset) - 1
+
+    def ensure_scores(proteins: list) -> None:
+        nonlocal runner, update_scores
+        missing = [protein for protein in proteins if str(protein.id) not in scores]
+        if not missing:
+            return
+        if runner is None:
+            from proteintda.minifold.runner import MiniFoldRunner
+
+            runtime = RUN_CONFIG.runtime
+            runner = MiniFoldRunner(
+                Path(runtime.minifold_cache_dir),
+                model_size=runtime.model_size,
+                device=_resolve_device(),
+            )
+        scores.update(_compute_baseline_tm_scores(missing, runner=runner))
+        update_scores = True
+
+    while next_idx >= 0 and (max_proteins is None or len(kept) < max_proteins):
+        if max_proteins is None:
+            take = min(batch_size, next_idx + 1)
+        else:
+            need = max_proteins - len(kept)
+            take = min(max(need, batch_size), next_idx + 1)
+        chunk = dataset[next_idx - take + 1 : next_idx + 1]
+        next_idx -= take
+
+        ensure_scores(chunk)
+
+        for protein in reversed(chunk):
+            if max_proteins is not None and len(kept) >= max_proteins:
+                break
+            tm = scores.get(str(protein.id))
+            if tm is None or tm <= max_baseline_tm:
+                kept.append(protein)
+            else:
+                removed += 1
+                if len(removed_examples) < 5:
+                    removed_examples.append((str(protein.id), tm))
+
+    if update_scores:
+        _save_baseline_tm_scores(scores_path, scores)
+
+    kept = list(reversed(kept))
     if removed:
-        print(
-            f"Removed {removed} proteins with baseline TM > {max_baseline_tm}."
-        )
+        print(f"Removed {removed} proteins with baseline TM > {max_baseline_tm}.")
+    if max_proteins is not None and len(kept) < max_proteins:
+        print(f"Only {len(kept)}/{max_proteins} proteins remain after baseline TM filter.")
     return kept
 
 
@@ -194,14 +216,15 @@ def _load_sidechainnet_proteins(
             raise ValueError(
                 "baseline_tm_scores_path is required when max_baseline_tm is set"
             )
-        dataset = _filter_by_baseline_tm(
+        dataset = _select_with_baseline_tm_cap(
             dataset,
+            max_proteins=max_proteins,
             max_baseline_tm=float(max_baseline_tm),
-            scores_path=baseline_tm_scores_path,
+            scores_path=Path(baseline_tm_scores_path),
         )
-
-    if max_proteins is not None and len(dataset) > max_proteins:
+    elif max_proteins is not None and len(dataset) > max_proteins:
         dataset = dataset[-max_proteins :]
+
     print(f"Loaded {len(dataset)} proteins.")
     return dataset
 
