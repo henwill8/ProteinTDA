@@ -44,6 +44,9 @@ def suggest_params(trial: optuna.Trial) -> dict:
         params["w_wasserstein_h1"] = trial.suggest_float(
             "w_wasserstein_h1", optuna_cfg.w_min, optuna_cfg.w_max, log=True
         )
+        params["w_wasserstein_h2"] = trial.suggest_float(
+            "w_wasserstein_h2", optuna_cfg.w_min, optuna_cfg.w_max, log=True
+        )
 
     if optuna_cfg.tune_vpd:
         params["w_vpd_h0"] = trial.suggest_float(
@@ -51,6 +54,9 @@ def suggest_params(trial: optuna.Trial) -> dict:
         )
         params["w_vpd_h1"] = trial.suggest_float(
             "w_vpd_h1", optuna_cfg.w_min, optuna_cfg.w_max, log=True
+        )
+        params["w_vpd_h2"] = trial.suggest_float(
+            "w_vpd_h2", optuna_cfg.w_min, optuna_cfg.w_max, log=True
         )
 
     return params
@@ -62,17 +68,19 @@ def build_loss_cfg(params: dict):
     if RUN_CONFIG.optuna.tune_wasserstein:
         loss_cfg.wasserstein_h0.weight = params["w_wasserstein_h0"]
         loss_cfg.wasserstein_h1.weight = params["w_wasserstein_h1"]
+        loss_cfg.wasserstein_h2.weight = params["w_wasserstein_h2"]
 
     if RUN_CONFIG.optuna.tune_vpd:
         loss_cfg.vpd_h0.weight = params["w_vpd_h0"]
         loss_cfg.vpd_h1.weight = params["w_vpd_h1"]
+        loss_cfg.vpd_h2.weight = params["w_vpd_h2"]
 
     return loss_cfg
 
 
 def build_loss_fn(loss_cfg, heat_cfg) -> MiniFoldLoss:
     h0rff = h1rff = None
-    if loss_cfg.vpd_h0.enabled or loss_cfg.vpd_h1.enabled:
+    if loss_cfg.vpd_h0.enabled or loss_cfg.vpd_h1.enabled or loss_cfg.vpd_h2.enabled:
         h0rff, h1rff = create_vpd_kernels(loss_cfg, heat_cfg)
     return MiniFoldLoss(CONFIG_OF, loss_config=loss_cfg, h0rff=h0rff, h1rff=h1rff)
 

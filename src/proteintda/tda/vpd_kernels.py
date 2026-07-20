@@ -163,7 +163,7 @@ def create_vpd_kernels(loss_config, heat_rff_config):
         print("Preparing VPD h0 kernel...", flush=True)
         h0rff = create_heat_random_fourier_features(**heat_rff_config["h0rff"])
     h1rff = None
-    if loss_config.vpd_h1.enabled:
+    if loss_config.vpd_h1.enabled or loss_config.vpd_h2.enabled:
         print("Preparing VPD h1 kernel...", flush=True)
         h1rff = create_heat_random_fourier_features(**heat_rff_config["h1rff"])
     return h0rff, h1rff
