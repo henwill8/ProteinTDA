@@ -24,9 +24,9 @@ from proteintda.utils.conversions import (
     atom_positions_from_atom37,
     atom_positions_from_sidechainnet,
 )
-from proteintda.utils.dataset import load_dataset
+from proteintda.utils.dataset import load_all_proteins, load_dataset, sample_proteins
 
-MODE = "mlp"  # "points", "mlp", or "minifold"
+MODE = "minifold"  # "points", "mlp", or "minifold"
 N_POINTS = 100
 POINT_SCALE = 4.0
 MLP_STEPS = 100
@@ -37,6 +37,10 @@ SEED = 42
 LOG_EVERY_NTH_PROTEIN = 20
 EVAL_FRACTION = 0.2
 EVAL_SEED = 42
+# Second eval: random sample from the full SidechainNet split (not the TM/length-selected set).
+REPRESENTATIVE_EVAL_SIZE = 1000
+REPRESENTATIVE_EVAL_SEED = 43
+REPRESENTATIVE_LOG_EVERY_NTH = 20
 LOG_EVERY = 1
 TDA_WARMUP_STEPS = 0
 TDA_RAMP_STEPS = 0
@@ -514,11 +518,10 @@ def evaluate(
     show: bool = True,
 ):
     if not cases:
-        return []
+        return [], float("nan")
 
     print(
-        f"[{group_name}] {len(cases)} protein(s), batch_size={batch_size} "
-        f"(held out from training)"
+        f"[{group_name}] {len(cases)} protein(s), batch_size={batch_size}"
     )
     logged_indices = _logged_protein_indices(len(cases), log_every_nth)
     if log_every_nth > 1:
@@ -551,6 +554,10 @@ def evaluate(
         logged_results,
         batch_loss=batch_loss,
     )
+    mean_tm = float(np.nanmean([
+        step_results[i][2]["tm_score"] for i in range(len(cases))
+    ]))
+    print(f"[{group_name}] mean_tm={mean_tm:.4f}  (n={len(cases)})")
 
     plot_cases = []
     for idx in logged_indices:
@@ -567,7 +574,7 @@ def evaluate(
         )
     if show:
         show_history(plot_cases, group_name)
-    return plot_cases
+    return plot_cases, mean_tm
 
 
 def _merge_baseline_finetuned(baseline_cases, finetuned_cases):
@@ -614,9 +621,37 @@ def _save_finetuned_checkpoint(path: Path, state_dict: dict, *, epochs: int, mod
     print(f"Saved finetuned checkpoint to {path}")
 
 
+def _cases_from_proteins(proteins, device):
+    pd_cfg = LOSS_CONFIG.pd
+    cases = []
+    for protein in proteins:
+        target_pts = atom_positions_from_sidechainnet(
+            protein, SideChainAtom.CB, device=device,
+        )
+        if target_pts.shape[0] != len(protein.seq):
+            raise ValueError(
+                f"protein {protein.id} has {target_pts.shape[0]} C-beta points "
+                f"but len(seq)={len(protein.seq)}",
+            )
+        target_ca = atom_positions_from_sidechainnet(
+            protein, SideChainAtom.CA, device=device,
+        )
+        target_adj = _distance_matrix(target_pts).detach()
+        cases.append({
+            "protein": protein,
+            "name": protein.id,
+            "seq": str(protein.seq),
+            "target_pts": target_pts,
+            "target_ca_np": target_ca.detach().cpu().numpy(),
+            "target_adj": target_adj,
+            "target_diags": pd_from_graph(target_adj, **pd_cfg),
+            "target_pts_np": target_pts.detach().cpu().numpy(),
+        })
+    return cases
+
+
 def _load_cases(device):
     data = RUN_CONFIG.data
-    pd_cfg = LOSS_CONFIG.pd
     target_length = data.max_protein_length
     proteins = load_dataset()
     if not proteins:
@@ -641,31 +676,31 @@ def _load_cases(device):
         for protein in selected:
             print(f"  {protein.id}  len={len(protein.seq)}")
 
-    cases = []
-    for protein in selected:
-        target_pts = atom_positions_from_sidechainnet(
-            protein, SideChainAtom.CB, device=device,
-        )
-        if target_pts.shape[0] != len(protein.seq):
-            raise ValueError(
-                f"protein {protein.id} has {target_pts.shape[0]} C-beta points "
-                f"but len(seq)={len(protein.seq)}",
-            )
-        target_ca = atom_positions_from_sidechainnet(
-            protein, SideChainAtom.CA, device=device,
-        )
-        target_adj = _distance_matrix(target_pts).detach()
-        cases.append({
-            "protein": protein,
-            "name": protein.id,
-            "seq": str(protein.seq),
-            "target_pts": target_pts,
-            "target_ca_np": target_ca.detach().cpu().numpy(),
-            "target_adj": target_adj,
-            "target_diags": pd_from_graph(target_adj, **pd_cfg),
-            "target_pts_np": target_pts.detach().cpu().numpy(),
-        })
-    return cases
+    return _cases_from_proteins(selected, device)
+
+
+def _load_representative_cases(device, *, n: int, seed: int, exclude_ids: set[str]):
+    """Random sample from the full dataset (no max_proteins / baseline-TM filter)."""
+    data = RUN_CONFIG.data
+    proteins = load_all_proteins(
+        casp_version=data.casp_version,
+        scn_dir=data.scn_dir,
+        casp_thinning=data.casp_thinning,
+        allow_incomplete=data.allow_incomplete,
+    )
+    pool = [protein for protein in proteins if str(protein.id) not in exclude_ids]
+    if not pool:
+        raise ValueError("no proteins left for representative eval after exclusions")
+
+    rng = np.random.default_rng(seed)
+    sampled = sample_proteins(pool, min(n, len(pool)), rng)
+    lengths = [len(protein.seq) for protein in sampled]
+    print(
+        f"representative eval: sampled {len(sampled)}/{len(pool)} proteins "
+        f"from full dataset (excluded {len(exclude_ids)} train/selected ids, "
+        f"len min/mean/max={min(lengths)}/{float(np.mean(lengths)):.1f}/{max(lengths)})"
+    )
+    return _cases_from_proteins(sampled, device)
 
 
 def _cbeta_from_output(r_dict, index=0):
@@ -1037,7 +1072,7 @@ def main():
     )
 
     if eval_cases:
-        finetuned_eval = evaluate(
+        finetuned_eval, finetuned_tm = evaluate(
             runner,
             eval_cases,
             loss_fn,
@@ -1050,7 +1085,7 @@ def main():
             show=False,
         )
         runner.load_state_dict(baseline_state)
-        baseline_eval = evaluate(
+        baseline_eval, baseline_tm = evaluate(
             runner,
             eval_cases,
             loss_fn,
@@ -1066,13 +1101,45 @@ def main():
             _merge_baseline_finetuned(baseline_eval, finetuned_eval),
             "eval",
         )
-        baseline_tm = float(np.nanmean([
-            case["history"][0]["breakdown"]["tm_score"] for case in baseline_eval
-        ]))
-        finetuned_tm = float(np.nanmean([
-            case["history"][0]["breakdown"]["tm_score"] for case in finetuned_eval
-        ]))
         print(f"eval mean_tm  baseline={baseline_tm:.4f}  finetuned={finetuned_tm:.4f}")
+        runner.load_state_dict(finetuned_state)
+
+    if REPRESENTATIVE_EVAL_SIZE > 0:
+        rep_cases = _load_representative_cases(
+            device,
+            n=REPRESENTATIVE_EVAL_SIZE,
+            seed=REPRESENTATIVE_EVAL_SEED,
+            exclude_ids={case["name"] for case in train_cases},
+        )
+        _, finetuned_tm = evaluate(
+            runner,
+            rep_cases,
+            loss_fn,
+            structure_loss_fn,
+            epochs=training.epochs,
+            batch_size=1,
+            log_every_nth=REPRESENTATIVE_LOG_EVERY_NTH,
+            group_name="rep-eval-finetuned",
+            frame_label="finetuned",
+            show=False,
+        )
+        runner.load_state_dict(baseline_state)
+        _, baseline_tm = evaluate(
+            runner,
+            rep_cases,
+            loss_fn,
+            structure_loss_fn,
+            epochs=training.epochs,
+            batch_size=1,
+            log_every_nth=REPRESENTATIVE_LOG_EVERY_NTH,
+            group_name="rep-eval-baseline",
+            frame_label="baseline",
+            show=False,
+        )
+        print(
+            f"rep-eval mean_tm  baseline={baseline_tm:.4f}  "
+            f"finetuned={finetuned_tm:.4f}  (n={len(rep_cases)}, batch_size=1)"
+        )
         runner.load_state_dict(finetuned_state)
 
 
