@@ -139,7 +139,7 @@ def create_heat_random_fourier_features(
         match sampling_method:
             case SamplingMethod.RANDOM:
                 sampler = _cpp.RandomSamplingKernel()
-            case SamplingMethod.REJECTIOn:
+            case SamplingMethod.REJECTION:
                 sampler = _cpp.RejectionSamplingKernel()
             case SamplingMethod.MCMC:
                 sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30)
