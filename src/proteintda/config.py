@@ -1,6 +1,8 @@
 import ml_collections as mlc
 from minifold.data.config import model_config
 
+from enum import Enum, auto
+
 from vpd import _cpp
 
 _EPS = 1e-8
@@ -12,6 +14,12 @@ CONFIG_OF = model_config(
     low_prec=False,
     long_sequence_inference=False,
 )
+
+class SamplingMethod(Enum):
+    RANDOM = auto()
+    REJECTION = auto()
+    MCMC = auto()
+    MALA = auto()
 
 with CONFIG_OF.unlocked():
     # CONFIG_OF.model.heads.tm.enabled = True
@@ -86,7 +94,8 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "t": 2,
             "s": 0.4,
             "seed": 42,
-            "device": _cpp.Device.CUDA
+            "device": _cpp.Device.CUDA,
+            "sampling_method": SamplingMethod.MALA 
         },
         "h1rff": {
             "n": 2,
@@ -96,7 +105,8 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "t": 2,
             "s": 0.4,
             "seed": 42,
-            "device": _cpp.Device.CUDA
+            "device": _cpp.Device.CUDA,
+            "sampling_method": SamplingMethod.MALA
         }
     }
 )

@@ -7,13 +7,13 @@ import torch
 from tqdm import tqdm
 from vpd import _cpp
 
-from proteintda.config import HEAT_RFF_CONFIG, LOSS_CONFIG
+from proteintda.config import SamplingMethod, HEAT_RFF_CONFIG, LOSS_CONFIG
 
 _CACHE_DIR = Path(__file__).resolve().parents[3] / "cache" / "heat_rff"
 
 
-def _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed):
-    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_s-{s}_t-{t}-R-{R}_seed-{seed}.pt")
+def _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed, sampler : str):
+    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_s-{s}_t-{t}_R-{R}_seed-{seed}_sampler-{sampler}.pt")
 
 
 def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed) -> None:
@@ -110,9 +110,18 @@ def _build_kernel_with_progress(sampler, config_line: str):
 
 
 def create_heat_random_fourier_features(
-    n, axis_dim, resolution, R=100, s=1.0, t=1, seed=42, device=_cpp.Device.CPU, show_progress=True,
+    n,
+    axis_dim,
+    resolution,
+    R=100,
+    s=1.0,
+    t=1,
+    seed=42,
+    device=_cpp.Device.CPU,
+    sampling_method: SamplingMethod = SamplingMethod.MALA,
+    show_progress=True,
 ):
-    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed)
+    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed, sampling_method.name)
     if cache_path.is_file():
         print(f"Loading cached heat kernel from {cache_path}...", flush=True)
         cached = torch.load(cache_path, weights_only=False)
@@ -127,7 +136,15 @@ def create_heat_random_fourier_features(
 
     if show_progress:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
-        sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
+        match sampling_method:
+            case SamplingMethod.RANDOM:
+                sampler = _cpp.RandomSamplingKernel()
+            case SamplingMethod.REJECTIOn:
+                sampler = _cpp.RejectionSamplingKernel()
+            case SamplingMethod.MCMC:
+                sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30)
+            case SamplingMethod.MALA:
+                sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
         sampler.init(kernel, True, seed=seed, device=device)
         _build_kernel_with_progress(
             sampler,
@@ -135,7 +152,15 @@ def create_heat_random_fourier_features(
         )
     else:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
-        sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
+        match sampling_method:
+            case SamplingMethod.RANDOM:
+                sampler = _cpp.RandomSamplingKernel()
+            case SamplingMethod.REJECTION:
+                sampler = _cpp.RejectionSamplingKernel()
+            case SamplingMethod.MCMC:
+                sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30)
+            case SamplingMethod.MALA:
+                sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
         sampler.init(kernel, True, seed=seed, device=device)
         sampler.build()
 
