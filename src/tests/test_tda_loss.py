@@ -43,7 +43,7 @@ TDA_RAMP_STEPS = 0
 CHECKPOINT_DIR = Path("logs/tda_loss")
 
 PD_MARKERS = ("o", "^", "s")
-_TDA_BREAKDOWN_KEYS = ("wasserstein_h0", "wasserstein_h1", "vpd_h0", "vpd_h1")
+_TDA_BREAKDOWN_KEYS = ("wasserstein_h0", "wasserstein_h1", "wasserstein_h2", "vpd_h0", "vpd_h1", "vpd_h2")
 
 
 def _scalar(x):
