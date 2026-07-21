@@ -1,3 +1,5 @@
+import argparse
+import pickle
 import sys
 from contextlib import nullcontext
 from pathlib import Path
@@ -45,9 +47,15 @@ LOG_EVERY = 1
 TDA_WARMUP_STEPS = 0
 TDA_RAMP_STEPS = 0
 CHECKPOINT_DIR = Path("logs/tda_loss")
+PLOT_ARCHIVE_PATH = CHECKPOINT_DIR / "tda_loss_plots.pkl"
+# Interactive plt.show during the run; plots are always written to PLOT_ARCHIVE_PATH.
+SHOW_PLOTS = True
 
 PD_MARKERS = ("o", "^", "s")
 _TDA_BREAKDOWN_KEYS = ("wasserstein_h0", "wasserstein_h1", "wasserstein_h2", "vpd_h0", "vpd_h1", "vpd_h2")
+
+_PLOT_GROUPS: list[dict] = []
+_PLOT_METRICS: dict = {}
 
 
 def _scalar(x):
@@ -57,7 +65,101 @@ def _scalar(x):
 def _to_numpy(diags, dim):
     if len(diags) < dim + 1:
         return np.empty((0, 2))
-    return diags[dim].detach().cpu().numpy()
+    arr = diags[dim]
+    if torch.is_tensor(arr):
+        return arr.detach().cpu().numpy()
+    return np.asarray(arr)
+
+
+def _serialize_value(value):
+    if torch.is_tensor(value):
+        if value.ndim == 0:
+            return _scalar(value.detach())
+        return value.detach().cpu().numpy().copy()
+    if isinstance(value, dict):
+        return {k: _serialize_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_serialize_value(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, (float, int, str, bool)) or value is None:
+        return value
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
+
+
+def _serialize_plot_cases(cases):
+    hom_dim = LOSS_CONFIG.pd.hom_dim
+    serialized = []
+    for case in cases:
+        history = []
+        for frame in case["history"]:
+            entry = {
+                "step": int(frame["step"]),
+                "loss": float(frame["loss"]),
+                "pred": [np.asarray(p).copy() for p in frame["pred"]],
+                "pts": np.asarray(frame["pts"]).copy(),
+                "view_pts": np.asarray(frame["view_pts"]).copy(),
+                "breakdown": _serialize_value(frame.get("breakdown", {})),
+            }
+            if "label" in frame:
+                entry["label"] = frame["label"]
+            history.append(entry)
+        serialized.append(
+            {
+                "name": case["name"],
+                "target_diags": [
+                    _to_numpy(case["target_diags"], d).copy() for d in range(hom_dim)
+                ],
+                "target_pts": np.asarray(case["target_pts"]).copy(),
+                "history": history,
+            }
+        )
+    return serialized
+
+
+def _reset_plot_archive():
+    _PLOT_GROUPS.clear()
+    _PLOT_METRICS.clear()
+
+
+def _save_plot_archive(path: Path = PLOT_ARCHIVE_PATH):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "hom_dim": LOSS_CONFIG.pd.hom_dim,
+        "groups": list(_PLOT_GROUPS),
+        "metrics": dict(_PLOT_METRICS),
+    }
+    with path.open("wb") as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    print(f"Saved plot archive to {path} ({len(_PLOT_GROUPS)} group(s))")
+
+
+def view_plot_archive(path: Path = PLOT_ARCHIVE_PATH):
+    path = Path(path)
+    with path.open("rb") as f:
+        payload = pickle.load(f)
+    groups = payload.get("groups", [])
+    metrics = payload.get("metrics", {})
+    if metrics:
+        print("metrics:")
+        for name, values in metrics.items():
+            parts = "  ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+                              for k, v in values.items())
+            print(f"  {name}: {parts}")
+    if not groups:
+        print(f"No plot groups in {path}")
+        return
+    for group in groups:
+        title = group["title"]
+        cases = group["cases"]
+        print(f"showing [{title}] ({len(cases)} protein(s))")
+        show_history(cases, title, show=True, record=False)
 
 
 def tda_weight(step: int) -> float:
@@ -153,8 +255,18 @@ def _tda_terms_msg(breakdown: dict) -> str:
     return "  ".join(parts)
 
 
-def show_history(cases, title):
+def show_history(cases, title, *, show: bool | None = None, record: bool = True):
     if not cases or not cases[0]["history"]:
+        return
+
+    if show is None:
+        show = SHOW_PLOTS
+
+    if record:
+        cases = _serialize_plot_cases(cases)
+        _PLOT_GROUPS.append({"title": title, "cases": cases})
+
+    if not show:
         return
 
     n_proteins = len(cases)
@@ -277,6 +389,8 @@ def _extra_loss_msg(breakdown):
         parts.append(f"struct={_scalar(breakdown['structure']):.4f}")
     if "tm_score" in breakdown:
         parts.append(f"tm_score={breakdown['tm_score']:.4f}")
+    if "plddt" in breakdown:
+        parts.append(f"plddt={breakdown['plddt']:.4f}")
     return f"  {'  '.join(parts)}" if parts else ""
 
 
@@ -308,7 +422,7 @@ def _make_history_frame(step, pred_pts, pred_diags, breakdown, view_pts):
         "pred": [_to_numpy(pred_diags, d).copy() for d in range(hom_dim)],
         "pts": pred_pts.detach().cpu().numpy().copy(),
         "view_pts": np.asarray(view_pts, dtype=float).copy(),
-        "breakdown": breakdown,
+        "breakdown": _serialize_value(breakdown),
     }
 
 
@@ -518,7 +632,7 @@ def evaluate(
     show: bool = True,
 ):
     if not cases:
-        return [], float("nan")
+        return [], float("nan"), float("nan")
 
     print(
         f"[{group_name}] {len(cases)} protein(s), batch_size={batch_size}"
@@ -557,7 +671,13 @@ def evaluate(
     mean_tm = float(np.nanmean([
         step_results[i][2]["tm_score"] for i in range(len(cases))
     ]))
-    print(f"[{group_name}] mean_tm={mean_tm:.4f}  (n={len(cases)})")
+    mean_plddt = float(np.nanmean([
+        step_results[i][2]["plddt"] for i in range(len(cases))
+    ]))
+    print(
+        f"[{group_name}] mean_tm={mean_tm:.4f}  mean_plddt={mean_plddt:.4f}  "
+        f"(n={len(cases)})"
+    )
 
     plot_cases = []
     for idx in logged_indices:
@@ -572,9 +692,8 @@ def evaluate(
                 "history": [frame],
             }
         )
-    if show:
-        show_history(plot_cases, group_name)
-    return plot_cases, mean_tm
+    show_history(plot_cases, group_name, show=show, record=False)
+    return plot_cases, mean_tm, mean_plddt
 
 
 def _merge_baseline_finetuned(baseline_cases, finetuned_cases):
@@ -771,6 +890,10 @@ def _case_step(
 
     breakdown["tda_w"] = w
     with torch.no_grad():
+        if "plddt" in r_dict:
+            breakdown["plddt"] = float(r_dict["plddt"][index, :length].mean().detach().cpu())
+        else:
+            breakdown["plddt"] = float("nan")
         if compute_tm:
             pred_ca = _ca_from_output(r_dict, index).numpy()[:length]
             alignment = tm_align(pred_ca, case["target_ca_np"], case["seq"], case["seq"])
@@ -1007,6 +1130,7 @@ def main():
     training = RUN_CONFIG.training
     runtime = RUN_CONFIG.runtime
 
+    _reset_plot_archive()
     device = _resolve_device()
 
     loss_fn = build_loss_fn()
@@ -1017,9 +1141,11 @@ def main():
 
     if MODE == "mlp":
         run_mlp(device, loss_fn)
+        _save_plot_archive()
         return
     elif MODE == "points":
         run_points(device, loss_fn)
+        _save_plot_archive()
         return
     
     all_cases = _load_cases(device)
@@ -1072,7 +1198,7 @@ def main():
     )
 
     if eval_cases:
-        finetuned_eval, finetuned_tm = evaluate(
+        finetuned_eval, finetuned_tm, finetuned_plddt = evaluate(
             runner,
             eval_cases,
             loss_fn,
@@ -1085,7 +1211,7 @@ def main():
             show=False,
         )
         runner.load_state_dict(baseline_state)
-        baseline_eval, baseline_tm = evaluate(
+        baseline_eval, baseline_tm, baseline_plddt = evaluate(
             runner,
             eval_cases,
             loss_fn,
@@ -1101,7 +1227,20 @@ def main():
             _merge_baseline_finetuned(baseline_eval, finetuned_eval),
             "eval",
         )
-        print(f"eval mean_tm  baseline={baseline_tm:.4f}  finetuned={finetuned_tm:.4f}")
+        _PLOT_METRICS["eval"] = {
+            "baseline_tm": baseline_tm,
+            "finetuned_tm": finetuned_tm,
+            "baseline_plddt": baseline_plddt,
+            "finetuned_plddt": finetuned_plddt,
+            "n": len(eval_cases),
+        }
+        print(
+            f"eval mean_tm  baseline={baseline_tm:.4f}  finetuned={finetuned_tm:.4f}"
+        )
+        print(
+            f"eval mean_plddt  baseline={baseline_plddt:.4f}  "
+            f"finetuned={finetuned_plddt:.4f}"
+        )
         runner.load_state_dict(finetuned_state)
 
     if REPRESENTATIVE_EVAL_SIZE > 0:
@@ -1111,7 +1250,7 @@ def main():
             seed=REPRESENTATIVE_EVAL_SEED,
             exclude_ids={case["name"] for case in train_cases},
         )
-        _, finetuned_tm = evaluate(
+        finetuned_eval, finetuned_tm, finetuned_plddt = evaluate(
             runner,
             rep_cases,
             loss_fn,
@@ -1124,7 +1263,7 @@ def main():
             show=False,
         )
         runner.load_state_dict(baseline_state)
-        _, baseline_tm = evaluate(
+        baseline_eval, baseline_tm, baseline_plddt = evaluate(
             runner,
             rep_cases,
             loss_fn,
@@ -1136,16 +1275,53 @@ def main():
             frame_label="baseline",
             show=False,
         )
+        show_history(
+            _merge_baseline_finetuned(baseline_eval, finetuned_eval),
+            "rep-eval",
+        )
+        _PLOT_METRICS["rep-eval"] = {
+            "baseline_tm": baseline_tm,
+            "finetuned_tm": finetuned_tm,
+            "baseline_plddt": baseline_plddt,
+            "finetuned_plddt": finetuned_plddt,
+            "n": len(rep_cases),
+        }
         print(
             f"rep-eval mean_tm  baseline={baseline_tm:.4f}  "
             f"finetuned={finetuned_tm:.4f}  (n={len(rep_cases)}, batch_size=1)"
         )
+        print(
+            f"rep-eval mean_plddt  baseline={baseline_plddt:.4f}  "
+            f"finetuned={finetuned_plddt:.4f}  (n={len(rep_cases)}, batch_size=1)"
+        )
         runner.load_state_dict(finetuned_state)
+
+    _save_plot_archive()
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\nInterrupted.", file=sys.stderr)
-        sys.exit(130)
+    parser = argparse.ArgumentParser(description="TDA loss train/eval and plot archive")
+    parser.add_argument(
+        "--view",
+        nargs="?",
+        const=str(PLOT_ARCHIVE_PATH),
+        default=None,
+        help=f"load and show a plot pickle (default: {PLOT_ARCHIVE_PATH})",
+    )
+    parser.add_argument(
+        "--no-show",
+        action="store_true",
+        help="skip interactive plt.show during training/eval (still saves pickle)",
+    )
+    args = parser.parse_args()
+    if args.view is not None:
+        view_plot_archive(Path(args.view))
+    else:
+        if args.no_show:
+            SHOW_PLOTS = False
+        try:
+            main()
+        except KeyboardInterrupt:
+            _save_plot_archive()
+            print("\nInterrupted.", file=sys.stderr)
+            sys.exit(130)
