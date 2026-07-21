@@ -30,6 +30,8 @@ RUN_CONFIG = mlc.ConfigDict(
             "scn_dir": "./data/sidechainnet",
             "max_proteins": 1000,
             "max_protein_length": None,
+            "max_baseline_tm": 0.7,  # filter proteins with a high baseline tm score
+            "baseline_tm_scores_path": "cache/baseline_tm_scores.json",
         },
         "runtime": {
             "baseline": False,  # True = pretrained eval only, False = fine-tune
@@ -78,21 +80,21 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
     {
         "h0rff": {
             "n": 1,
-            "axis_dim": 5,
-            "resolution": 10,
-            "R": 10,
-            "t": 10,
-            "s": 100,
+            "axis_dim": 10,
+            "resolution": 5,
+            "R": 1000,
+            "t": 2,
+            "s": 0.4,
             "seed": 42,
-            "device": _cpp.Device.CPU
+            "device": _cpp.Device.CUDA
         },
         "h1rff": {
             "n": 2,
-            "axis_dim": 2,
-            "resolution": 8,
-            "R": 10,
+            "axis_dim": 10,
+            "resolution": 3,
+            "R": 1000,
             "t": 2,
-            "s": 1.6,
+            "s": 0.4,
             "seed": 42,
             "device": _cpp.Device.CUDA
         }
@@ -114,24 +116,32 @@ LOSS_CONFIG = mlc.ConfigDict(
             "enabled": True,
         },
         "pd": {
-            "max_dimension": 2,
-            "hom_dim": 2,
+            "max_dimension": 3,
+            "hom_dim": 3,
             "max_edge_length": 10,
         },
         "wasserstein_h0": {
-            "weight": 0.001,
-            "enabled": False,
+            "weight": 0.1,
+            "enabled": True,
         },
         "wasserstein_h1": {
-            "weight": 0.008,
-            "enabled": False,
+            "weight": 0.8,
+            "enabled": True,
+        },
+        "wasserstein_h2": {
+            "weight": 0.1,
+            "enabled": True,
         },
         "vpd_h0": {
-            "weight": 1.0,
+            "weight": 0.001,
             "enabled": True,
         },
         "vpd_h1": {
-            "weight": 1.0,
+            "weight": 0.008,
+            "enabled": True,
+        },
+        "vpd_h2": {
+            "weight": 0.001,
             "enabled": True,
         },
         "eps": _EPS,

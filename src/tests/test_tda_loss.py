@@ -1,3 +1,5 @@
+import argparse
+import pickle
 import sys
 from contextlib import nullcontext
 from pathlib import Path
@@ -24,7 +26,15 @@ from proteintda.utils.conversions import (
     atom_positions_from_atom37,
     atom_positions_from_sidechainnet,
 )
-from proteintda.utils.dataset import load_dataset
+from proteintda.utils.dataset import load_all_proteins, load_dataset, sample_proteins
+
+MODE = "minifold"  # "points", "mlp", or "minifold"
+N_POINTS = 100
+POINT_SCALE = 4.0
+MLP_STEPS = 100
+MLP_LR = 0.0001
+HIDDEN_DIM = 256
+SEED = 42
 
 MODE = "mlp"  # "points", "mlp", or "minifold"
 N_POINTS = 100
@@ -36,13 +46,23 @@ SEED = 42
 LOG_EVERY_NTH_PROTEIN = 20
 EVAL_FRACTION = 0.2
 EVAL_SEED = 42
-LOG_EVERY = 10
+# Second eval: random sample from the full SidechainNet split (not the TM/length-selected set).
+REPRESENTATIVE_EVAL_SIZE = 1000
+REPRESENTATIVE_EVAL_SEED = 43
+REPRESENTATIVE_LOG_EVERY_NTH = 20
+LOG_EVERY = 1
 TDA_WARMUP_STEPS = 0
 TDA_RAMP_STEPS = 0
 CHECKPOINT_DIR = Path("logs/tda_loss")
+PLOT_ARCHIVE_PATH = CHECKPOINT_DIR / "tda_loss_plots.pkl"
+# Interactive plt.show during the run; plots are always written to PLOT_ARCHIVE_PATH.
+SHOW_PLOTS = True
 
 PD_MARKERS = ("o", "^", "s")
-_TDA_BREAKDOWN_KEYS = ("wasserstein_h0", "wasserstein_h1", "vpd_h0", "vpd_h1")
+_TDA_BREAKDOWN_KEYS = ("wasserstein_h0", "wasserstein_h1", "wasserstein_h2", "vpd_h0", "vpd_h1", "vpd_h2")
+
+_PLOT_GROUPS: list[dict] = []
+_PLOT_METRICS: dict = {}
 
 
 def _scalar(x):
@@ -52,7 +72,101 @@ def _scalar(x):
 def _to_numpy(diags, dim):
     if len(diags) < dim + 1:
         return np.empty((0, 2))
-    return diags[dim].detach().cpu().numpy()
+    arr = diags[dim]
+    if torch.is_tensor(arr):
+        return arr.detach().cpu().numpy()
+    return np.asarray(arr)
+
+
+def _serialize_value(value):
+    if torch.is_tensor(value):
+        if value.ndim == 0:
+            return _scalar(value.detach())
+        return value.detach().cpu().numpy().copy()
+    if isinstance(value, dict):
+        return {k: _serialize_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_serialize_value(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, (float, int, str, bool)) or value is None:
+        return value
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
+
+
+def _serialize_plot_cases(cases):
+    hom_dim = LOSS_CONFIG.pd.hom_dim
+    serialized = []
+    for case in cases:
+        history = []
+        for frame in case["history"]:
+            entry = {
+                "step": int(frame["step"]),
+                "loss": float(frame["loss"]),
+                "pred": [np.asarray(p).copy() for p in frame["pred"]],
+                "pts": np.asarray(frame["pts"]).copy(),
+                "view_pts": np.asarray(frame["view_pts"]).copy(),
+                "breakdown": _serialize_value(frame.get("breakdown", {})),
+            }
+            if "label" in frame:
+                entry["label"] = frame["label"]
+            history.append(entry)
+        serialized.append(
+            {
+                "name": case["name"],
+                "target_diags": [
+                    _to_numpy(case["target_diags"], d).copy() for d in range(hom_dim)
+                ],
+                "target_pts": np.asarray(case["target_pts"]).copy(),
+                "history": history,
+            }
+        )
+    return serialized
+
+
+def _reset_plot_archive():
+    _PLOT_GROUPS.clear()
+    _PLOT_METRICS.clear()
+
+
+def _save_plot_archive(path: Path = PLOT_ARCHIVE_PATH):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "hom_dim": LOSS_CONFIG.pd.hom_dim,
+        "groups": list(_PLOT_GROUPS),
+        "metrics": dict(_PLOT_METRICS),
+    }
+    with path.open("wb") as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    print(f"Saved plot archive to {path} ({len(_PLOT_GROUPS)} group(s))")
+
+
+def view_plot_archive(path: Path = PLOT_ARCHIVE_PATH):
+    path = Path(path)
+    with path.open("rb") as f:
+        payload = pickle.load(f)
+    groups = payload.get("groups", [])
+    metrics = payload.get("metrics", {})
+    if metrics:
+        print("metrics:")
+        for name, values in metrics.items():
+            parts = "  ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}"
+                              for k, v in values.items())
+            print(f"  {name}: {parts}")
+    if not groups:
+        print(f"No plot groups in {path}")
+        return
+    for group in groups:
+        title = group["title"]
+        cases = group["cases"]
+        print(f"showing [{title}] ({len(cases)} protein(s))")
+        show_history(cases, title, show=True, record=False)
 
 
 def tda_weight(step: int) -> float:
@@ -148,8 +262,18 @@ def _tda_terms_msg(breakdown: dict) -> str:
     return "  ".join(parts)
 
 
-def show_history(cases, title):
+def show_history(cases, title, *, show: bool | None = None, record: bool = True):
     if not cases or not cases[0]["history"]:
+        return
+
+    if show is None:
+        show = SHOW_PLOTS
+
+    if record:
+        cases = _serialize_plot_cases(cases)
+        _PLOT_GROUPS.append({"title": title, "cases": cases})
+
+    if not show:
         return
 
     n_proteins = len(cases)
@@ -272,6 +396,8 @@ def _extra_loss_msg(breakdown):
         parts.append(f"struct={_scalar(breakdown['structure']):.4f}")
     if "tm_score" in breakdown:
         parts.append(f"tm_score={breakdown['tm_score']:.4f}")
+    if "plddt" in breakdown:
+        parts.append(f"plddt={breakdown['plddt']:.4f}")
     return f"  {'  '.join(parts)}" if parts else ""
 
 
@@ -303,7 +429,7 @@ def _make_history_frame(step, pred_pts, pred_diags, breakdown, view_pts):
         "pred": [_to_numpy(pred_diags, d).copy() for d in range(hom_dim)],
         "pts": pred_pts.detach().cpu().numpy().copy(),
         "view_pts": np.asarray(view_pts, dtype=float).copy(),
-        "breakdown": breakdown,
+        "breakdown": _serialize_value(breakdown),
     }
 
 
@@ -513,11 +639,10 @@ def evaluate(
     show: bool = True,
 ):
     if not cases:
-        return []
+        return [], float("nan"), float("nan")
 
     print(
-        f"[{group_name}] {len(cases)} protein(s), batch_size={batch_size} "
-        f"(held out from training)"
+        f"[{group_name}] {len(cases)} protein(s), batch_size={batch_size}"
     )
     logged_indices = _logged_protein_indices(len(cases), log_every_nth)
     if log_every_nth > 1:
@@ -550,6 +675,16 @@ def evaluate(
         logged_results,
         batch_loss=batch_loss,
     )
+    mean_tm = float(np.nanmean([
+        step_results[i][2]["tm_score"] for i in range(len(cases))
+    ]))
+    mean_plddt = float(np.nanmean([
+        step_results[i][2]["plddt"] for i in range(len(cases))
+    ]))
+    print(
+        f"[{group_name}] mean_tm={mean_tm:.4f}  mean_plddt={mean_plddt:.4f}  "
+        f"(n={len(cases)})"
+    )
 
     plot_cases = []
     for idx in logged_indices:
@@ -564,9 +699,8 @@ def evaluate(
                 "history": [frame],
             }
         )
-    if show:
-        show_history(plot_cases, group_name)
-    return plot_cases
+    show_history(plot_cases, group_name, show=show, record=False)
+    return plot_cases, mean_tm, mean_plddt
 
 
 def _merge_baseline_finetuned(baseline_cases, finetuned_cases):
@@ -613,9 +747,37 @@ def _save_finetuned_checkpoint(path: Path, state_dict: dict, *, epochs: int, mod
     print(f"Saved finetuned checkpoint to {path}")
 
 
+def _cases_from_proteins(proteins, device):
+    pd_cfg = LOSS_CONFIG.pd
+    cases = []
+    for protein in proteins:
+        target_pts = atom_positions_from_sidechainnet(
+            protein, SideChainAtom.CB, device=device,
+        )
+        if target_pts.shape[0] != len(protein.seq):
+            raise ValueError(
+                f"protein {protein.id} has {target_pts.shape[0]} C-beta points "
+                f"but len(seq)={len(protein.seq)}",
+            )
+        target_ca = atom_positions_from_sidechainnet(
+            protein, SideChainAtom.CA, device=device,
+        )
+        target_adj = _distance_matrix(target_pts).detach()
+        cases.append({
+            "protein": protein,
+            "name": protein.id,
+            "seq": str(protein.seq),
+            "target_pts": target_pts,
+            "target_ca_np": target_ca.detach().cpu().numpy(),
+            "target_adj": target_adj,
+            "target_diags": pd_from_graph(target_adj, **pd_cfg),
+            "target_pts_np": target_pts.detach().cpu().numpy(),
+        })
+    return cases
+
+
 def _load_cases(device):
     data = RUN_CONFIG.data
-    pd_cfg = LOSS_CONFIG.pd
     target_length = data.max_protein_length
     proteins = load_dataset()
     if not proteins:
@@ -640,31 +802,31 @@ def _load_cases(device):
         for protein in selected:
             print(f"  {protein.id}  len={len(protein.seq)}")
 
-    cases = []
-    for protein in selected:
-        target_pts = atom_positions_from_sidechainnet(
-            protein, SideChainAtom.CB, device=device,
-        )
-        if target_pts.shape[0] != len(protein.seq):
-            raise ValueError(
-                f"protein {protein.id} has {target_pts.shape[0]} C-beta points "
-                f"but len(seq)={len(protein.seq)}",
-            )
-        target_ca = atom_positions_from_sidechainnet(
-            protein, SideChainAtom.CA, device=device,
-        )
-        target_adj = _distance_matrix(target_pts).detach()
-        cases.append({
-            "protein": protein,
-            "name": protein.id,
-            "seq": str(protein.seq),
-            "target_pts": target_pts,
-            "target_ca_np": target_ca.detach().cpu().numpy(),
-            "target_adj": target_adj,
-            "target_diags": pd_from_graph(target_adj, **pd_cfg),
-            "target_pts_np": target_pts.detach().cpu().numpy(),
-        })
-    return cases
+    return _cases_from_proteins(selected, device)
+
+
+def _load_representative_cases(device, *, n: int, seed: int, exclude_ids: set[str]):
+    """Random sample from the full dataset (no max_proteins / baseline-TM filter)."""
+    data = RUN_CONFIG.data
+    proteins = load_all_proteins(
+        casp_version=data.casp_version,
+        scn_dir=data.scn_dir,
+        casp_thinning=data.casp_thinning,
+        allow_incomplete=data.allow_incomplete,
+    )
+    pool = [protein for protein in proteins if str(protein.id) not in exclude_ids]
+    if not pool:
+        raise ValueError("no proteins left for representative eval after exclusions")
+
+    rng = np.random.default_rng(seed)
+    sampled = sample_proteins(pool, min(n, len(pool)), rng)
+    lengths = [len(protein.seq) for protein in sampled]
+    print(
+        f"representative eval: sampled {len(sampled)}/{len(pool)} proteins "
+        f"from full dataset (excluded {len(exclude_ids)} train/selected ids, "
+        f"len min/mean/max={min(lengths)}/{float(np.mean(lengths)):.1f}/{max(lengths)})"
+    )
+    return _cases_from_proteins(sampled, device)
 
 
 def _cbeta_from_output(r_dict, index=0):
@@ -735,6 +897,10 @@ def _case_step(
 
     breakdown["tda_w"] = w
     with torch.no_grad():
+        if "plddt" in r_dict:
+            breakdown["plddt"] = float(r_dict["plddt"][index, :length].mean().detach().cpu())
+        else:
+            breakdown["plddt"] = float("nan")
         if compute_tm:
             pred_ca = _ca_from_output(r_dict, index).numpy()[:length]
             alignment = tm_align(pred_ca, case["target_ca_np"], case["seq"], case["seq"])
@@ -837,14 +1003,16 @@ class PointMLP(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, d),
         )
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, x):
-        return self.net(x).view(self.n_points, 3)
+        return (x + self.net(x)).view(self.n_points, 3)
 
 
 def _make_problem(device):
     torch.manual_seed(SEED)
-    target_pts = torch.randn(N_POINTS, 3, device=device)
+    target_pts = torch.randn(N_POINTS, 3, device=device) * POINT_SCALE
     target_adj = _distance_matrix(target_pts).detach()
     return target_pts, target_adj
 
@@ -934,7 +1102,7 @@ def _train_point_cloud(name, target_adj, target_pts, optimizer, scheduler, *, ge
 
 def run_points(device, loss_fn):
     target_pts, target_adj = _make_problem(device)
-    pred_pts = torch.randn(N_POINTS, 3, device=device, requires_grad=True)
+    pred_pts = (torch.randn(N_POINTS, 3, device=device) * POINT_SCALE).requires_grad_(True)
     optimizer = torch.optim.Adam([pred_pts], lr=MLP_LR)
     scheduler = build_lr_scheduler(optimizer)
     _train_point_cloud(
@@ -951,7 +1119,7 @@ def run_points(device, loss_fn):
 def run_mlp(device, loss_fn):
     target_pts, target_adj = _make_problem(device)
     model = PointMLP(N_POINTS, hidden_dim=HIDDEN_DIM).to(device)
-    model_input = torch.randn(1, N_POINTS * 3, device=device)
+    model_input = torch.randn(1, N_POINTS * 3, device=device) * POINT_SCALE
     optimizer = torch.optim.Adam(model.parameters(), lr=MLP_LR)
     scheduler = build_lr_scheduler(optimizer)
     _train_point_cloud(
@@ -969,19 +1137,24 @@ def main():
     training = RUN_CONFIG.training
     runtime = RUN_CONFIG.runtime
 
+    _reset_plot_archive()
     device = _resolve_device()
 
-    if MODE in ("points", "mlp"):
-        loss_fn = build_loss_fn()
-        if MODE == "points":
-            run_points(device, loss_fn)
-        else:
-            run_mlp(device, loss_fn)
+    loss_fn = build_loss_fn()
+    if not loss_fn.tda_enabled:
+        raise ValueError(
+            "No TDA loss terms enabled. Enable wasserstein and/or vpd in LOSS_CONFIG."
+        )
+
+    if MODE == "mlp":
+        run_mlp(device, loss_fn)
+        _save_plot_archive()
         return
-
-    if MODE != "minifold":
-        raise ValueError(f"unknown MODE={MODE!r}; expected 'points', 'mlp', or 'minifold'")
-
+    elif MODE == "points":
+        run_points(device, loss_fn)
+        _save_plot_archive()
+        return
+    
     all_cases = _load_cases(device)
     train_cases, eval_cases = _split_train_eval(all_cases, EVAL_FRACTION, EVAL_SEED)
     print(
@@ -989,12 +1162,6 @@ def main():
         f"{len(train_cases)} train, {len(eval_cases)} eval "
         f"(eval_fraction={EVAL_FRACTION})"
     )
-
-    loss_fn = build_loss_fn()
-    if not loss_fn.tda_enabled:
-        raise ValueError(
-            "No TDA loss terms enabled. Enable wasserstein and/or vpd in LOSS_CONFIG."
-        )
 
     runner = MiniFoldRunner(
         Path(runtime.minifold_cache_dir),
@@ -1038,7 +1205,7 @@ def main():
     )
 
     if eval_cases:
-        finetuned_eval = evaluate(
+        finetuned_eval, finetuned_tm, finetuned_plddt = evaluate(
             runner,
             eval_cases,
             loss_fn,
@@ -1051,7 +1218,7 @@ def main():
             show=False,
         )
         runner.load_state_dict(baseline_state)
-        baseline_eval = evaluate(
+        baseline_eval, baseline_tm, baseline_plddt = evaluate(
             runner,
             eval_cases,
             loss_fn,
@@ -1067,12 +1234,101 @@ def main():
             _merge_baseline_finetuned(baseline_eval, finetuned_eval),
             "eval",
         )
+        _PLOT_METRICS["eval"] = {
+            "baseline_tm": baseline_tm,
+            "finetuned_tm": finetuned_tm,
+            "baseline_plddt": baseline_plddt,
+            "finetuned_plddt": finetuned_plddt,
+            "n": len(eval_cases),
+        }
+        print(
+            f"eval mean_tm  baseline={baseline_tm:.4f}  finetuned={finetuned_tm:.4f}"
+        )
+        print(
+            f"eval mean_plddt  baseline={baseline_plddt:.4f}  "
+            f"finetuned={finetuned_plddt:.4f}"
+        )
         runner.load_state_dict(finetuned_state)
+
+    if REPRESENTATIVE_EVAL_SIZE > 0:
+        rep_cases = _load_representative_cases(
+            device,
+            n=REPRESENTATIVE_EVAL_SIZE,
+            seed=REPRESENTATIVE_EVAL_SEED,
+            exclude_ids={case["name"] for case in train_cases},
+        )
+        finetuned_eval, finetuned_tm, finetuned_plddt = evaluate(
+            runner,
+            rep_cases,
+            loss_fn,
+            structure_loss_fn,
+            epochs=training.epochs,
+            batch_size=1,
+            log_every_nth=REPRESENTATIVE_LOG_EVERY_NTH,
+            group_name="rep-eval-finetuned",
+            frame_label="finetuned",
+            show=False,
+        )
+        runner.load_state_dict(baseline_state)
+        baseline_eval, baseline_tm, baseline_plddt = evaluate(
+            runner,
+            rep_cases,
+            loss_fn,
+            structure_loss_fn,
+            epochs=training.epochs,
+            batch_size=1,
+            log_every_nth=REPRESENTATIVE_LOG_EVERY_NTH,
+            group_name="rep-eval-baseline",
+            frame_label="baseline",
+            show=False,
+        )
+        show_history(
+            _merge_baseline_finetuned(baseline_eval, finetuned_eval),
+            "rep-eval",
+        )
+        _PLOT_METRICS["rep-eval"] = {
+            "baseline_tm": baseline_tm,
+            "finetuned_tm": finetuned_tm,
+            "baseline_plddt": baseline_plddt,
+            "finetuned_plddt": finetuned_plddt,
+            "n": len(rep_cases),
+        }
+        print(
+            f"rep-eval mean_tm  baseline={baseline_tm:.4f}  "
+            f"finetuned={finetuned_tm:.4f}  (n={len(rep_cases)}, batch_size=1)"
+        )
+        print(
+            f"rep-eval mean_plddt  baseline={baseline_plddt:.4f}  "
+            f"finetuned={finetuned_plddt:.4f}  (n={len(rep_cases)}, batch_size=1)"
+        )
+        runner.load_state_dict(finetuned_state)
+
+    _save_plot_archive()
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\nInterrupted.", file=sys.stderr)
-        sys.exit(130)
+    parser = argparse.ArgumentParser(description="TDA loss train/eval and plot archive")
+    parser.add_argument(
+        "--view",
+        nargs="?",
+        const=str(PLOT_ARCHIVE_PATH),
+        default=None,
+        help=f"load and show a plot pickle (default: {PLOT_ARCHIVE_PATH})",
+    )
+    parser.add_argument(
+        "--no-show",
+        action="store_true",
+        help="skip interactive plt.show during training/eval (still saves pickle)",
+    )
+    args = parser.parse_args()
+    if args.view is not None:
+        view_plot_archive(Path(args.view))
+    else:
+        if args.no_show:
+            SHOW_PLOTS = False
+        try:
+            main()
+        except KeyboardInterrupt:
+            _save_plot_archive()
+            print("\nInterrupted.", file=sys.stderr)
+            sys.exit(130)

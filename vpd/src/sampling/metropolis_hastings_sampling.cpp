@@ -40,7 +40,7 @@ void MetropolisHastingsSampling::cpu_sample() {
 
             double log_diff = -kernel->t * dL
                               + std::log1p(std::exp(-kernel->s * next_lambda))
-                              - std::log1p(std::exp(-kernel->s * curr_lambda));
+                              - std::log1p(std::exp(-kernel->s * curr_lambda* mcmc_thinning));
 
             if (std::log(uniform_dist(gen) > log_diff)) {
                 curr_thetas[k] = prop;

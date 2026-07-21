@@ -1,6 +1,7 @@
 #include <torch/extension.h>
 #include "heat_kernel.hpp"
 #include "sampling_method.hpp"
+#include "random_sampling.hpp"
 #include "rejection_sampling.hpp"
 #include "metropolis_hastings_sampling.hpp"
 #include "mala_sampling.hpp"
@@ -45,6 +46,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def_property_readonly("weights_completed", &SamplingMethod::weights_completed)
     .def_property_readonly("total_weights", &SamplingMethod::total_weights)
     .def("progress_postfix", &SamplingMethod::progress_postfix);
+
+  py::class_<RandomSampling, SamplingMethod, std::shared_ptr<RandomSampling>>(m, "RandomSamplingKernel")
+      .def(py::init<>());
 
   py::class_<RejectionSampling, SamplingMethod, std::shared_ptr<RejectionSampling>>(m, "RejectionSamplingKernel")
     .def(py::init<>())

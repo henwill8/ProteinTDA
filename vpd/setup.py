@@ -16,9 +16,10 @@ sources = [
     os.path.join("src", "straight_through.cpp"),
     os.path.join("src", "heat_kernel.cpp"),
     os.path.join("src", "sampling", "sampling_method.cpp"),
-    os.path.join("src", "sampling", "rejection_sampling.cpp"),
     os.path.join("src", "sampling", "metropolis_hastings_sampling.cpp"),
     os.path.join("src", "sampling", "mala_sampling.cpp"),
+    os.path.join("src", "sampling", "random_sampling.cpp"),
+    os.path.join("src", "sampling", "rejection_sampling.cpp"),
     os.path.join("src", "vpd.cpp"),
     os.path.join("src", "bindings.cpp"),
 ]
@@ -27,6 +28,7 @@ cuda_sources = [
     os.path.join("src", "cuda", "sampling_common.cu"),
     os.path.join("src", "cuda", "mala_sampling_cuda.cu"),
     os.path.join("src", "cuda", "metropolis_hastings_sampling_cuda.cu"),
+    os.path.join("src", "cuda", "random_sampling_cuda.cu"),
     os.path.join("src", "cuda", "rejection_sampling_cuda.cu"),
 ]
 
