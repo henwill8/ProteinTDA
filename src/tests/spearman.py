@@ -1,36 +1,19 @@
 import sys
 import time
-
 import torch
 
-import math
-import matplotlib.pyplot as plt
 import numpy as np
-import random
 from scipy.stats import spearmanr
 
-from proteintda.config import HEAT_RFF_CONFIG
+from proteintda.config import HEAT_RFF_CONFIG, SamplingMethod
 from proteintda.tda.vpd_kernels import create_heat_random_fourier_features
 
+from tests.test_utils import convert_for_weight, make_histogram
+
 def get_arrays(rff): 
-    lam = np.asarray(rff.weights, dtype=float).ravel()        
-    th  = np.asarray(rff.thetas, dtype=float)                 
+    lam = np.asarray(rff.weights, dtype=float).ravel()
+    th = np.asarray(rff.thetas, dtype=float)
     return lam, th
-
-def convert_for_weight(peak, r):
-    t = 1 / (peak * (r - 1)) * math.log(r)
-    return t, r * t
-
-def run_case(name: str, rff, pd1: torch.Tensor, pd2: torch.Tensor) -> None:
-    print(f"\n=== {name} ===")
-
-    loss = rff.vpd_loss(pd1, pd2)
-    print(f"vpd_loss: {loss.item():.6f}")
-
-def make_histogram(weights, bins): 
-    lambdas = np.array(weights, dtype=float)
-    plt.hist(lambdas, bins=bins, edgecolor="black", color="skyblue")
-    plt.savefig("hist.png")
 
 def make_gammas(dim, support_sizes, n_reps, max_mult, device):
     rows = []
@@ -84,14 +67,17 @@ def sweep(gammas, labels, lam, th, peaks, r_values, dim, reff_floor=0.05):
     return dict(rho=rho,  zband=zband, 
                 peaks=np.asarray(peaks), r_values=np.asarray(r_values), taus=taus)
 
-def main() -> None:
+
+def main(make_histogram = False) -> None:
     timer = time.time()
     print("Creating heat kernels...")
+    HEAT_RFF_CONFIG["h0rff"]["sampling_method"] = SamplingMethod.RANDOM
     h0rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h0rff"])
     print(f"Time taken to create heat kernels: {time.time() - timer:.2f} seconds")
 
     lam, th = get_arrays(h0rff)
-    make_histogram(lam, 30)
+    if (make_histogram):
+        make_histogram(lam, 30)
 
     lo, mid, hi = np.quantile(lam, [0.10, 0.50, 0.90])
 
@@ -108,7 +94,7 @@ def main() -> None:
     out = sweep(gammas, labels, lam, th, peaks, r_values, dim, reff_floor=0.05)
     rm = out["rho"]
     if np.all(np.isnan(rm)):
-        print("fuck")
+        print("no output")
     else: 
         ia, ib = np.unravel_index(np.nanargmax(rm), rm.shape)
         print(f"best: lambda*={out['peaks'][ia]:.4g} r={out['r_values'][ib]:.3g} "
