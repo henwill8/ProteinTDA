@@ -100,7 +100,18 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
         "h1rff": {
             "n": 2,
             "axis_dim": 10,
-            "resolution": 3,
+            "resolution": 2,
+            "R": 1000,
+            "t": 2,
+            "s": 0.4,
+            "seed": 42,
+            "device": _cpp.Device.CUDA,
+            "sampling_method": SamplingMethod.MALA
+        },
+        "h2rff": {
+            "n": 2,
+            "axis_dim": 10,
+            "resolution": 1,
             "R": 1000,
             "t": 2,
             "s": 0.4,
@@ -139,7 +150,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             "enabled": True,
         },
         "wasserstein_h2": {
-            "weight": 0.1,
+            "weight": 0.4,
             "enabled": True,
         },
         "vpd_h0": {
@@ -147,12 +158,12 @@ LOSS_CONFIG = mlc.ConfigDict(
             "enabled": True,
         },
         "vpd_h1": {
-            "weight": 0.008,
+            "weight": 0.00001,
             "enabled": True,
         },
         "vpd_h2": {
-            "weight": 0.001,
-            "enabled": True,
+            "weight": 0.00001,
+            "enabled": False,
         },
         "eps": _EPS,
     }

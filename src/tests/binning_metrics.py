@@ -21,8 +21,8 @@ def compute_metrics(pd : torch.Tensor, rff):
 
     return out
 
-def print_metrics(out):
-    print("\n=== VPD Binning Metrics ===\n")
+def print_metrics(out, n):
+    print(f"\n=== VPD Binning Metrics H{n} ===\n")
     for k, v in out.items():
         print(f"\n VPD {k}: {v}")
 
