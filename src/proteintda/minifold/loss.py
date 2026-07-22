@@ -44,9 +44,6 @@ def _as_scalar(value: torch.Tensor | float) -> float:
     return float(value.detach())
 
 
-_TDA_TERMS = ("wasserstein_h0", "wasserstein_h1", "wasserstein_h2", "vpd_h0", "vpd_h1", "vpd_h2")
-
-
 class TDALoss:
     """Wasserstein and VPD losses on persistence diagrams from distance matrices."""
 
@@ -63,11 +60,17 @@ class TDALoss:
         self.h1rff = h1rff
         self.tda_atom = tda_atom
         self._atom37 = Atom37.CB if tda_atom is SideChainAtom.CB else Atom37.CA
-        self._enabled = tuple(name for name in _TDA_TERMS if config[name].enabled)
-        if "vpd_h0" in self._enabled and h0rff is None:
+        terms = config.tda.terms
+        self._enabled = tuple(name for name in terms if terms[name].enabled)
+        vpd_dims = [
+            int(name.rsplit("_h", 1)[1])
+            for name in self._enabled
+            if name.startswith("vpd_")
+        ]
+        if 0 in vpd_dims and h0rff is None:
             raise ValueError("vpd_h0 loss is enabled but h0rff was not provided")
-        if any(term in self._enabled for term in ["vpd_h1", "vpd_h2"]) and h1rff is None:
-            raise ValueError("vpd_h1 or vpd_h2 loss is enabled but h1rff was not provided")
+        if any(dim > 0 for dim in vpd_dims) and h1rff is None:
+            raise ValueError("vpd_h1+ loss is enabled but h1rff was not provided")
 
     def _create_adjs(
         self,
@@ -90,28 +93,25 @@ class TDALoss:
         target_adj: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         cfg = self.config
-        target_diags = pd_from_graph(target_adj, **cfg.pd)
-        pred_diags = pd_from_graph(pred_adj, **cfg.pd)
+        target_diags = pd_from_graph(target_adj, **cfg.tda.pd)
+        pred_diags = pd_from_graph(pred_adj, **cfg.tda.pd)
         wasserstein = _wasserstein_terms(
             pred_diags,
             target_diags,
-            hom_dim=cfg.pd.hom_dim,
+            hom_dim=cfg.tda.pd.hom_dim,
         )
 
         terms: dict[str, torch.Tensor] = {}
         for name in self._enabled:
-            if name == "wasserstein_h0":
-                terms[name] = wasserstein["h0"]
-            elif name == "wasserstein_h1":
-                terms[name] = wasserstein["h1"]
-            elif name == "wasserstein_h2":
-                terms[name] = wasserstein["h2"]
-            elif name == "vpd_h0":
-                terms[name] = self.h0rff.vpd_loss(pred_diags[0], target_diags[0])
-            elif name == "vpd_h1":
-                terms[name] = self.h1rff.vpd_loss(pred_diags[1], target_diags[1])
-            elif name == "vpd_h2":
-                terms[name] = self.h1rff.vpd_loss(pred_diags[2], target_diags[2])
+            if name.startswith("wasserstein_"):
+                dim = int(name.rsplit("_h", 1)[1])
+                terms[name] = wasserstein[f"h{dim}"]
+            elif name.startswith("vpd_"):
+                dim = int(name.rsplit("_h", 1)[1])
+                rff = self.h0rff if dim == 0 else self.h1rff
+                terms[name] = rff.vpd_loss(pred_diags[dim], target_diags[dim])
+            else:
+                raise ValueError(f"Unknown TDA term: {name}")
         return terms
 
     def _loss_from_adjs(
@@ -135,7 +135,7 @@ class TDALoss:
             if not torch.isfinite(loss).all():
                 print(f"{name} loss is NaN or Inf. Skipping...")
                 loss = loss.new_zeros((), requires_grad=True)
-            cum_loss = cum_loss + self.config[name].weight * loss
+            cum_loss = cum_loss + self.config.tda.terms[name].weight * loss
             losses[name] = loss.detach().clone()
 
         losses["loss"] = cum_loss.detach().clone()
@@ -289,7 +289,7 @@ class MiniFoldLoss:
                 for name, value in tda_breakdown.items():
                     if name == "loss":
                         continue
-                    term_weight = self.loss_config[name].weight
+                    term_weight = self.loss_config.tda.terms[name].weight
                     log[name] = _as_scalar(self.loss_config.tda.weight * term_weight * value)
 
         log["total"] = _as_scalar(total)

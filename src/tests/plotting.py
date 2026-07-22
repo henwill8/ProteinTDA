@@ -4,23 +4,19 @@ import numpy as np
 import torch
 
 from tests.test_utils import _to_numpy, _scalar
-
-from proteintda.config import CONFIG_OF, LOSS_CONFIG, RUN_CONFIG
+from proteintda.config import LOSS_CONFIG
 
 SHOW_PLOTS = True
-
-_PLOT_GROUPS: list[dict] = []
-_PLOT_METRICS: dict = {}
-
 PD_MARKERS = ("o", "^", "s")
-_TDA_BREAKDOWN_KEYS = ("wasserstein_h0", "wasserstein_h1", "wasserstein_h2", "vpd_h0", "vpd_h1", "vpd_h2")
+
 
 def _tda_terms_msg(breakdown: dict) -> str:
     parts = []
-    for key in _TDA_BREAKDOWN_KEYS:
+    for key in LOSS_CONFIG.tda.terms:
         if key in breakdown:
             parts.append(f"{key}={_scalar(breakdown[key]):.4f}")
     return "  ".join(parts)
+
 
 def _extra_loss_msg(breakdown):
     parts = []
@@ -33,6 +29,7 @@ def _extra_loss_msg(breakdown):
     if "plddt" in breakdown:
         parts.append(f"plddt={breakdown['plddt']:.4f}")
     return f"  {'  '.join(parts)}" if parts else ""
+
 
 def _serialize_value(value):
     if torch.is_tensor(value):
@@ -55,51 +52,9 @@ def _serialize_value(value):
     return value
 
 
-def _serialize_plot_cases(cases):
-    hom_dim = LOSS_CONFIG.pd.hom_dim
-    serialized = []
-    for case in cases:
-        history = []
-        for frame in case["history"]:
-            entry = {
-                "step": int(frame["step"]),
-                "loss": float(frame["loss"]),
-                "pred": [np.asarray(p).copy() for p in frame["pred"]],
-                "pts": np.asarray(frame["pts"]).copy(),
-                "view_pts": np.asarray(frame["view_pts"]).copy(),
-                "breakdown": _serialize_value(frame.get("breakdown", {})),
-            }
-            if "label" in frame:
-                entry["label"] = frame["label"]
-            history.append(entry)
-        serialized.append(
-            {
-                "name": case["name"],
-                "target_diags": [
-                    _to_numpy(case["target_diags"], d).copy() for d in range(hom_dim)
-                ],
-                "target_pts": np.asarray(case["target_pts"]).copy(),
-                "history": history,
-            }
-        )
-    return serialized
-
-def tda_weight(step: int) -> float:
-    if TDA_WARMUP_STEPS == 0 and TDA_RAMP_STEPS == 0:
-        return 1.0
-    if step < TDA_WARMUP_STEPS:
-        return 0.0
-    if TDA_RAMP_STEPS <= 0:
-        return 1.0
-    ramp_step = step - TDA_WARMUP_STEPS
-    if ramp_step >= TDA_RAMP_STEPS:
-        return 1.0
-    return ramp_step / TDA_RAMP_STEPS
-
-
 def _pd_limits(target_diags, history):
     pts = []
-    for dim in range(LOSS_CONFIG.pd.hom_dim):
+    for dim in range(LOSS_CONFIG.tda.pd.hom_dim):
         pts.append(_to_numpy(target_diags, dim))
         for frame in history:
             pts.append(frame["pred"][dim])
@@ -168,8 +123,9 @@ def _attach_controls(fig, show, n_steps, *, n_proteins=1):
 
     return go
 
+
 def _make_history_frame(step, pred_pts, pred_diags, breakdown, view_pts):
-    hom_dim = LOSS_CONFIG.pd.hom_dim
+    hom_dim = LOSS_CONFIG.tda.pd.hom_dim
     return {
         "step": step,
         "loss": _scalar(breakdown["total"]),
@@ -179,21 +135,13 @@ def _make_history_frame(step, pred_pts, pred_diags, breakdown, view_pts):
         "breakdown": _serialize_value(breakdown),
     }
 
-def _logged_protein_indices(n_proteins: int, every_nth: int) -> list[int]:
-    stride = max(1, every_nth)
-    return list(range(0, n_proteins, stride))
 
-def show_history(cases, title, *, show: bool | None = None, record: bool = True):
+def show_history(cases, title, *, show: bool | None = None):
     if not cases or not cases[0]["history"]:
         return
 
     if show is None:
         show = SHOW_PLOTS
-
-    if record:
-        cases = _serialize_plot_cases(cases)
-        _PLOT_GROUPS.append({"title": title, "cases": cases})
-
     if not show:
         return
 
@@ -215,7 +163,7 @@ def show_history(cases, title, *, show: bool | None = None, record: bool = True)
     target_scatters = []
     pred_sc = None
     diag_line = None
-    active_homs = range(LOSS_CONFIG.pd.hom_dim)
+    active_homs = range(LOSS_CONFIG.tda.pd.hom_dim)
 
     def clear_dynamic():
         nonlocal pred_sc, diag_line
@@ -299,11 +247,11 @@ def show_history(cases, title, *, show: bool | None = None, record: bool = True)
         )
         fig.canvas.draw_idle()
 
-    def show(step_idx, protein_idx):
+    def show_frame(step_idx, protein_idx):
         clear_dynamic()
         draw_case(step_idx, protein_idx)
 
-    go = _attach_controls(fig, show, n_steps, n_proteins=n_proteins)
+    go = _attach_controls(fig, show_frame, n_steps, n_proteins=n_proteins)
     fig.subplots_adjust(left=0.05, right=0.95, top=0.9, wspace=0.25)
     go(0, 0)
     plt.show(block=True)

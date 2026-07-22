@@ -90,28 +90,32 @@ class _BatchTimer:
 
 def _profile_tda_terms(tda_loss, pred_adj, target_adj, timer: _BatchTimer):
     cfg = tda_loss.config
-    hom_dim = cfg.pd.hom_dim
+    pd_cfg = cfg.tda.pd
+    hom_dim = pd_cfg.hom_dim
 
     with timer.section("persistence_diagram"):
-        target_diags = pd_from_graph(target_adj, **cfg.pd)
-        pred_diags = pd_from_graph(pred_adj, **cfg.pd)
+        target_diags = pd_from_graph(target_adj, **pd_cfg)
+        pred_diags = pd_from_graph(pred_adj, **pd_cfg)
 
     terms: dict[str, torch.Tensor] = {}
     enabled = tda_loss._enabled
 
-    if "wasserstein_h0" in enabled or "wasserstein_h1" in enabled:
+    wasserstein_names = [name for name in enabled if name.startswith("wasserstein_")]
+    if wasserstein_names:
         with timer.section("wasserstein"):
             wasserstein = wasserstein_distance(pred_diags, target_diags, hom_dim)
-        for i, name in enumerate(("wasserstein_h0", "wasserstein_h1")):
-            if name in enabled and i < len(wasserstein):
-                terms[name] = wasserstein[i]
+        for name in wasserstein_names:
+            dim = int(name.rsplit("_h", 1)[1])
+            if dim < len(wasserstein):
+                terms[name] = wasserstein[dim]
 
-    if "vpd_h0" in enabled or "vpd_h1" in enabled:
+    vpd_names = [name for name in enabled if name.startswith("vpd_")]
+    if vpd_names:
         with timer.section("vpd"):
-            if "vpd_h0" in enabled:
-                terms["vpd_h0"] = tda_loss.h0rff.vpd_loss(pred_diags[0], target_diags[0])
-            if "vpd_h1" in enabled:
-                terms["vpd_h1"] = tda_loss.h1rff.vpd_loss(pred_diags[1], target_diags[1])
+            for name in vpd_names:
+                dim = int(name.rsplit("_h", 1)[1])
+                rff = tda_loss.h0rff if dim == 0 else tda_loss.h1rff
+                terms[name] = rff.vpd_loss(pred_diags[dim], target_diags[dim])
 
     return terms
 
@@ -193,7 +197,7 @@ def _profile_batch(
                     ref = pred_adj
                     loss_i = ref.new_zeros(())
                     for name, loss in terms.items():
-                        loss_i = loss_i + tda.config[name].weight * loss
+                        loss_i = loss_i + tda.config.tda.terms[name].weight * loss
                     tda_losses.append(loss_i)
                 total = total + loss_fn.loss_config.tda.weight * torch.stack(tda_losses).mean()
 
@@ -381,8 +385,8 @@ def main():
     if LOSS_CONFIG.tda.enabled:
         enabled_losses.extend(
             term
-            for term in ("wasserstein_h0", "wasserstein_h1", "vpd_h0", "vpd_h1")
-            if LOSS_CONFIG[term].enabled
+            for term, cfg in LOSS_CONFIG.tda.terms.items()
+            if cfg.enabled
         )
     print(f"loss terms: {', '.join(enabled_losses)}")
 
