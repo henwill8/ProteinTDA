@@ -38,10 +38,12 @@ def atom_positions_from_atom14(
 
 def atom_positions_from_atom37(
     positions: torch.Tensor,
-    atom_mask: torch.Tensor,
+    atom_mask: torch.Tensor | None,
     atom: Atom37,
 ) -> torch.Tensor:
     """Extract atom37 positions, falling back to CA when the atom is missing."""
+    if atom_mask is None:
+        atom_mask = torch.ones(37)
     atom_idx = atom.value
     fallback_idx = Atom37.CA.value
     coords: list[torch.Tensor] = []

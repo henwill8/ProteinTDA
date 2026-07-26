@@ -1,10 +1,19 @@
 import math
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
+import os
+import sys
 
+from numpy.random import sample
+from sidechainnet import SCNProtein
 import torch
 
 from proteintda.config import CONFIG_OF, LOSS_CONFIG, RUN_CONFIG
+from proteintda.utils.conversions import Atom37, atom_positions_from_atom37, atom_positions_from_sidechainnet, SideChainAtom
+from proteintda.utils.dataset import load_dataset, sample_proteins
+from proteintda.minifold.loss import _distance_matrix
+from proteintda.tda.persistence import pd_from_graph
 
 def convert_for_weight(peak, r):
     t = 1 / (peak * (r - 1)) * math.log(r)
@@ -39,3 +48,44 @@ def _to_numpy(diags, dim):
 def _scalar(x):
     return x.item() if hasattr(x, "item") else float(x)
 
+def load_proteins(max_proteins: int | None = None) -> list:
+    dataset = load_dataset()
+    rng  = np.random.default_rng(seed=42)
+    return sample_proteins(dataset, max_proteins, rng)
+
+def positions_from_scn(proteins: list[SCNProtein]) -> list[torch.Tensor]:
+    return [atom_positions_from_sidechainnet(p, SideChainAtom.CB) for p in proteins]
+
+
+def positions_from_atom37(proteins: list[torch.Tensor]) -> list[torch.Tensor]:
+    return [atom_positions_from_atom37(p, None, Atom37.CB) for p in proteins]
+
+
+def protein_positions(proteins: list[torch.Tensor] | list[SCNProtein]) -> list[torch.Tensor]:
+    if not proteins:
+        return []
+    if isinstance(proteins[0], torch.Tensor):
+        return positions_from_atom37(proteins)
+    return positions_from_scn(proteins)
+
+
+def protein_adj_matrices(proteins: list[torch.Tensor] | list[SCNProtein]) -> list[torch.Tensor]:
+    return [_distance_matrix(pos) for pos in protein_positions(proteins)]
+
+def protein_pds(proteins: list[torch.Tensor] | list[SCNProtein]):
+    return[pd_from_graph(adj, **LOSS_CONFIG.pd) for adj in protein_adj_matrices(proteins)]
+
+def print_results(results: dict[str, dict]):
+    for test, t_results in results.items():
+        print(f"\n\n========== Results for Test: {test} ==========")
+        for k, v in t_results.items():
+            print(f"\n{k}: {v}")
+
+def save_results(results: dict[str, dict]):
+    cwd = Path.cwd()
+    tests_dir = cwd / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    for test, t_results in results.items():
+        with open(tests_dir / test, "a") as f:
+            for k, v in  t_results.items():
+                f.write(f"\n{k}: {v}")

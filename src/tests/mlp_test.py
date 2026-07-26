@@ -248,10 +248,11 @@ def main():
         rel_rmses.append(pc_metrics['rel_rmse'])
         with open("src/tests/mlp_output.txt", "a") as f:
             f.write(
-                f"[mlp] point-cloud diff  "
-                f"dist_rmse={pc_metrics['dist_rmse']:.4f}  "
-                f"dist_w1={pc_metrics['dist_w1']:.4f}  "
-                f"rel_rmse={pc_metrics['rel_rmse']:.3f}"
+                f"\n\n========== Results Seed = {seed} =========="
+                f"\n[mlp] point-cloud diff  "
+                f"\ndist_rmse={pc_metrics['dist_rmse']:.4f}  "
+                f"\ndist_w1={pc_metrics['dist_w1']:.4f}  "
+                f"\nrel_rmse={pc_metrics['rel_rmse']:.3f}"
             )
     print(f"\n\n========== Final Results ==========")
     print(f"\n Average Dist RMSE: {np.mean(dist_rmses)}")

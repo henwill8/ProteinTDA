@@ -15,6 +15,8 @@ from proteintda.minifold.runner import MiniFoldRunner
 from proteintda.tda.persistence import pd_from_graph, wasserstein_distance
 from proteintda.utils.dataset import load_dataset, set_seed
 
+from tests.test_utils import _resolve_device
+
 BATCH_SIZES = [1, 2, 4, 8]
 WARMUP_STEPS = 2
 TIMED_STEPS = 8
@@ -330,13 +332,6 @@ def _print_batch_report(batch_size: int, totals: ProfileTotals) -> None:
             f"{key:<22} {ms_step:>10.2f} {totals.per_protein_ms(key):>12.2f} {pct:>6.1f}"
         )
     print(f"{'TOTAL':<22} {total_ms:>10.2f} {1000.0 * sum(totals.seconds.values()) / totals.proteins:>12.2f} {100.0:>6.1f}")
-
-
-def _resolve_device() -> torch.device:
-    device = RUN_CONFIG.runtime.device
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    return torch.device(device)
 
 
 def _warm_prepare_cache(runner, proteins):

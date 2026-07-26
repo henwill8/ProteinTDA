@@ -31,6 +31,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("t"),
         py::arg("thetas"),
         py::arg("weights"))
+    .def_readonly("dim", &Heat_Kernel::dim)
+    .def_readonly("n", &Heat_Kernel::n)
+    .def_readonly("axis_dim", &Heat_Kernel::axis_dim)
+    .def_readonly("resolution", &Heat_Kernel::resolution)
     .def_readonly("thetas", &Heat_Kernel::thetas)
     .def_readonly("weights", &Heat_Kernel::weights);
 
@@ -80,5 +84,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def("get_vpd", &VPD::get_vpd,
         py::arg("pd"))
     .def_property_readonly("thetas", &VPD::get_thetas)
-    .def_property_readonly("weights", &VPD::get_weights);
+    .def_property_readonly("weights", &VPD::get_weights)
+    .def_property_readonly("kernel", &VPD::get_kernel);
 }
