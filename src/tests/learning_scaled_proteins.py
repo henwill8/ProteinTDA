@@ -33,7 +33,7 @@ def _make_problem(device, protein):
 
 def run_mlp(device, loss_fn, proteins, scale, h0rff, h1rff, h2rff, visualize=False, seed=42):
     results = []
-    for pts, adj in zip(*[_make_problem(device, p) for p in proteins])
+    for pts, adj in zip(*[_make_problem(device, p) for p in proteins]):
         n = pts.shape[0]
         model = PointMLP(n, hidden_dim=HIDDEN_DIM).to(device)
         model_input = (pts.flatten() * scale).unsqueeze(0) 
