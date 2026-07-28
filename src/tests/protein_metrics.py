@@ -54,18 +54,18 @@ def _grid_metrics(informative, pds) -> dict:
                 heat_config[f"h{dim}rff"]["axis_dim"] = axis_dim
                 heat_config[f"h{dim}rff"]["resolution"] = resolution 
                 rff = create_heat_random_fourier_features(**heat_config[f"h{dim}rff"])
-                results["Dim: {dim}, Axis Dim: {axis_dim}, Resolution: {resolution} n"] = rff.kernel.dim
+                results[f"Dim: {dim}, Axis Dim: {axis_dim}, Resolution: {resolution} n"] = rff.kernel.dim
                 binning_metrics = [compute_metrics(pd[dim], rff) for pd in pds] 
                 total_nonzero = [metric["total_nonzero"] for metric in binning_metrics]
                 total_mult= [metric["mean_nonzero"] for metric in binning_metrics]
                 mean_nonzero = np.mean(total_nonzero)
                 used = float(mean_nonzero) / rff.kernel.dim
-                results["Dim: {dim}, Axis Dim: {axis_dim}, Resolution: {resolution} mean_nonzero"] = mean_nonzero
-                results["Dim: {dim}, Axis Dim: {axis_dim}, Resolution: {resolution} used"] = used 
-                results["Dim: {dim}, Axis Dim: {axis_dim}, Resolution: {resolution} mean_mult"] = np.mean(total_mult)
+                results[f"Dim: {dim}, Axis Dim: {axis_dim}, Resolution: {resolution} mean_nonzero"] = mean_nonzero
+                results[f"Dim: {dim}, Axis Dim: {axis_dim}, Resolution: {resolution} used"] = used 
+                results[f"Dim: {dim}, Axis Dim: {axis_dim}, Resolution: {resolution} mean_mult"] = np.mean(total_mult)
                 inside = pooled[pooled[:, 1] <= axis_dim]
-                lost_from_axis_dim = 100.0 * (1.0 - len(inside) / len(informative))
-                results["Dim: {dim}, Axis Dim: {axis_dim}, Resolution: {resolution} lost_from_axis_dim"] = lost_from_axis_dim 
+                lost_from_axis_dim = 100.0 * (1.0 - len(inside) / len(pooled))
+                results[f"Dim: {dim}, Axis Dim: {axis_dim}, Resolution: {resolution} lost_from_axis_dim"] = lost_from_axis_dim 
     return results
             
 
