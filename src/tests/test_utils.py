@@ -83,7 +83,7 @@ def protein_adj_matrices(proteins: list[torch.Tensor] | list[SCNProtein]) -> lis
     return [_distance_matrix(pos) for pos in protein_positions(proteins)]
 
 def protein_pds(proteins: list[torch.Tensor] | list[SCNProtein]):
-    return[pd_from_graph(adj, **LOSS_CONFIG.pd) for adj in protein_adj_matrices(proteins)]
+    return[pd_from_graph(adj, **LOSS_CONFIG.tda.pd) for adj in protein_adj_matrices(proteins)]
 
 def print_results(results: dict[str, dict]):
     for test, t_results in results.items():

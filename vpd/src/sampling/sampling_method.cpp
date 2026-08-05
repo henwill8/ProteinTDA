@@ -67,7 +67,7 @@ std::array<double, 2> SamplingMethod::node_at(int index) const {
         return {(index + 1) / kernel->resolution};
     }
 
-    const int iy = static_cast<int>((std::sqrt(8.0 * index + 1.0) - 1.0) / 2.0); // solution to iy(iy + 1) / 2 <= index
+    const int iy = static_cast<int>((std::sqrt(8.0 * index + 1.0) + 1.0) / 2.0); // solution to iy(iy + 1) / 2 <= index
     const int ix = index - iy * (iy + 1) / 2; // checks how many nodes were in the previous rows n(n + 1) / 2
     return {ix / kernel->resolution, iy / kernel->resolution};
 }

@@ -39,10 +39,10 @@ void MetropolisHastingsSampling::cpu_sample() {
             double next_lambda = curr_lambda + dL;
 
             double log_diff = -kernel->t * dL
-                              + std::log1p(std::exp(-kernel->s * next_lambda))
-                              - std::log1p(std::exp(-kernel->s * curr_lambda* mcmc_thinning));
+                              + std::log1p(-std::exp(-kernel->s * next_lambda))
+                              - std::log1p(-std::exp(-kernel->s * curr_lambda* mcmc_thinning));
 
-            if (std::log(uniform_dist(gen) > log_diff)) {
+            if (std::log(uniform_dist(gen) < log_diff)) {
                 curr_thetas[k] = prop;
                 curr_lambda = next_lambda;
             }

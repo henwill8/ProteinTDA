@@ -7,7 +7,7 @@ from proteintda.tda.vpd_kernels import create_heat_random_fourier_features
 from tests.binning_metrics import compute_metrics
 from tests.test_utils import load_proteins, print_results, protein_pds, _resolve_device, save_results 
 
-HOM_DIM = LOSS_CONFIG["pd"]["hom_dim"]
+HOM_DIM = LOSS_CONFIG["tda"]["pd"]["hom_dim"]
 
 AXISDIM_SWEEP = (8, 10, 12, 14, 16)
 RESOLUTION_SWEEP = (1, 2, 3, 4, 5)

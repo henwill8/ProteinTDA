@@ -14,6 +14,7 @@ void RandomSampling::cpu_sample() {
     std::vector<double> weights(kernel->R);
 
     std::vector<double> curr_theta(kernel->dim);
+    sample_thetas(curr_thetas, gen);
     
     for (int r = 0; r < kernel->R; ++r) {
         double lambda = laplacian_symbol(curr_theta.data());
