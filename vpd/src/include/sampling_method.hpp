@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "graph_representation.hpp"
 #include "heat_kernel.hpp"
 
 enum class Device {
@@ -50,8 +51,7 @@ public:
 
 protected:
     std::shared_ptr<Heat_Kernel> kernel;
-    bool normalized_lambdas;
-    double edge_weight_total;
+    std::shared_ptr<GraphRepresentation> graph;
     int seed;
     Device device;
 
@@ -60,13 +60,10 @@ protected:
     std::atomic<int64_t> total_ops_{0};
     std::atomic<int> weights_completed_{0};
 
-    void compute_total_edge_weights();
-    std::array<double, 2> node_at(int index) const;
-    double dist_to_diagonal_grid(const std::array<double, 2>& p) const;
-    double qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2) const;
-    double laplacian_symbol(const double* theta);
-    double delta_laplacian_symbol(const double* theta, int k, double proposed_val);
-    void grad_laplacian_symbol(const double* theta, double* grad);
+    void compute_total_edge_weights() {graph->compute_total_edge_weights()}
+    double laplacian_symbol(const double* theta) { return graph->laplacian_symbol(theta); }
+    double delta_laplacian_symbol(const double* theta, int k, double proposed_val) { return graph->delta_laplacian_symbol(theta, k, proposed_val); }
+    void grad_laplacian_symbol(const double* theta, double* grad) {grad_laplacian_symbol(theta, grad); }
 
     virtual void reset_progress();
     void set_total_ops(int64_t value);
