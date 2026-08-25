@@ -3,21 +3,18 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
-import os
-import sys
 
-from numpy.random import sample
 from sidechainnet import SCNProtein
 import torch
 
-from proteintda.config import CONFIG_OF, LOSS_CONFIG, RUN_CONFIG
+from proteintda.config import RUN_CONFIG
 from proteintda.utils.conversions import Atom37, atom_positions_from_atom37, atom_positions_from_sidechainnet, SideChainAtom
 from proteintda.utils.dataset import load_dataset, sample_proteins
 from proteintda.minifold.loss import _distance_matrix
 from proteintda.tda.persistence import pd_from_graph
-import torch
 
-from proteintda.config import RUN_CONFIG
+
+SCALE_SWEEP = [0.25, 0.67, 1.0, 1.3, 1.7]
 
 
 def convert_for_weight(peak, r):
@@ -79,11 +76,17 @@ def protein_positions(proteins: list[torch.Tensor] | list[SCNProtein]) -> list[t
     return positions_from_scn(proteins)
 
 
+def protein_problem(protein: torch.Tensor | SCNProtein, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    target_pts = protein_positions([protein])[0].to(device).float()
+    target_adj = _distance_matrix(target_pts).detach()
+    return target_pts, target_adj
+
+
 def protein_adj_matrices(proteins: list[torch.Tensor] | list[SCNProtein]) -> list[torch.Tensor]:
     return [_distance_matrix(pos) for pos in protein_positions(proteins)]
 
 def protein_pds(proteins: list[torch.Tensor] | list[SCNProtein]):
-    return[pd_from_graph(adj, **LOSS_CONFIG.tda.pd) for adj in protein_adj_matrices(proteins)]
+    return [pd_from_graph(adj) for adj in protein_adj_matrices(proteins)]
 
 def print_results(results: dict[str, dict]):
     for test, t_results in results.items():

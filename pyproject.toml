@@ -17,6 +17,7 @@ dependencies = [
     "openmm",
     "POT",
     "scikit-learn",
+    "setuptools>=77,<82",
     "sidechainnet",
     "torch>=2.3.0",
     "tmtools",

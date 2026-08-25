@@ -4,19 +4,31 @@ import gudhi as gd
 import gudhi.wasserstein
 import torch
 
+from proteintda.config import LOSS_CONFIG
+
 
 def pd_from_graph(
     adj_tensor: torch.Tensor,
-    max_dimension: int,
-    hom_dim: int = 2,
+    max_dimension: int | None = None,
+    hom_dim: int | None = None,
     max_edge_length: float | None = None,
 ) -> list[torch.Tensor]:
     """
     Persistence diagrams whose birth/death values remain attached to ``adj_tensor`` for autograd.
 
     ``adj_tensor`` is a symmetric distance matrix (diagonal zero).
-    ``max_edge_length`` truncates the Vietoris-Rips filtration; ``None`` uses the full matrix.
+    Unspecified filtration arguments fall back to ``LOSS_CONFIG.tda.pd``.
+    ``max_edge_length`` truncates the Vietoris-Rips filtration; ``None`` uses the config,
+    and a config value of ``None`` uses the full matrix.
     """
+    pd = LOSS_CONFIG.tda.pd
+    if max_dimension is None:
+        max_dimension = pd.max_dimension
+    if hom_dim is None:
+        hom_dim = pd.hom_dim
+    if max_edge_length is None:
+        max_edge_length = pd.max_edge_length
+
     diagrams: list[torch.Tensor] = []
     adj_matrix = adj_tensor.detach().cpu().numpy()
 

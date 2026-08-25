@@ -14,7 +14,7 @@ from proteintda.utils.conversions import Atom37, SideChainAtom, atom_positions_f
 
 def _distance_matrix(positions: torch.Tensor) -> torch.Tensor:
     """Full pairwise distance matrix, shape (n, n)."""
-    dists = torch.cdist(positions, positions).clone()
+    dists = torch.cdist(positions, positions)
     dists.fill_diagonal_(0.0)
     return dists
 
@@ -89,12 +89,10 @@ class TDALoss:
 
     def _term_losses(
         self,
-        pred_adj: torch.Tensor,
-        target_adj: torch.Tensor,
+        pred_diags: list[torch.Tensor],
+        target_diags: list[torch.Tensor],
     ) -> dict[str, torch.Tensor]:
         cfg = self.config
-        target_diags = pd_from_graph(target_adj, **cfg.tda.pd)
-        pred_diags = pd_from_graph(pred_adj, **cfg.tda.pd)
         wasserstein = _wasserstein_terms(
             pred_diags,
             target_diags,
@@ -130,7 +128,9 @@ class TDALoss:
         ref = pred_adj
         cum_loss = ref.new_zeros(())
         losses: dict[str, torch.Tensor] = {}
-        for name, loss in self._term_losses(pred_adj, target_adj).items():
+        pred_diags = pd_from_graph(pred_adj)
+        target_diags = pd_from_graph(target_adj)
+        for name, loss in self._term_losses(pred_diags, target_diags).items():
             loss = _as_tensor(loss, ref)
             if not torch.isfinite(loss).all():
                 print(f"{name} loss is NaN or Inf. Skipping...")

@@ -41,7 +41,14 @@ abi_flag = "1" if torch._C._GLIBCXX_USE_CXX11_ABI else "0"
 
 if os.name == "nt":
     cxx_args = ["/O2", "/std:c++20"]
-    nvcc_args = ["-O3", "-std=c++20", "-Xcompiler", "/O2"]
+    nvcc_args = [
+        "-O3",
+        "-std=c++20",
+        "-allow-unsupported-compiler",
+        "--expt-relaxed-constexpr",
+        "-Xcompiler",
+        "/O2",
+    ]
     extra_link_args = []
 else:
     cxx_args = ["-O3", "-std=c++20", f"-D_GLIBCXX_USE_CXX11_ABI={abi_flag}"]
@@ -55,7 +62,7 @@ else:
 
 if USE_OPENMP:
     if os.name == "nt":
-        cxx_args += ["/openmp", "/openmp:experimental"]
+        cxx_args.append("/openmp:experimental")
         nvcc_args += ["-Xcompiler", "/openmp"]
     else:
         cxx_args.append("-fopenmp")
@@ -75,6 +82,8 @@ ext_kwargs = dict(
     extra_link_args=extra_link_args,
     define_macros=define_macros,
 )
+if USE_CUDA:
+    ext_kwargs["libraries"] = ["curand"]
 
 if USE_CUDA:
     ext_module = CUDAExtension(

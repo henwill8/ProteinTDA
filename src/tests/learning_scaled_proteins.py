@@ -4,15 +4,12 @@ import torch
 import sys
 
 from tests.mlp_test import PointMLP, _train_point_cloud
-from tests.test_utils import _resolve_device, _scalar, load_proteins, protein_positions, save_results
+from tests.test_utils import SCALE_SWEEP, _resolve_device, _scalar, load_proteins, print_results, protein_problem, save_results
 
 from proteintda.config import LOSS_CONFIG, HEAT_RFF_CONFIG
 from proteintda.minifold.pipeline import _current_lr, build_loss_fn, build_lr_scheduler
-from proteintda.minifold.loss import _distance_matrix
 from proteintda.tda.persistence import pd_from_graph
 from proteintda.tda.vpd_kernels import create_heat_random_fourier_features
-
-SCALE_SWEEP = [0.25, 0.67, 1.0, 1.3, 1.7]
 
 MLP_STEPS = 500
 MLP_LR = 0.0001
@@ -26,14 +23,9 @@ dist_rmses=[]
 dist_w1s=[]
 rel_rmses=[]
 
-def _make_problem(device, protein):
-    target_pts = protein_positions([protein])[0].to(device).float()
-    target_adj = _distance_matrix(target_pts).detach()
-    return target_pts, target_adj
-
 def run_mlp(device, loss_fn, proteins, scale, h0rff, h1rff, h2rff, visualize=False, seed=42):
     results = []
-    for pts, adj in [_make_problem(device, p) for p in proteins]:
+    for pts, adj in [protein_problem(p, device) for p in proteins]:
         n = pts.shape[0]
         model = PointMLP(n, hidden_dim=HIDDEN_DIM).to(device)
         model_input = (pts.flatten() * scale).unsqueeze(0) 
