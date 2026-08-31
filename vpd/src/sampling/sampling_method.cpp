@@ -1,7 +1,13 @@
+#pragma once
+
+#include "complete_graph.hpp"
+#include "graph_representation.hpp"
+#include "lattice_graph.hpp"
 #include "sampling_method.hpp"
 
 #include <cmath>
 #include <iostream>
+#include <memory>
 #include <numbers>
 #include <random>
 #include <sstream>
@@ -16,13 +22,20 @@ void SamplingMethod::init(
     std::shared_ptr<Heat_Kernel> kernel,
     bool normalized_lambdas,
     int seed,
+    GraphRepresentationType graph_representation_type,
     Device device)
 {
     this->kernel = std::move(kernel);
-    this->normalized_lambdas = normalized_lambdas;
     this->seed = seed;
     this->device = device;
-    if (normalized_lambdas) compute_total_edge_weights();
+    switch (graph_representation_type) {
+        case GraphRepresentationType::COMPLETE:
+            this->graph = std::make_unique<CompleteGraph>(*(this->kernel), normalized_lambdas);
+            break;
+        case GraphRepresentationType::LATTICE:
+            this->graph = std::make_unique<LatticeGraph>(*(this->kernel), normalized_lambdas);
+            break;
+    }
 }
 
 
@@ -38,7 +51,7 @@ void SamplingMethod::sample_thetas(std::vector<double>& thetas, std::mt19937& ge
 
 void SamplingMethod::reset_progress() {
     total_weights_ = kernel->R;
-    ops_per_laplacian_ = static_cast<int64_t>(kernel->dim) * (kernel->dim + 1) / 2;
+    ops_per_laplacian_ = graph->ops_per_lambda();
     ops_per_theta_sampling_ = kernel->dim;
     completed_ops_.store(0, std::memory_order_relaxed);
     weights_completed_.store(0, std::memory_order_relaxed);

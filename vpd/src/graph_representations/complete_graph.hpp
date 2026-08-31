@@ -6,7 +6,7 @@
 class CompleteGraph : public GraphRepresentation {
 public: 
     CompleteGraph(Heat_Kernel &kernel, bool normalized_lambdas) : GraphRepresentation(kernel, normalized_lambdas) {
-      if (normalized_lambdas) this->scale = 1.0 / compute_total_edge_weights();
+        this->scale = (normalized_lambdas) ? 1.0 / compute_total_edge_weights() : 1.0;
     }
 
     double laplacian_symbol(const double* theta) const override;
