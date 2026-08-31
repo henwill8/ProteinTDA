@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "graph_representation.hpp"
 #include "heat_kernel.hpp"
 
 enum class Device {
@@ -17,15 +18,20 @@ enum class Device {
     CUDA
 };
 
+enum class Graph_Representation_Type {
+    COMPLETE,
+    LATTICE
+};
+
 struct Heat_Kernel_device {
-  int n;
-  int axis_dim;
-  int ppa;
-  double resolution;
-  int R; 
-  double s;
-  double t;
-  int dim;
+    int n;
+    int axis_dim;
+    int ppa;
+    double resolution;
+    int R; 
+    double s;
+    double t;
+    int dim;
 };
 
 class SamplingMethod {
@@ -37,6 +43,7 @@ public:
         std::shared_ptr<Heat_Kernel> kernel,
         bool normalized_lambdas = true,
         int seed = 42,
+        Graph_Representation_Type graph_representation_type = Graph_Representation_Type::LATTICE,
         Device device = Device::CPU);
 
     std::shared_ptr<Heat_Kernel> build();
@@ -50,8 +57,7 @@ public:
 
 protected:
     std::shared_ptr<Heat_Kernel> kernel;
-    bool normalized_lambdas;
-    double edge_weight_total;
+    std::unique_ptr<GraphRepresentation> graph;
     int seed;
     Device device;
 
@@ -60,13 +66,10 @@ protected:
     std::atomic<int64_t> total_ops_{0};
     std::atomic<int> weights_completed_{0};
 
-    void compute_total_edge_weights();
-    std::array<double, 2> node_at(int index) const;
-    double dist_to_diagonal_grid(const std::array<double, 2>& p) const;
-    double qdist(const std::array<double, 2>& p1, const std::array<double, 2>& p2) const;
-    double laplacian_symbol(const double* theta);
-    double delta_laplacian_symbol(const double* theta, int k, double proposed_val);
-    void grad_laplacian_symbol(const double* theta, double* grad);
+    void compute_total_edge_weights() {graph->compute_total_edge_weights(); }
+    double laplacian_symbol(const double* theta) { return graph->laplacian_symbol(theta); }
+    double delta_laplacian_symbol(const double* theta, int k, double proposed_val) { return graph->delta_laplacian_symbol(theta, k, proposed_val); }
+    void grad_laplacian_symbol(const double* theta, double* grad) {graph->grad_laplacian_symbol(theta, grad); }
 
     virtual void reset_progress();
     void set_total_ops(int64_t value);

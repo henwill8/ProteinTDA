@@ -40,7 +40,7 @@ void MetropolisHastingsSampling::cpu_sample() {
 
             double log_diff = -kernel->t * dL
                               + std::log1p(-std::exp(-kernel->s * next_lambda))
-                              - std::log1p(-std::exp(-kernel->s * curr_lambda* mcmc_thinning));
+                              - std::log1p(-std::exp(-kernel->s * curr_lambda));
 
             if (std::log(uniform_dist(gen) < log_diff)) {
                 curr_thetas[k] = prop;
@@ -82,8 +82,8 @@ void MetropolisHastingsSampling::sample() {
                 kernel->dim
             };
             if (this->normalized_lambdas) {
-                int edge_weight_total = this->edge_weight_total; 
-            } else { 
+                int edge_weight_total = this->edge_weight_total;
+            } else {
                 int edge_weight_total = 0;
             }
             kernel->thetas = cuda_sample(this->mcmc_sigma, this->mcmc_burn_in, this->mcmc_thinning, this->normalized_lambdas, edge_weight_total, this->seed, cuda_kernel, *this);
