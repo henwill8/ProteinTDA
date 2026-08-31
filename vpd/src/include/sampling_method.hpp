@@ -18,7 +18,7 @@ enum class Device {
     CUDA
 };
 
-enum class GraphRepresentationType {
+enum class Graph_Representation_Type {
     COMPLETE,
     LATTICE
 };
@@ -43,7 +43,7 @@ public:
         std::shared_ptr<Heat_Kernel> kernel,
         bool normalized_lambdas = true,
         int seed = 42,
-        GraphRepresentationType graph_representation_type = GraphRepresentationType::LATTICE,
+        Graph_Representation_Type graph_representation_type = Graph_Representation_Type::LATTICE,
         Device device = Device::CPU);
 
     std::shared_ptr<Heat_Kernel> build();

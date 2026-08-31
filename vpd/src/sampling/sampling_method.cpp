@@ -22,20 +22,20 @@ void SamplingMethod::init(
     std::shared_ptr<Heat_Kernel> kernel,
     bool normalized_lambdas,
     int seed,
-    GraphRepresentationType graph_representation_type,
+    Graph_Representation_Type graph_representation_type,
     Device device)
 {
     this->kernel = std::move(kernel);
     this->seed = seed;
-    this->device = device;
     switch (graph_representation_type) {
-        case GraphRepresentationType::COMPLETE:
+        case Graph_Representation_Type::COMPLETE:
             this->graph = std::make_unique<CompleteGraph>(*(this->kernel), normalized_lambdas);
             break;
-        case GraphRepresentationType::LATTICE:
+        case Graph_Representation_Type::LATTICE:
             this->graph = std::make_unique<LatticeGraph>(*(this->kernel), normalized_lambdas);
             break;
     }
+    this->device = device;
 }
 
 

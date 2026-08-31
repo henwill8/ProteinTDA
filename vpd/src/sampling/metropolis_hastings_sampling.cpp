@@ -65,6 +65,7 @@ void MetropolisHastingsSampling::cpu_sample() {
 }
 
 void MetropolisHastingsSampling::sample() {
+#ifdef VPD_WITH_CUDA
     switch(this->device) {
         case Device::CPU:
             cpu_sample();
@@ -81,13 +82,16 @@ void MetropolisHastingsSampling::sample() {
                 kernel->dim
             };
             if (this->normalized_lambdas) {
-                int edge_weight_total = this->edge_weight_total; 
-            } else { 
+                int edge_weight_total = this->edge_weight_total;
+            } else {
                 int edge_weight_total = 0;
             }
             kernel->thetas = cuda_sample(this->mcmc_sigma, this->mcmc_burn_in, this->mcmc_thinning, this->normalized_lambdas, edge_weight_total, this->seed, cuda_kernel, *this);
             break;
     }
+#else
+    cpu_sample();
+#endif
 }
 
 MetropolisHastingsSampling::MetropolisHastingsSampling(

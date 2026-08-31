@@ -100,8 +100,9 @@ void MALASampling::reset_progress() {
 
 void MALASampling::sample() {
     std::cout << "Device: " << static_cast<int>(this->device) << std::endl;
+#ifdef VPD_WITH_CUDA
     switch(this->device) {
-        case Device::CPU: 
+        case Device::CPU:
             cpu_sample();
             break;
         case Device::CUDA:
@@ -117,13 +118,16 @@ void MALASampling::sample() {
                 kernel->dim
             };
             if (this->normalized_lambdas) {
-                int edge_weight_total = this->edge_weight_total; 
-            } else { 
+                int edge_weight_total = this->edge_weight_total;
+            } else {
                 int edge_weight_total = 0;
             }
             kernel->thetas = cuda_sample(this->mala_sigma, this->mala_burn_in, this->mala_thinning, this->tune_sigma, this->normalized_lambdas, edge_weight_total, this->seed, cuda_kernel, *this);
             break;
     }
+#else
+    cpu_sample();
+#endif
 }
 
 MALASampling::MALASampling(

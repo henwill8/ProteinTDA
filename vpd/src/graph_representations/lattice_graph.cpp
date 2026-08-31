@@ -47,13 +47,13 @@ double LatticeGraph::laplacian_symbol(const double* theta) const {
                     result += 2 * edge_weight * (1 - std::cos(diff));
                 } 
                 if (coords[1] + 1 < this->ppa) { // Up
-                    diff = theta_i - theta[i + coords[1]];
+                    diff = theta_i - theta[i + static_cast<int>(coords[1])];
                     result += 2 * edge_weight * (1 - std::cos(diff));
                 }
                 if (coords[0] + 1 < coords[1]) { // Right and Down
                     diff = theta_i - theta[i + 1];
                     result += 2 * edge_weight * (1 - std::cos(diff));
-                    diff = theta_i - theta[i - coords[1] + 1];
+                    diff = theta_i - theta[i - static_cast<int>(coords[1]) + 1];
                     result += 2 * edge_weight * (1 - std::cos(diff));
                 } else diagonal = true; // this node sits one step from the (quotiented) diagonal
                 if (diagonal) {
@@ -100,8 +100,8 @@ double LatticeGraph::delta_laplacian_symbol(const double*theta, int k, double pr
         } 
 
         if (coords[1] + 1 < this->ppa) { // Up
-            current_diff = current_val - theta[k + coords[1]];
-            proposed_diff = proposed_val - theta[k + coords[1]];
+            current_diff = current_val - theta[k + static_cast<int>(coords[1])];
+            proposed_diff = proposed_val - theta[k + static_cast<int>(coords[1])];
             delta += w * (std::cos(current_diff) - std::cos(proposed_diff));
         }
 
@@ -109,8 +109,8 @@ double LatticeGraph::delta_laplacian_symbol(const double*theta, int k, double pr
             current_diff = current_val - theta[k + 1];
             proposed_diff = proposed_val - theta[k + 1];
             delta += w * (std::cos(current_diff) - std::cos(proposed_diff));
-            current_diff = current_val - theta[k - coords[1] + 1]; // Down
-            proposed_diff = proposed_val - theta[k - coords[1] + 1];
+            current_diff = current_val - theta[k - static_cast<int>(coords[1]) + 1]; // Down
+            proposed_diff = proposed_val - theta[k - static_cast<int>(coords[1]) + 1];
             delta += w * (std::cos(current_diff) - std::cos(proposed_diff));
         } else diagonal = true; // this node sits one step from the (quotiented) diagonal
 
@@ -156,14 +156,14 @@ void LatticeGraph::grad_laplacian_symbol(const double* theta, double* grad) cons
                 } 
 
                 if (coords[1] + 1 < this->ppa) { // Up
-                    diff = theta_i - theta[i + coords[1]];
+                    diff = theta_i - theta[i + static_cast<int>(coords[1])];
                     d_i += w * std::sin(diff);
                 }
 
                 if (coords[0] + 1 < coords[1]) { // Right and Down
                     diff = theta_i - theta[i + 1];
                     d_i += w * std::sin(diff);
-                    diff = theta_i - theta[i - coords[1] + 1]; // Down
+                    diff = theta_i - theta[i - static_cast<int>(coords[1]) + 1]; // Down
                     d_i += w * std::sin(diff);
                 } else diagonal = true; // this node sits one step from the (quotiented) diagonal
 

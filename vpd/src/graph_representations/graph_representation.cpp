@@ -1,7 +1,9 @@
 #pragma once
 
 #include "graph_representation.hpp"
+#include <algorithm>
 #include <array>
+#include <cmath>
 
 double GraphRepresentation::dist_to_diagonal_grid(const std::array<double, 2>& p) const {
     // Project p onto the diagonal (t, t)

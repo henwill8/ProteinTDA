@@ -41,7 +41,7 @@ void Heat_Kernel::init_dim() {
     if (this->n == 1) {
         this->dim = ppa;
     } else if (this->n == 2) {
-        this->dim = ppa * (ppa + 1) / 2;
+        this->dim = ppa * (ppa - 1) / 2;
     } else {
         throw std::invalid_argument("n must be 1 or 2");
     }
