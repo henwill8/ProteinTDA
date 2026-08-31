@@ -12,17 +12,19 @@ from proteintda.config import SamplingMethod, HEAT_RFF_CONFIG, LOSS_CONFIG
 _CACHE_DIR = Path(__file__).resolve().parents[3] / "cache" / "heat_rff"
 
 
-def _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed, sampler : str):
-    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_s-{s}_t-{t}_R-{R}_seed-{seed}_sampler-{sampler}.pt")
+def _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed, sampler : str, graph_representation_type):
+    graph_name = graph_representation_type.name.lower()
+    return _CACHE_DIR / (f"n-{n}_axisdim-{axis_dim}_res-{resolution}_s-{s}_t-{t}_R-{R}_seed-{seed}_sampler-{sampler}_graph-{graph_name}.pt")
 
 
-def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed) -> None:
+def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed, graph_representation_type) -> None:
     expected = {
         "n": n,
         "axis_dim": axis_dim,
         "resolution": resolution,
         "R": R,
         "seed": seed,
+        "graph_representation_type": graph_representation_type.name,
     }
     for key, value in expected.items():
         if cached.get(key) != value:
@@ -119,14 +121,16 @@ def create_heat_random_fourier_features(
     seed=42,
     device=_cpp.Device.CPU,
     sampling_method: SamplingMethod = SamplingMethod.MALA,
+    graph_representation_type=_cpp.Graph_Representation.LATTICE,
     show_progress=True,
 ):
-    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed, sampling_method.name)
+    cache_path = _heat_rff_cache_path(n, axis_dim, resolution, R, s, t, seed, sampling_method.name, graph_representation_type)
     if cache_path.is_file():
         print(f"Loading cached heat kernel from {cache_path}...", flush=True)
         cached = torch.load(cache_path, weights_only=False)
         _validate_cached_kernel(
-            cached, n=n, axis_dim=axis_dim, resolution=resolution, R=R, seed=seed
+            cached, n=n, axis_dim=axis_dim, resolution=resolution, R=R, seed=seed,
+            graph_representation_type=graph_representation_type,
         )
         kernel = _cpp.Heat_Kernel(
             n, axis_dim, resolution, R, s, t, cached["thetas"], cached["weights"],
@@ -145,7 +149,7 @@ def create_heat_random_fourier_features(
                 sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30)
             case SamplingMethod.MALA:
                 sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
-        sampler.init(kernel, True, seed=seed, device=device)
+        sampler.init(kernel, True, seed=seed, graph_representation_type=graph_representation_type, device=device)
         _build_kernel_with_progress(
             sampler,
             f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, s, t, seed)}",
@@ -161,7 +165,7 @@ def create_heat_random_fourier_features(
                 sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30)
             case SamplingMethod.MALA:
                 sampler = _cpp.MALASamplingKernel(sigma=0.1, burn_in=300, thinning=30, tune_sigma=True)
-        sampler.init(kernel, True, seed=seed, device=device)
+        sampler.init(kernel, True, seed=seed, graph_representation_type=graph_representation_type, device=device)
         sampler.build()
 
     vpd = _cpp.VPD(kernel)
@@ -173,6 +177,7 @@ def create_heat_random_fourier_features(
             "resolution": resolution,
             "R": R,
             "seed": seed,
+            "graph_representation_type": graph_representation_type.name,
             "thetas": vpd.thetas,
             "weights": vpd.weights,
         },
