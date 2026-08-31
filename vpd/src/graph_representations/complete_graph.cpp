@@ -47,6 +47,33 @@ double CompleteGraph::delta_laplacian_symbol(const double* theta, int k, double 
     return delta * this->scale;
 }
 
+double CompleteGraph::compute_total_edge_weights() const {
+    double total = 0.0;
+    const int n = this->dim;
+
+#pragma omp parallel reduction(+ : total)
+    {
+#pragma omp for schedule(dynamic)
+        for (int i = 0; i < n; ++i) {
+            for (int64_t j = i + 1; j < n; ++j) {
+                double edge_weight = qdist(this->node_at(i), this->node_at(j));
+                if (edge_weight != 0.0) {
+                    total += 2 * edge_weight;
+                }
+            }
+
+            double edge_weight = dist_to_diagonal_grid(this->node_at(i));
+            total += 2 * edge_weight;
+        }
+    }
+    return total;
+}
+
+int64_t CompleteGraph::ops_per_lambda() const {
+    // Mirrors laplacian_symbol's double loop: dim*(dim-1)/2 pairwise terms plus one diagonal term per node.
+    return static_cast<int64_t>(this->dim) * (this->dim + 1) / 2;
+}
+
 void CompleteGraph::grad_laplacian_symbol(const double* theta, double* grad) const {
 #pragma omp parallel 
     {
@@ -63,7 +90,7 @@ void CompleteGraph::grad_laplacian_symbol(const double* theta, double* grad) con
             
             double weight = dist_to_diagonal_grid(this->node_at(i));
             d_i += 2 * weight * std::sin(theta[i]);
-            grad[i] = d_i;
+            grad[i] = d_i * this->scale;
         }
     } 
 }

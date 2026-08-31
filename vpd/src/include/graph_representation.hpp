@@ -10,10 +10,10 @@ public:
     virtual ~GraphRepresentation () = default;
 
     int dim;
+    double resolution;
     int ppa;
     int n;
     bool normalized_lambdas;
-    int resolution;
     double scale;
 
     std::array<double, 2> node_at(int index) const;

@@ -8,10 +8,10 @@ double GraphRepresentation::dist_to_diagonal_grid(const std::array<double, 2>& p
     double t = 0.5 * (p[0] + p[1]);
 
     double min_t = 0.0;
-    double max_t = kernel->points_per_axis() * kernel->resolution;
+    double max_t = this->ppa * this->resolution;
 
     // Find closest grid value to (t, t)
-    double d_grid = std::round((t - min_t) * kernel->resolution) / kernel->resolution + min_t;
+    double d_grid = std::round((t - min_t) * this->resolution) / this->resolution + min_t;
     // Clamp to grid range
     d_grid = std::clamp(d_grid, min_t, max_t);
 
@@ -31,10 +31,10 @@ double GraphRepresentation::qdist(const std::array<double, 2>& p1, const std::ar
 
 std::array<double, 2> GraphRepresentation::node_at(int index) const {
     if (this->n == 1) {
-        return {(index + 1) / kernel->resolution};
+        return {(index + 1) / this->resolution};
     }
 
-    const int iy = static_cast<int>((std::sqrt(8.0 * index + 1.0) - 1.0) / 2.0); // solution to iy(iy + 1) / 2 <= index
-    const int ix = index - iy * (iy + 1) / 2; // checks how many nodes were in the previous rows n(n + 1) / 2
-    return {ix / kernel->resolution, iy / kernel->resolution};
+    const int iy = static_cast<int>((1.0 + std::sqrt(1.0 + 8.0 * index)) / 2.0); // solution to iy(iy - 1) / 2 <= index; no on-diagonal nodes
+    const int ix = index - iy * (iy - 1) / 2; // checks how many nodes were in the previous rows, excluding the diagonal
+    return {ix / this->resolution, iy / this->resolution};
 }
