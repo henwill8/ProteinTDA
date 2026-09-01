@@ -1,5 +1,3 @@
-#pragma once
-
 #include "complete_graph.hpp"
 #include "graph_representation.hpp"
 #include "lattice_graph.hpp"
@@ -27,6 +25,7 @@ void SamplingMethod::init(
 {
     this->kernel = std::move(kernel);
     this->seed = seed;
+    this->normalized_lambdas = normalized_lambdas;
     switch (graph_representation_type) {
         case Graph_Representation_Type::COMPLETE:
             this->graph = std::make_unique<CompleteGraph>(*(this->kernel), normalized_lambdas);
@@ -35,6 +34,7 @@ void SamplingMethod::init(
             this->graph = std::make_unique<LatticeGraph>(*(this->kernel), normalized_lambdas);
             break;
     }
+    this->edge_weight_total = this->graph->compute_total_edge_weights();
     this->device = device;
 }
 

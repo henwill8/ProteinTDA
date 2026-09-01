@@ -100,11 +100,9 @@ void RejectionSampling::sample() {
                 kernel->t,
                 kernel->dim
             };
-            if (this->normalized_lambdas) {
-                int edge_weight_total = this->edge_weight_total;
-            } else {
-                int edge_weight_total = 0;
-            }
+            const int edge_weight_total = this->normalized_lambdas
+                ? static_cast<int>(this->edge_weight_total)
+                : 0;
             kernel->thetas = cuda_sample(this->normalized_lambdas, edge_weight_total, this->seed, cuda_kernel, *this);
             break;
     }

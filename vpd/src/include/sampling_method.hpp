@@ -60,6 +60,8 @@ protected:
     std::unique_ptr<GraphRepresentation> graph;
     int seed;
     Device device;
+    bool normalized_lambdas = true;
+    double edge_weight_total = 0.0;
 
     int total_weights_{0};
     std::atomic<int64_t> completed_ops_{0};
