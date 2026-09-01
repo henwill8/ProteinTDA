@@ -33,7 +33,7 @@ def _validate_cached_kernel(cached: dict, *, n, axis_dim, resolution, R, seed, g
             )
 
 
-def _format_kernel_config(n, axis_dim, resolution, R, s, t, seed) -> str:
+def _format_kernel_config(n, axis_dim, resolution, R, s, t, seed, graph_representation_type: _cpp.Graph_Representation) -> str:
     parts = [
         f"n={n}",
         f"R={R}",
@@ -42,6 +42,7 @@ def _format_kernel_config(n, axis_dim, resolution, R, s, t, seed) -> str:
         f"s={s}",
         f"t={t}",
         f"seed={seed}",
+        f"graph_representation_type={graph_representation_type.name}",
     ]
     return ", ".join(parts)
 
@@ -152,7 +153,7 @@ def create_heat_random_fourier_features(
         sampler.init(kernel, True, seed=seed, graph_representation_type=graph_representation_type, device=device)
         _build_kernel_with_progress(
             sampler,
-            f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, s, t, seed)}",
+            f"Building heat kernel: {_format_kernel_config(n, axis_dim, resolution, R, s, t, seed, graph_representation_type)}",
         )
     else:
         kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
