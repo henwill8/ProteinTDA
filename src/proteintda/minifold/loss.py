@@ -15,8 +15,8 @@ from proteintda.utils.conversions import Atom37, SideChainAtom, atom_positions_f
 def _distance_matrix(positions: torch.Tensor) -> torch.Tensor:
     """Full pairwise distance matrix, shape (n, n)."""
     dists = torch.cdist(positions, positions)
-    dists.fill_diagonal_(0.0)
-    return dists
+    eye = torch.eye(dists.shape[0], device=dists.device, dtype=dists.dtype)
+    return dists * (1.0 - eye)
 
 
 def _wasserstein_terms(
