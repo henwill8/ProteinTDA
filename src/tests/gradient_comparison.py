@@ -150,6 +150,7 @@ def run_comparison(loss_fn, runner, proteins, num_recycling):
 
 def main(write):
     device = _resolve_device()
+    proteins = load_proteins(N_PROTEINS)
     loss_fn = build_loss_fn()
     if not loss_fn.tda_enabled:
         raise ValueError(
@@ -171,7 +172,6 @@ def main(write):
     runner.model.eval()
     trainable, total = runner.trainable_parameter_count
     print(f"Trainable parameters: {trainable:,} / {total:,}")
-    proteins = load_proteins(N_PROTEINS)
     print(f"Comparing MiniFold gradients on {len(proteins)} proteins")
     results = {
         "MiniFold": run_comparison(
