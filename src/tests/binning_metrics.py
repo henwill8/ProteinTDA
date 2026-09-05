@@ -8,17 +8,22 @@ from proteintda.tda.vpd_kernels import create_heat_random_fourier_features
 
 def compute_metrics(pd : torch.Tensor, rff):
     vpd = rff.get_vpd(pd)
-    torch.set_printoptions(profile="full")
-    print(vpd)
     out = {}
 
     out["total_nonzero"] = torch.count_nonzero(vpd)
     out["total_zero"] = (vpd == 0).sum().item()
 
-    out["min_nonzero"] = torch.min(vpd[vpd != 0])
-    out["max_nonzero"] = torch.max(vpd[vpd != 0])
-    out["mean_nonzero"] = vpd[vpd != 0].mean()
-    out["std_nonzero"] = vpd[vpd != 0].std()
+    nonzero = vpd[vpd != 0]
+    if nonzero.numel() > 0:
+        out["min_nonzero"] = torch.min(nonzero)
+        out["max_nonzero"] = torch.max(nonzero)
+        out["mean_nonzero"] = nonzero.mean()
+        out["std_nonzero"] = nonzero.std()
+    else:
+        out["min_nonzero"] = float("nan")
+        out["max_nonzero"] = float("nan")
+        out["mean_nonzero"] = 0.0
+        out["std_nonzero"] = float("nan")
 
     return out
 
