@@ -71,7 +71,6 @@ def sweep(gammas, labels, lam, th, peaks, r_values, dim, reff_floor=0.05):
 def main(make_histogram = False) -> None:
     timer = time.time()
     print("Creating heat kernels...")
-    HEAT_RFF_CONFIG["h0rff"]["sampling_method"] = SamplingMethod.RANDOM
     h0rff = create_heat_random_fourier_features(**HEAT_RFF_CONFIG["h0rff"])
     print(f"Time taken to create heat kernels: {time.time() - timer:.2f} seconds")
 
