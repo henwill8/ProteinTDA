@@ -21,6 +21,11 @@ class SamplingMethod(Enum):
     MCMC = auto()
     MALA = auto()
 
+
+class GraphRepresentation(Enum):
+    COMPLETE = auto()
+    LATTICE = auto()
+
 with CONFIG_OF.unlocked():
     # CONFIG_OF.model.heads.tm.enabled = True
     # CONFIG_OF.loss.tm.enabled = True
@@ -95,7 +100,8 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "s": 0.4,
             "seed": 42,
             "device": _cpp.Device.CUDA,
-            "sampling_method": SamplingMethod.MALA 
+            "sampling_method": SamplingMethod.MALA,
+            "graph_representation_type": GraphRepresentation.LATTICE,
         },
         "h1rff": {
             "n": 2,
@@ -106,7 +112,8 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "s": 0.4,
             "seed": 42,
             "device": _cpp.Device.CUDA,
-            "sampling_method": SamplingMethod.MALA
+            "sampling_method": SamplingMethod.MALA,
+            "graph_representation_type": GraphRepresentation.LATTICE,
         },
         "h2rff": {
             "n": 2,
@@ -117,8 +124,9 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "s": 0.4,
             "seed": 42,
             "device": _cpp.Device.CUDA,
-            "sampling_method": SamplingMethod.MALA
-        }
+            "sampling_method": SamplingMethod.MALA,
+            "graph_representation_type": GraphRepresentation.LATTICE,
+        },
     }
 )
 
