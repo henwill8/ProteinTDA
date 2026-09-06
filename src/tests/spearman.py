@@ -43,13 +43,13 @@ def sweep(gammas, labels, lam, th, peaks, r_values, dim, reff_floor=0.05):
     A, B = len(peaks), len(r_values)
 
     T = np.empty((A, B, 2))
-    for a, l in enumerate(peaks):                  
+    for a, l in enumerate(peaks):
         for b, r in enumerate(r_values):
             T[a, b] = convert_for_weight(l, r)
 
-    taus = T.reshape(-1)                           
-    W    = np.exp(-np.outer(taus, lam))           
-    Khat = ((W @ C.T) / R).reshape(A, B, 2, -1)  
+    taus = T.reshape(-1)
+    W = np.exp(-np.outer(taus, lam))
+    Khat = ((W @ C.T) / R).reshape(A, B, 2, -1)
 
     kband = Khat[..., 0, :] - Khat[..., 1, :]   
     w     = np.exp(-T[..., 0, None] * lam) \
@@ -96,7 +96,9 @@ def main(make_histogram = False) -> None:
         print("no output")
     else: 
         ia, ib = np.unravel_index(np.nanargmax(rm), rm.shape)
-        print(f"best: lambda*={out['peaks'][ia]:.4g} r={out['r_values'][ib]:.3g} "
+        peak, r = float(out["peaks"][ia]), float(out["r_values"][ib])
+        t, s = convert_for_weight(peak, r)
+        print(f"best: lambda*={peak:.4g} r={r:.3g} t={t:.4g} s={s:.4g} "
               f"rho={rm[ia,ib]:.3f} Z_band={out['zband'][ia,ib]:.3g} ")
 
 if __name__ == "__main__":
