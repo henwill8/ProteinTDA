@@ -3,7 +3,6 @@
 /workspace.xml
 /data
 /cache
-/sidechainnet_data
 /checkpoints
 /__pycache__
 /output
@@ -16,3 +15,7 @@ vpd/*.egg-info
 /vpd/build
 /src/__pycache__
 *.pyc
+/.venv
+/src/proteintda.egg-info
+/.minifold_extract
+/tda
