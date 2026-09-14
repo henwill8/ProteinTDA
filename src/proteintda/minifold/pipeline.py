@@ -1,313 +1,44 @@
-from collections import defaultdict
 from pathlib import Path
 
-import numpy as np
 import torch
-from sklearn.model_selection import train_test_split
-from torch.optim.lr_scheduler import LRScheduler, StepLR
-from tqdm import tqdm
 
-from proteintda.config import CONFIG_OF, HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG
+from proteintda.config import LOSS_CONFIG, MINIFOLD_CONFIG_OF, RUN_CONFIG
 from proteintda.minifold.loss import MiniFoldLoss
-from proteintda.utils.dataset import make_loader, set_seed
 from proteintda.minifold.runner import MiniFoldRunner
-from proteintda.tda.vpd_kernels import create_vpd_kernels
+from proteintda.shared.pipeline import Backbone, prepare_vpd_kernels, tda_atom_from_config
 
 
 def build_loss_fn() -> MiniFoldLoss:
-    print("Preparing VPD kernels...", flush=True)
-    h0rff, h1rff = create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
-    return MiniFoldLoss(CONFIG_OF, loss_config=LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff)
-
-
-def build_lr_scheduler(optimizer: torch.optim.Optimizer) -> LRScheduler | None:
-    sched_cfg = RUN_CONFIG.training.get("scheduler", {})
-    if not sched_cfg.get("enabled", False):
-        return None
-    return StepLR(
-        optimizer,
-        step_size=int(sched_cfg.get("step_size", 5)),
-        gamma=float(sched_cfg.get("gamma", 0.9)),
+    h0rff, h1rff = prepare_vpd_kernels()
+    return MiniFoldLoss(
+        MINIFOLD_CONFIG_OF,
+        loss_config=LOSS_CONFIG,
+        h0rff=h0rff,
+        h1rff=h1rff,
+        tda_atom=tda_atom_from_config(),
     )
 
 
-def _current_lr(optimizer: torch.optim.Optimizer) -> float:
-    return float(optimizer.param_groups[0]["lr"])
-
-
-_METRIC_KEYS = ("plddt", "tm_score")
-
-
-def _format_metrics_line(name: str, metrics: dict[str, float]) -> str:
-    loss_keys: list[str] = []
-    if "total" in (metrics):
-        loss_keys.append("total")
-    for key in sorted(metrics):
-        if key in _METRIC_KEYS or key in loss_keys:
-            continue
-        loss_keys.append(key)
-
-    loss_str = "  ".join(f"{key}={metrics[key]:.4f}" for key in loss_keys if key in metrics)
-    metric_str = "  ".join(f"{key}={metrics[key]:.4f}" for key in _METRIC_KEYS if key in metrics)
-    return f"  {name}:  loss: {loss_str}  metrics: {metric_str}"
-
-
-def format_epoch_metrics(
-    *,
-    epoch: int,
-    epochs: int,
-    fold: int,
-    n_splits: int,
-    train: dict[str, float],
-    val: dict[str, float],
-    lr: float | None = None,
-) -> str:
-    header = f"epoch {epoch}/{epochs}  fold {fold + 1}/{n_splits}"
-    if lr is not None:
-        header += f"  lr={lr:.6g}"
-    lines = [header]
-    lines.append(_format_metrics_line("train", train))
-    lines.append(_format_metrics_line("val", val))
-    return "\n".join(lines) + "\n"
-
-
-def train_epoch(
-    runner: MiniFoldRunner,
-    loader,
-    optimizer: torch.optim.Optimizer,
-    loss_fn: MiniFoldLoss,
-    *,
-    train_recycles: int | None = None,
-    randomize_recycles: bool = True,
-    use_amp: bool = False,
-    grad_clip_norm: float | None = 1.0,
-) -> dict[str, float]:
-    totals = defaultdict(float)
-    n = 0
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp and runner.device.type == "cuda")
-
-    for batch in tqdm(loader, desc="train", leave=False):
-        batch_totals, batch_n = runner.run_batch(
-            batch,
-            loss_fn,
-            optimizer=optimizer,
-            scaler=scaler,
-            num_recycling=train_recycles or 0,
-            randomize_recycles=randomize_recycles,
-            use_amp=use_amp,
-            grad_clip_norm=grad_clip_norm,
-            backward=True,
-            include_loss=True,
-            include_metrics=False,
-        )
-        for key, value in batch_totals.items():
-            totals[key] += value
-        n += batch_n
-
-    if n == 0:
-        return dict(totals)
-    return {key: value / n for key, value in totals.items()}
-
-
-def evaluate_loader(
-    runner: MiniFoldRunner,
-    loader,
-    loss_fn: MiniFoldLoss | None,
-    *,
-    num_recycling: int,
-    include_loss: bool = True,
-) -> dict[str, float]:
-    totals = defaultdict(float)
-    n = 0
-
-    for batch in tqdm(loader, desc="eval", leave=False):
-        batch_totals, batch_n = runner.run_batch(
-            batch,
-            loss_fn,
-            num_recycling=num_recycling,
-            backward=False,
-            include_loss=include_loss,
-            include_metrics=True,
-        )
-        for key, value in batch_totals.items():
-            totals[key] += value
-        n += batch_n
-
-    if n == 0:
-        return dict(totals)
-    return {key: value / n for key, value in totals.items()}
-
-
-def write_log_file(
-    log_file: Path,
-    fold_plddt_scores: list[float],
-    fold_tm_scores: list[float],
-) -> None:
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    with log_file.open("w", encoding="utf-8") as handle:
-        for fold_idx, (plddt, tm) in enumerate(zip(fold_plddt_scores, fold_tm_scores), start=1):
-            handle.write(f"fold {fold_idx}: mean_plddt={plddt:.4f} mean_tm={tm:.4f}\n")
-        handle.write(
-            f"mean_plddt mean={np.mean(fold_plddt_scores):.4f} var={np.var(fold_plddt_scores):.4f}\n"
-        )
-        handle.write(
-            f"mean_tm mean={np.mean(fold_tm_scores):.4f} var={np.var(fold_tm_scores):.4f}\n"
-        )
-
-
-def run_baseline_fold(
-    fold: int,
-    _train_idx: np.ndarray,
-    test_idx: np.ndarray,
-    *,
-    proteins: list,
-    cache_dir: Path,
-    device: torch.device,
-    model_size: str,
-    n_splits: int,
-) -> tuple[float, float]:
-    runtime = RUN_CONFIG.runtime
+def build_runner(device: torch.device, *, train: bool = False, **_extra) -> MiniFoldRunner:
     training = RUN_CONFIG.training
-    set_seed(training.seed + fold)
-
-    print(f"Fold {fold + 1}/{n_splits}: loading MiniFold on {device}...")
-    runner = MiniFoldRunner(
-        cache_dir,
-        model_size=model_size,
+    minifold = RUN_CONFIG.minifold
+    return MiniFoldRunner(
+        Path(minifold.cache_dir),
+        model_size=minifold.model_size,
         device=device,
+        train=train,
+        unfreeze_fold_blocks=training.unfreeze_fold_blocks if train else 0,
+        unfreeze_structure_module=training.unfreeze_structure_module if train else False,
     )
 
-    test_proteins = [proteins[i] for i in test_idx]
-    test_loader = make_loader(test_proteins, training.batch_size, shuffle=False)
-    metrics = evaluate_loader(
-        runner,
-        test_loader,
-        loss_fn=None,
-        num_recycling=runtime.infer_recycles,
-    )
-    print(
-        f"fold {fold + 1}/{n_splits}  "
-        f"mean_plddt={metrics['plddt']:.4f}  mean_tm={metrics['tm_score']:.4f}"
-    )
-    return metrics["plddt"], metrics["tm_score"]
 
-
-def run_train_fold(
-    fold: int,
-    train_idx: np.ndarray,
-    test_idx: np.ndarray,
-    *,
-    proteins: list,
-    cache_dir: Path,
-    device: torch.device,
-    model_size: str,
-    loss_fn: MiniFoldLoss,
-    n_splits: int,
-) -> tuple[float, float]:
-    runtime = RUN_CONFIG.runtime
-    training = RUN_CONFIG.training
-    set_seed(training.seed + fold)
-
-    print(f"Fold {fold + 1}/{n_splits}: loading fresh MiniFold on {device}...")
-    runner = MiniFoldRunner(
-        cache_dir,
-        model_size=model_size,
-        device=device,
-        train=True,
-        unfreeze_fold_blocks=training.unfreeze_fold_blocks,
-        unfreeze_structure_module=training.unfreeze_structure_module,
-    )
-    trainable, total = runner.trainable_parameter_count
-    print(f"Trainable parameters: {trainable:,} / {total:,}")
-
-    train_idx, val_idx = train_test_split(train_idx, test_size=0.25)
-    train_proteins = [proteins[i] for i in train_idx]
-    val_proteins = [proteins[i] for i in val_idx]
-    test_proteins = [proteins[i] for i in test_idx]
-
-    fold_rng = np.random.default_rng(training.seed + fold)
-    val_loader = make_loader(
-        val_proteins,
-        training.batch_size,
-        shuffle=False,
-        max_proteins=training.val_proteins_per_epoch,
-        rng=fold_rng,
-    )
-    test_loader = make_loader(test_proteins, training.batch_size, shuffle=False)
-
-    optimizer = torch.optim.AdamW(
-        [p for p in runner.model.parameters() if p.requires_grad],
-        lr=training.lr,
-        weight_decay=training.weight_decay,
-    )
-    scheduler = build_lr_scheduler(optimizer)
-    best_model_weights = None
-    max_val_tm = 0.0
-    patience = 0
-
-    for epoch in range(training.epochs):
-        train_loader = make_loader(
-            train_proteins,
-            training.batch_size,
-            shuffle=True,
-            max_proteins=training.train_proteins_per_epoch,
-            rng=fold_rng,
-        )
-        metrics = train_epoch(
-            runner,
-            train_loader,
-            optimizer,
-            loss_fn,
-            train_recycles=training.train_recycles,
-            randomize_recycles=training.randomize_recycles,
-            use_amp=training.amp,
-            grad_clip_norm=training.grad_clip_norm,
-        )
-
-        # TODO: switch to checking on the loss instead of the metric?
-        val_metrics = evaluate_loader(
-            runner,
-            val_loader,
-            num_recycling=runtime.infer_recycles,
-            loss_fn=loss_fn,
-        )
-        if val_metrics["tm_score"] > max_val_tm:
-            max_val_tm = val_metrics["tm_score"]
-            patience = 0
-            best_model_weights = runner.snapshot_state_dict()
-        else:
-            patience += 1
-
-        print(
-            format_epoch_metrics(
-                epoch=epoch + 1,
-                epochs=training.epochs,
-                fold=fold,
-                n_splits=n_splits,
-                train=metrics,
-                val=val_metrics,
-                lr=_current_lr(optimizer),
-            )
-        )
-
-        if scheduler is not None:
-            scheduler.step()
-
-        if patience > training.patience:
-            print(f"Early stopping at epoch {epoch + 1}")
-            break
-
-    if best_model_weights is not None:
-        runner.load_state_dict(best_model_weights)
-
-    test_metrics = evaluate_loader(
-        runner,
-        test_loader,
-        loss_fn=None,
-        num_recycling=runtime.infer_recycles,
-    )
-    print(
-        f"fold {fold + 1}/{n_splits}  "
-        f"mean_plddt={test_metrics['plddt']:.4f}  mean_tm={test_metrics['tm_score']:.4f}"
-    )
-    return test_metrics["plddt"], test_metrics["tm_score"]
+BACKBONE = Backbone(
+    name="MiniFold",
+    build_runner=build_runner,
+    build_loss_fn=build_loss_fn,
+    train_kwargs={
+        "num_recycling": RUN_CONFIG.training.train_recycles or 0,
+        "randomize_recycles": RUN_CONFIG.training.randomize_recycles,
+    },
+    eval_kwargs={"num_recycling": RUN_CONFIG.runtime.infer_recycles or 0},
+)

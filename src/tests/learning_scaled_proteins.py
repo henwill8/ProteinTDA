@@ -7,7 +7,8 @@ from tests.mlp_test import PointMLP, _train_point_cloud
 from tests.test_utils import SCALE_SWEEP, _resolve_device, _scalar, load_proteins, print_results, protein_problem, save_results
 
 from proteintda.config import LOSS_CONFIG, HEAT_RFF_CONFIG
-from proteintda.minifold.pipeline import _current_lr, build_loss_fn, build_lr_scheduler
+from proteintda.minifold.pipeline import build_loss_fn
+from proteintda.shared.pipeline import _current_lr, build_lr_scheduler
 from proteintda.tda.persistence import pd_from_graph
 from proteintda.tda.vpd_kernels import create_heat_random_fourier_features
 

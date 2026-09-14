@@ -5,10 +5,6 @@ from minifold.utils.residue_constants import atom_order
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
 
 
-class Atom14(Enum):
-    CA = 1
-    CB = 4
-
 class Atom37(Enum):
     CA = 1
     CB = 3
@@ -16,24 +12,6 @@ class Atom37(Enum):
 class SideChainAtom(Enum):
     CA = 1
     CB = 5
-
-
-def atom_positions_from_atom14(
-    positions: torch.Tensor,
-    atom: Atom14,
-    atom_exists: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """Extract atom14 positions, falling back to CA when the atom is missing."""
-    coords: list[torch.Tensor] = []
-    length = positions.shape[0]
-    for i in range(length):
-        atom_pos = positions[i, atom.value]
-        if atom_exists is not None and atom_exists[i, atom.value] < 0.5:
-            atom_pos = positions[i, Atom14.CA.value]
-        coords.append(atom_pos)
-    if not coords:
-        raise ValueError("No valid atom coordinates in model output.")
-    return torch.stack(coords)
 
 
 def atom_positions_from_atom37(

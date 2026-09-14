@@ -5,21 +5,10 @@ from pathlib import Path
 import torch
 
 from proteintda.config import RUN_CONFIG
-from proteintda.minifold.pipeline import (
-    build_loss_fn,
-    run_baseline_fold,
-    run_train_fold,
-    write_log_file,
-)
-from proteintda.utils.dataset import load_dataset, set_seed
+from proteintda.utils.dataset import load_dataset, select_backbone, set_seed
+from proteintda.utils.device import resolve_device
 from proteintda.utils.kfold import KFoldRunner
-
-
-def resolve_device() -> torch.device:
-    device = RUN_CONFIG.runtime.device
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    return torch.device(device)
+from proteintda.shared.pipeline import run_fold, write_log_file
 
 
 def main() -> int:
@@ -29,39 +18,28 @@ def main() -> int:
     set_seed(training.seed)
     torch.backends.cuda.matmul.allow_tf32 = True
 
+    backbone_name, backbone = select_backbone()
     proteins = load_dataset()
-    cache_dir = Path(runtime.minifold_cache_dir)
-    runner = KFoldRunner(proteins)
 
-    if runtime.baseline:
-        print("Starting k-fold baseline evaluation...", flush=True)
-        fold_fn = partial(
-            run_baseline_fold,
-            proteins=proteins,
-            cache_dir=cache_dir,
-            device=device,
-            model_size=runtime.model_size,
-            n_splits=RUN_CONFIG.kfold.n_splits,
-        )
-        log_path = RUN_CONFIG.logging.minifold_log_file
-    else:
-        print(f"Building loss function...", flush=True)
-        loss_fn = build_loss_fn()
-        print(f"Starting k-fold training...", flush=True)
-        fold_fn = partial(
-            run_train_fold,
-            proteins=proteins,
-            cache_dir=cache_dir,
-            device=device,
-            model_size=runtime.model_size,
-            loss_fn=loss_fn,
-            n_splits=RUN_CONFIG.kfold.n_splits,
-        )
-        log_path = RUN_CONFIG.logging.finetune_log_file
+    mode = "baseline" if runtime.baseline else "training"
+    print(f"Starting {backbone.name} k-fold {mode}...", flush=True)
 
-    fold_plddt_scores, fold_tm_scores = runner.run(fold_fn)
+    loss_fn = None if runtime.baseline else backbone.build_loss_fn()
+    fold_fn = partial(
+        run_fold,
+        proteins=proteins,
+        device=device,
+        backbone=backbone,
+        loss_fn=loss_fn,
+        n_splits=RUN_CONFIG.kfold.n_splits,
+        train_kwargs=dict(backbone.train_kwargs),
+        eval_kwargs=dict(backbone.eval_kwargs),
+        **dict(backbone.runner_kwargs),
+    )
+    suffix = "baseline" if runtime.baseline else "kfold"
+    log_file = Path(f"logs/{backbone_name}_{suffix}.log")
 
-    log_file = Path(log_path)
+    fold_plddt_scores, fold_tm_scores = KFoldRunner(proteins).run(fold_fn)
     write_log_file(log_file, fold_plddt_scores, fold_tm_scores)
     print(f"Wrote results to {log_file}")
     return 0

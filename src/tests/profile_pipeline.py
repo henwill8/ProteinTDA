@@ -163,7 +163,7 @@ def _profile_batch(
         preds = r_dict["preds"]
         total = preds.new_zeros(())
 
-        if loss_fn.loss_config.distogram.enabled:
+        if loss_fn.minifold.distogram.enabled:
             with timer.section("distogram_loss"):
                 disto_loss = MiniFoldLoss._distogram_loss(
                     preds,
@@ -172,22 +172,22 @@ def _profile_batch(
                     runner.model.boundaries,
                     no_bins=preds.shape[-1],
                 )
-                total = total + loss_fn.loss_config.distogram.weight * disto_loss
+                total = total + loss_fn.minifold.distogram.weight * disto_loss
 
         needs_structure = (
-            loss_fn.loss_config.structure.enabled
+            loss_fn.minifold.structure.enabled
             or (loss_fn.tda_enabled and loss_fn.loss_config.tda.enabled)
         )
         batch_of = None
         if needs_structure:
             batch_of = tensor_tree_map(lambda t: t[..., -1], model_batch["batch_of"])
 
-            if loss_fn.loss_config.structure.enabled:
+            if loss_fn.minifold.structure.enabled:
                 with timer.section("structure_loss"):
                     struct_loss, _ = loss_fn.structure_loss(
                         r_dict, batch_of, _return_breakdown=True,
                     )
-                    total = total + loss_fn.loss_config.structure.weight * struct_loss
+                    total = total + loss_fn.minifold.structure.weight * struct_loss
 
             if loss_fn.tda_enabled and loss_fn.loss_config.tda.enabled:
                 tda = loss_fn._tda
@@ -351,7 +351,7 @@ def _profile_protein_pool(proteins: list) -> list:
 def main():
     data = RUN_CONFIG.data
     training = RUN_CONFIG.training
-    runtime = RUN_CONFIG.runtime
+    minifold = RUN_CONFIG.minifold
     set_seed(training.seed)
     device = _resolve_device()
 
@@ -365,7 +365,7 @@ def main():
         f"Pipeline profile: {len(profile_proteins)}/{len(proteins)} proteins, lengths "
         f"{min(len(p.seq) for p in profile_proteins)}-"
         f"{max(len(p.seq) for p in profile_proteins)}, "
-        f"{device}, model={runtime.model_size}"
+        f"{device}, model={minifold.model_size}"
     )
     print(
         f"training: batch_sizes={BATCH_SIZES}, timed_batches={TIMED_BATCHES}, "
@@ -374,10 +374,11 @@ def main():
     )
     enabled_losses = [
         name
-        for name in ("distogram", "structure", "tda")
-        if LOSS_CONFIG[name].enabled
+        for name in ("distogram", "structure")
+        if LOSS_CONFIG.minifold[name].enabled
     ]
     if LOSS_CONFIG.tda.enabled:
+        enabled_losses.append("tda")
         enabled_losses.extend(
             term
             for term, cfg in LOSS_CONFIG.tda.terms.items()
@@ -387,8 +388,8 @@ def main():
 
     loss_fn = build_loss_fn()
     runner = MiniFoldRunner(
-        Path(runtime.minifold_cache_dir),
-        model_size=runtime.model_size,
+        Path(minifold.cache_dir),
+        model_size=minifold.model_size,
         device=device,
         train=True,
         unfreeze_fold_blocks=training.unfreeze_fold_blocks,

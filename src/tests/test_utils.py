@@ -7,10 +7,10 @@ from pathlib import Path
 from sidechainnet import SCNProtein
 import torch
 
-from proteintda.config import RUN_CONFIG
 from proteintda.utils.conversions import Atom37, atom_positions_from_atom37, atom_positions_from_sidechainnet, SideChainAtom
 from proteintda.utils.dataset import load_dataset, sample_proteins
-from proteintda.minifold.loss import _distance_matrix
+from proteintda.utils.device import resolve_device as _resolve_device
+from proteintda.shared.loss import _distance_matrix
 from proteintda.tda.persistence import pd_from_graph
 
 
@@ -34,13 +34,6 @@ def make_histogram(lambdas, bins):
     lambdas = np.array(lambdas, dtype=float)
     plt.hist(lambdas, bins=bins, edgecolor="black", color="skyblue")
     plt.savefig("out/hist.png")
-
-
-def _resolve_device() -> torch.device:
-    device = RUN_CONFIG.runtime.device
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    return torch.device(device)
 
 
 def _to_numpy(diags, dim):

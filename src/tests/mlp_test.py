@@ -8,8 +8,9 @@ from tests.test_utils import _resolve_device, _scalar
 from tests.plotting import _make_history_frame, show_history, _tda_terms_msg
 
 from proteintda.config import LOSS_CONFIG, HEAT_RFF_CONFIG
-from proteintda.minifold.pipeline import _current_lr, build_loss_fn, build_lr_scheduler
-from proteintda.minifold.loss import _distance_matrix
+from proteintda.minifold.pipeline import build_loss_fn
+from proteintda.shared.loss import _distance_matrix
+from proteintda.shared.pipeline import _current_lr, build_lr_scheduler
 from proteintda.tda.persistence import pd_from_graph
 from proteintda.tda.vpd_kernels import create_heat_random_fourier_features
 
@@ -83,10 +84,10 @@ def _log_loss_config():
             parts.append(f"tda ({', '.join(tda_terms)})")
         if TDA_WARMUP_STEPS > 0 or TDA_RAMP_STEPS > 0:
             parts.append(f"warmup={TDA_WARMUP_STEPS} ramp={TDA_RAMP_STEPS}")
-    if LOSS_CONFIG.distogram.enabled:
-        parts.append(f"distogram (w={LOSS_CONFIG.distogram.weight})")
-    if LOSS_CONFIG.structure.enabled:
-        parts.append(f"structure (w={LOSS_CONFIG.structure.weight})")
+    if LOSS_CONFIG.minifold.distogram.enabled:
+        parts.append(f"distogram (w={LOSS_CONFIG.minifold.distogram.weight})")
+    if LOSS_CONFIG.minifold.structure.enabled:
+        parts.append(f"structure (w={LOSS_CONFIG.minifold.structure.weight})")
     if parts:
         print(f"  losses: {', '.join(parts)}")
 

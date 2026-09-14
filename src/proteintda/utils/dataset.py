@@ -8,10 +8,9 @@ import numpy as np
 import sidechainnet as scn
 import torch
 from torch.utils.data import DataLoader, Sampler
-from tmtools import tm_align
 
 from proteintda.config import RUN_CONFIG
-from proteintda.utils.conversions import SideChainAtom, atom_positions_from_sidechainnet
+from proteintda.utils.device import resolve_device as _resolve_device
 
 
 def set_seed(seed: int) -> None:
@@ -19,30 +18,62 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
 
 
-def _load_baseline_tm_scores(path: Path) -> dict[str, float]:
+def select_backbone(name: str | None = None):
+    backbone_name = str(name or RUN_CONFIG.runtime.get("backbone", "minifold")).lower()
+    if backbone_name == "lightrosetta":
+        from proteintda.lightrosetta import pipeline as lightrosetta_pipeline
+
+        return backbone_name, lightrosetta_pipeline.BACKBONE
+    if backbone_name == "minifold":
+        from proteintda.minifold import pipeline as minifold_pipeline
+
+        return backbone_name, minifold_pipeline.BACKBONE
+    raise ValueError(
+        f"Unknown runtime.backbone={backbone_name!r}; use 'minifold' or 'lightrosetta'"
+    )
+
+
+def _baseline_tm_cache_path(scores_dir: Path, backbone: str) -> Path:
+    if backbone == "minifold":
+        return scores_dir / f"{backbone}_{RUN_CONFIG.minifold.model_size}.json"
+    return scores_dir / f"{backbone}.json"
+
+
+def _baseline_tm_expected(backbone: str) -> dict:
+    expected = {
+        "backbone": backbone,
+        "tda": False,
+    }
+    if backbone == "minifold":
+        expected["model_size"] = RUN_CONFIG.minifold.model_size
+        expected["infer_recycles"] = RUN_CONFIG.runtime.infer_recycles or 0
+    checkpoint = RUN_CONFIG.data.get("baseline_checkpoint")
+    if checkpoint:
+        expected["baseline_checkpoint"] = str(Path(checkpoint).resolve())
+    return expected
+
+
+def _load_baseline_tm_scores(path: Path, expected: dict) -> dict[str, float]:
     if not path.is_file():
         return {}
     with path.open(encoding="utf-8") as handle:
         payload = json.load(handle)
-    if isinstance(payload, dict) and "scores" in payload:
-        scores = payload["scores"]
-        cached_size = payload.get("model_size")
-        expected_size = RUN_CONFIG.runtime.model_size
-        if cached_size is not None and cached_size != expected_size:
+    if not isinstance(payload, dict) or "scores" not in payload:
+        return {}
+    for key, value in expected.items():
+        if payload.get(key) != value:
             print(
-                f"Baseline TM cache model_size={cached_size!r} does not match "
-                f"runtime.model_size={expected_size!r}; recomputing missing scores."
+                f"Baseline TM cache {key} mismatch: file has {payload.get(key)}, "
+                f"expected {value}; recomputing."
             )
             return {}
-    else:
-        scores = payload
-    return {str(protein_id): float(tm) for protein_id, tm in scores.items()}
+    return {str(protein_id): float(tm) for protein_id, tm in payload["scores"].items()}
 
 
-def _save_baseline_tm_scores(path: Path, scores: dict[str, float]) -> None:
+def _save_baseline_tm_scores(path: Path, scores: dict[str, float], expected: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "model_size": RUN_CONFIG.runtime.model_size,
+        **expected,
         "scores": {protein_id: float(tm) for protein_id, tm in sorted(scores.items())},
     }
     with path.open("w", encoding="utf-8") as handle:
@@ -50,45 +81,54 @@ def _save_baseline_tm_scores(path: Path, scores: dict[str, float]) -> None:
     print(f"Wrote baseline TM scores for {len(scores)} proteins to {path}")
 
 
-def _resolve_device() -> torch.device:
-    device = RUN_CONFIG.runtime.device
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    return torch.device(device)
+def _build_baseline_tm_runner(backbone_name: str, backbone):
+    """Original non-TDA model used only to find proteins it is weak on."""
+    runner = backbone.build_runner(_resolve_device(), train=False)
+    checkpoint = RUN_CONFIG.data.get("baseline_checkpoint")
+    if backbone_name == "lightrosetta":
+        if not checkpoint:
+            raise ValueError(
+                "Baseline TM filter scores the original non-TDA model. "
+                "For LightRoseTTA set data.baseline_checkpoint to weights trained "
+                "without TDA (native losses only), or set max_baseline_tm=None."
+            )
+        state = torch.load(Path(checkpoint), map_location="cpu")
+        if isinstance(state, dict) and "state_dict" in state:
+            state = state["state_dict"]
+        runner.load_state_dict(state)
+        print(f"Loaded non-TDA LightRoseTTA checkpoint for TM filter: {checkpoint}")
+    elif checkpoint:
+        raise ValueError(
+            "data.baseline_checkpoint is only used for LightRoseTTA. "
+            "MiniFold baseline TM always uses the pretrained checkpoint."
+        )
+    return runner
 
 
-def _compute_baseline_tm_scores(proteins: list, *, runner) -> dict[str, float]:
-    runtime = RUN_CONFIG.runtime
-    # Score one protein at a time: training batch_size can pad mixed lengths and OOM.
+def _compute_baseline_tm_scores(
+    proteins: list,
+    *,
+    runner,
+    backbone_name: str,
+    eval_kwargs: dict,
+) -> dict[str, float]:
     scores: dict[str, float] = {}
-
     print(
-        f"Computing baseline TM for {len(proteins)} proteins "
-        f"(model={runtime.model_size}, batch_size=1)..."
+        f"Computing non-TDA baseline TM for {len(proteins)} proteins "
+        f"(backbone={backbone_name}, batch_size=1)..."
     )
-    for i, protein in enumerate(proteins):
-        outputs = runner._forward_batch(
+    for protein in proteins:
+        totals, n = runner.run_batch(
             [protein],
             None,
-            runtime.infer_recycles,
+            backward=False,
+            include_loss=False,
             include_metrics=True,
+            **eval_kwargs,
         )
-        if outputs is None:
+        if n == 0 or "tm_score" not in totals:
             continue
-        pred_ca = outputs.get("pred_ca")
-        if pred_ca is None:
-            continue
-        length = len(str(protein.seq))
-        exp_ca = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).cpu().numpy()
-        alignment = tm_align(
-            pred_ca[0, :length].numpy(),
-            exp_ca,
-            str(protein.seq),
-            str(protein.seq),
-        )
-        scores[str(protein.id)] = float(alignment.tm_norm_chain2)
-        if runner.device.type == "cuda" and (i + 1) % 10 == 0:
-            torch.cuda.empty_cache()
+        scores[str(protein.id)] = float(totals["tm_score"]) / n
     return scores
 
 
@@ -97,17 +137,18 @@ def _select_with_tm_filter(
     *,
     max_proteins: int | None,
     max_baseline_tm: float,
-    scores_path: Path,
+    scores_dir: Path,
 ) -> list:
-    """Keep up to max_proteins with baseline TM <= threshold."""
-    scores = _load_baseline_tm_scores(scores_path)
+    """Keep proteins where the original non-TDA model has TM <= threshold."""
+    backbone_name, backbone = select_backbone()
+    expected = _baseline_tm_expected(backbone_name)
+    scores_path = _baseline_tm_cache_path(scores_dir, backbone_name)
+    scores = _load_baseline_tm_scores(scores_path, expected)
     update_scores = False
     runner = None
-    batch_size = max(1, int(RUN_CONFIG.training.batch_size))
 
     kept: list = []
     removed = 0
-    removed_examples: list[tuple[str, float]] = []
     next_idx = len(dataset) - 1
 
     def ensure_scores(proteins: list) -> None:
@@ -116,27 +157,25 @@ def _select_with_tm_filter(
         if not missing:
             return
         if runner is None:
-            from proteintda.minifold.runner import MiniFoldRunner
-
-            runtime = RUN_CONFIG.runtime
-            runner = MiniFoldRunner(
-                Path(runtime.minifold_cache_dir),
-                model_size=runtime.model_size,
-                device=_resolve_device(),
+            runner = _build_baseline_tm_runner(backbone_name, backbone)
+        scores.update(
+            _compute_baseline_tm_scores(
+                missing,
+                runner=runner,
+                backbone_name=backbone_name,
+                eval_kwargs=dict(backbone.eval_kwargs),
             )
-        scores.update(_compute_baseline_tm_scores(missing, runner=runner))
+        )
         update_scores = True
 
     try:
         while next_idx >= 0 and (max_proteins is None or len(kept) < max_proteins):
             if max_proteins is None:
-                take = min(batch_size, next_idx + 1)
+                take = min(max(1, int(RUN_CONFIG.training.batch_size)), next_idx + 1)
             else:
-                need = max_proteins - len(kept)
-                take = min(max(need, batch_size), next_idx + 1)
+                take = min(max_proteins - len(kept), next_idx + 1)
             chunk = dataset[next_idx - take + 1 : next_idx + 1]
             next_idx -= take
-
             ensure_scores(chunk)
 
             for protein in reversed(chunk):
@@ -147,8 +186,6 @@ def _select_with_tm_filter(
                     kept.append(protein)
                 else:
                     removed += 1
-                    if len(removed_examples) < 5:
-                        removed_examples.append((str(protein.id), tm))
     finally:
         if runner is not None:
             del runner
@@ -156,11 +193,13 @@ def _select_with_tm_filter(
                 torch.cuda.empty_cache()
 
     if update_scores:
-        _save_baseline_tm_scores(scores_path, scores)
+        _save_baseline_tm_scores(scores_path, scores, expected)
 
     kept = list(reversed(kept))
     if removed:
-        print(f"Removed {removed} proteins with baseline TM > {max_baseline_tm}.")
+        print(
+            f"Removed {removed} proteins with non-TDA {backbone_name} TM > {max_baseline_tm}."
+        )
     if max_proteins is not None and len(kept) < max_proteins:
         print(f"Only {len(kept)}/{max_proteins} proteins remain after baseline TM filter.")
     return kept
@@ -175,7 +214,7 @@ def _load_sidechainnet_proteins(
     max_protein_length: int | None,
     allow_incomplete: bool,
     max_baseline_tm: float | None = None,
-    baseline_tm_scores_path: str | None = None,
+    baseline_tm_scores_dir: str | None = None,
 ) -> list:
     print(
         f"Loading SidechainNet casp={casp_version}, thinning={casp_thinning}, "
@@ -218,15 +257,15 @@ def _load_sidechainnet_proteins(
             print(f"Removed {removed} proteins longer than {max_protein_length} residues.")
 
     if max_baseline_tm is not None:
-        if baseline_tm_scores_path is None:
+        if baseline_tm_scores_dir is None:
             raise ValueError(
-                "baseline_tm_scores_path is required when max_baseline_tm is set"
+                "baseline_tm_scores_dir is required when max_baseline_tm is set"
             )
         dataset = _select_with_tm_filter(
             dataset,
             max_proteins=max_proteins,
             max_baseline_tm=float(max_baseline_tm),
-            scores_path=Path(baseline_tm_scores_path),
+            scores_dir=Path(baseline_tm_scores_dir),
         )
     elif max_proteins is not None and len(dataset) > max_proteins:
         dataset = dataset[-max_proteins :]
@@ -244,7 +283,7 @@ def load_proteins(
     max_protein_length: int | None = None,
     allow_incomplete: bool = False,
     max_baseline_tm: float | None = None,
-    baseline_tm_scores_path: str | None = None,
+    baseline_tm_scores_dir: str | None = None,
 ) -> list:
     return _load_sidechainnet_proteins(
         casp_version=casp_version,
@@ -254,28 +293,7 @@ def load_proteins(
         max_protein_length=max_protein_length,
         allow_incomplete=allow_incomplete,
         max_baseline_tm=max_baseline_tm,
-        baseline_tm_scores_path=baseline_tm_scores_path,
-    )
-
-
-def load_all_proteins(
-    *,
-    casp_version: str = "debug",
-    scn_dir: str = "./data/sidechainnet",
-    casp_thinning: int = 30,
-    allow_incomplete: bool = False,
-    max_baseline_tm: float | None = None,
-    baseline_tm_scores_path: str | None = None,
-) -> list:
-    return load_proteins(
-        casp_version=casp_version,
-        scn_dir=scn_dir,
-        casp_thinning=casp_thinning,
-        max_proteins=None,
-        max_protein_length=None,
-        allow_incomplete=allow_incomplete,
-        max_baseline_tm=max_baseline_tm,
-        baseline_tm_scores_path=baseline_tm_scores_path,
+        baseline_tm_scores_dir=baseline_tm_scores_dir,
     )
 
 
@@ -289,7 +307,7 @@ def load_dataset() -> list:
         max_protein_length=data.max_protein_length,
         allow_incomplete=data.allow_incomplete,
         max_baseline_tm=data.max_baseline_tm,
-        baseline_tm_scores_path=data.baseline_tm_scores_path,
+        baseline_tm_scores_dir=data.baseline_tm_scores_dir,
     )
 
 

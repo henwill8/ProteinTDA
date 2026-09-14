@@ -13,10 +13,10 @@ from minifold.data.of_data import of_inference
 from minifold.model.model import MiniFoldModel
 from minifold.utils.residue_constants import atom_order, restype_order_with_x_inverse
 from sidechainnet.dataloaders.SCNProtein import SCNProtein
-from tmtools import tm_align
 
-from proteintda.config import CONFIG_OF, RUN_CONFIG
+from proteintda.config import MINIFOLD_CONFIG_OF, RUN_CONFIG
 from proteintda.minifold.loss import MiniFoldLoss
+from proteintda.shared.runner import BaseRunner
 from proteintda.utils.conversions import (
     SideChainAtom,
     atom_positions_from_sidechainnet,
@@ -69,7 +69,7 @@ def _as_tensor(value) -> torch.Tensor:
         return torch.as_tensor(value)
 
 
-class MiniFoldRunner:
+class MiniFoldRunner(BaseRunner):
     def __init__(
         self,
         cache_dir: Path,
@@ -100,7 +100,7 @@ class MiniFoldRunner:
             esm_model_name=hparams["esm_model_name"],
             num_blocks=hparams["num_blocks"],
             no_bins=hparams["no_bins"],
-            config_of=CONFIG_OF,
+            config_of=MINIFOLD_CONFIG_OF,
             use_structure_module=True, # Note: They only used structure module in second stage
             kernels=kernels,
         )
@@ -125,12 +125,12 @@ class MiniFoldRunner:
 
         self.alphabet = alphabet
         self.model = model.to(device)
-        self.config_of = CONFIG_OF
+        self.config_of = MINIFOLD_CONFIG_OF
         self.device = device
         self.cache_dir = cache_dir
         self.model_size = model_size
         self._frozen_modules: list[torch.nn.Module] = []
-        self._feature_pipeline = feature_pipeline.FeaturePipeline(CONFIG_OF.data)
+        self._feature_pipeline = feature_pipeline.FeaturePipeline(MINIFOLD_CONFIG_OF.data)
         self._prepare_cache: dict[tuple[str, bool], dict] = {}
 
         if train:
@@ -452,6 +452,7 @@ class MiniFoldRunner:
         backward: bool = False,
         include_loss: bool = True,
         include_metrics: bool = False,
+        **_ignored,
     ) -> tuple[dict[str, float], int]:
         """Single forward pass with an optional backward pass and optionally reports loss and/or metrics."""
         include_loss = include_loss and loss_fn is not None
@@ -501,7 +502,7 @@ class MiniFoldRunner:
         batch_n = outputs.get("batch_size", len(proteins))
 
         if backward:
-            self._apply_gradients(outputs["total"], optimizer, scaler, grad_clip_norm)
+            self.apply_gradients(outputs["total"], optimizer, scaler, grad_clip_norm)
         if include_loss:
             for key, value in outputs.get("log", {}).items():
                 totals[key] += value * batch_n
@@ -557,45 +558,8 @@ class MiniFoldRunner:
                 totals["plddt"] += float(plddt[i, :length].mean().detach().cpu())
             if pred_ca is not None:
                 exp_ca = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).cpu().numpy()
-                alignment = tm_align(
+                totals["tm_score"] += self.tm_score(
                     pred_ca[i, :length].numpy(),
                     exp_ca,
                     str(protein.seq),
-                    str(protein.seq),
                 )
-                totals["tm_score"] += alignment.tm_norm_chain2
-
-    def _apply_gradients(
-        self,
-        loss: torch.Tensor,
-        optimizer: torch.optim.Optimizer,
-        scaler: torch.amp.GradScaler | None,
-        grad_clip_norm: float | None,
-    ) -> None:
-        trainable = [p for p in self.model.parameters() if p.requires_grad]
-        if scaler is not None and scaler.is_enabled():
-            scaler.scale(loss).backward()
-            if grad_clip_norm is not None:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(trainable, grad_clip_norm)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            if grad_clip_norm is not None:
-                torch.nn.utils.clip_grad_norm_(trainable, grad_clip_norm)
-            optimizer.step()
-
-    
-    @property
-    def trainable_parameter_count(self) -> tuple[int, int]:
-        trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        total = sum(p.numel() for p in self.model.parameters())
-        return trainable, total
-
-
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
-        self.model.load_state_dict(state_dict)
-
-    def snapshot_state_dict(self) -> dict[str, torch.Tensor]:
-        return {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}

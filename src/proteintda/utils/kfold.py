@@ -11,9 +11,9 @@ from sklearn.model_selection import KFold
 from proteintda.config import RUN_CONFIG
 
 
-def _checkpoint_path(baseline: bool) -> Path:
-    name = "baseline" if baseline else "finetune"
-    return Path(RUN_CONFIG.kfold.checkpoint_dir) / f"{name}.json"
+def _checkpoint_path(baseline: bool, backbone: str) -> Path:
+    mode = "baseline" if baseline else "finetune"
+    return Path(RUN_CONFIG.kfold.checkpoint_dir) / f"{backbone}_{mode}.json"
 
 
 def _run_config(*, num_proteins: int) -> dict[str, Any]:
@@ -23,6 +23,7 @@ def _run_config(*, num_proteins: int) -> dict[str, Any]:
     runtime = RUN_CONFIG.runtime
     sched = training.get("scheduler", {})
     return {
+        "backbone": str(runtime.get("backbone", "minifold")).lower(),
         "baseline": runtime.baseline,
         "n_splits": kfold.n_splits,
         "seed": training.seed,
@@ -30,7 +31,7 @@ def _run_config(*, num_proteins: int) -> dict[str, Any]:
         "casp_version": data.casp_version,
         "casp_thinning": data.casp_thinning,
         "max_proteins": data.max_proteins,
-        "model_size": runtime.model_size,
+        "model_size": RUN_CONFIG.minifold.model_size,
         "infer_recycles": runtime.infer_recycles,
         "lr": training.lr,
         "scheduler": dict(sched) if sched else None,
@@ -45,7 +46,8 @@ class KFoldRunner:
         self.baseline = RUN_CONFIG.runtime.baseline
         self.n_splits = RUN_CONFIG.kfold.n_splits
         self.seed = RUN_CONFIG.training.seed
-        self.path = _checkpoint_path(self.baseline)
+        self.backbone = str(RUN_CONFIG.runtime.get("backbone", "minifold")).lower()
+        self.path = _checkpoint_path(self.baseline, self.backbone)
         self.run_config = _run_config(num_proteins=len(proteins))
         self._folds: dict[str, dict[str, float]] = {}
         self._load()

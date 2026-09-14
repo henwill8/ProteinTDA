@@ -7,8 +7,8 @@ import torch
 from minifold.utils.tensor_utils import tensor_tree_map
 
 from proteintda.config import LOSS_CONFIG, RUN_CONFIG
-from proteintda.minifold.loss import _as_tensor
 from proteintda.minifold.pipeline import build_loss_fn
+from proteintda.shared.loss import _as_tensor
 from proteintda.minifold.runner import MiniFoldRunner
 from proteintda.tda.persistence import pd_from_graph
 from tests.mlp_test import _log_loss_config
@@ -156,14 +156,14 @@ def main(write):
         raise ValueError(
             "No TDA loss terms enabled. Enable wasserstein and/or vpd in LOSS_CONFIG."
         )
-    if not LOSS_CONFIG.structure.enabled:
-        raise ValueError("Structure loss is disabled in LOSS_CONFIG.")
+    if not LOSS_CONFIG.minifold.structure.enabled:
+        raise ValueError("Structure loss is disabled in LOSS_CONFIG.minifold.")
     _log_loss_config()
-    runtime = RUN_CONFIG.runtime
     training = RUN_CONFIG.training
+    minifold = RUN_CONFIG.minifold
     runner = MiniFoldRunner(
-        Path(runtime.minifold_cache_dir),
-        model_size=runtime.model_size,
+        Path(minifold.cache_dir),
+        model_size=minifold.model_size,
         device=device,
         train=True,
         unfreeze_fold_blocks=training.unfreeze_fold_blocks,
@@ -175,7 +175,7 @@ def main(write):
     print(f"Comparing MiniFold gradients on {len(proteins)} proteins")
     results = {
         "MiniFold": run_comparison(
-            loss_fn, runner, proteins, runtime.infer_recycles
+            loss_fn, runner, proteins, RUN_CONFIG.runtime.infer_recycles
         )
     }
     if write:

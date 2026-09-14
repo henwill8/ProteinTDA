@@ -7,13 +7,22 @@ from vpd import _cpp
 
 _EPS = 1e-8
 
-# Shared OpenFold / MiniFold config for feature pipeline, model, and loss.
-CONFIG_OF = model_config(
+# OpenFold-style MiniFold config for feature pipeline, model, and AlphaFold loss.
+MINIFOLD_CONFIG_OF = model_config(
     "finetuning",
     train=True,
     low_prec=False,
     long_sequence_inference=False,
 )
+
+with MINIFOLD_CONFIG_OF.unlocked():
+    # MINIFOLD_CONFIG_OF.model.heads.tm.enabled = True
+    # MINIFOLD_CONFIG_OF.loss.tm.enabled = True
+    # MINIFOLD_CONFIG_OF.loss.tm.weight = 0.1
+    # MINIFOLD_CONFIG_OF.loss.violation.weight = 1.0
+    # MINIFOLD_CONFIG_OF.loss.experimentally_resolved.weight = 0.01
+    MINIFOLD_CONFIG_OF.data.train.crop_size = None
+
 
 class SamplingMethod(Enum):
     RANDOM = auto()
@@ -26,13 +35,6 @@ class GraphRepresentation(Enum):
     COMPLETE = auto()
     LATTICE = auto()
 
-with CONFIG_OF.unlocked():
-    # CONFIG_OF.model.heads.tm.enabled = True
-    # CONFIG_OF.loss.tm.enabled = True
-    # CONFIG_OF.loss.tm.weight = 0.1
-    # CONFIG_OF.loss.violation.weight = 1.0
-    # CONFIG_OF.loss.experimentally_resolved.weight = 0.01
-    CONFIG_OF.data.train.crop_size = None
 
 RUN_CONFIG = mlc.ConfigDict(
     {
@@ -43,15 +45,17 @@ RUN_CONFIG = mlc.ConfigDict(
             "scn_dir": "./data/sidechainnet",
             "max_proteins": 1000,
             "max_protein_length": None,
-            "max_baseline_tm": None,  # filter proteins with a high baseline tm score
-            "baseline_tm_scores_path": "cache/baseline_tm_scores.json",
+            # Keep proteins the original (non-TDA) model is weak on (TM <= threshold).
+            "max_baseline_tm": None,
+            "baseline_tm_scores_dir": "cache/baseline_tm_scores",
+            # Non-TDA weights for LightRoseTTA TM filter (MiniFold uses its pretrained ckpt).
+            "baseline_checkpoint": None,
         },
         "runtime": {
-            "baseline": False,  # True = pretrained eval only, False = fine-tune
+            "backbone": "lightrosetta",  # 'minifold' or 'lightrosetta'
+            "baseline": False,  # True = eval only, False = train
             "device": None,  # 'cuda', 'cpu', or None for auto-detection
             "infer_recycles": 3,
-            "minifold_cache_dir": "cache/minifold",
-            "model_size": "12L",  # '48L' or '12L'
         },
         "kfold": {
             "n_splits": 5,
@@ -59,8 +63,8 @@ RUN_CONFIG = mlc.ConfigDict(
         },
         "training": {
             "seed": 42,
-            "lr": 1e-5,
-            "weight_decay": 0.01,
+            "lr": 5e-4,
+            "weight_decay": 5e-4,
             "batch_size": 1,
             "length_bucketing": True,
             "length_bucket_size": 10,
@@ -81,10 +85,22 @@ RUN_CONFIG = mlc.ConfigDict(
                 "gamma": 0.9,
             },
         },
-        "logging": {
-            "baseline_log_file": "logs/esmfold_baseline.log",
-            "finetune_log_file": "logs/kfold_test_scores.log",
-            "minifold_log_file": "logs/minifold_kfold.log",
+        "minifold": {
+            "model_size": "12L",  # '48L' or '12L'
+            "cache_dir": "cache/minifold",
+        },
+        "lightrosetta": {
+            "model": {
+                "n_module": 4,
+                "n_module_str": 1,
+                "n_layer": 1,
+                "d_msa": 32,
+                "d_pair": 32,
+                "d_templ": 32,
+                "d_hidden": 32,
+                "p_drop": 0.1,
+                "use_templ": True,
+            },
         },
     }
 )
@@ -132,17 +148,31 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
 
 LOSS_CONFIG = mlc.ConfigDict(
     {
-        "distogram": {
-            "weight": 0.8,
-            "enabled": True,
+        "minifold": {
+            "distogram": {
+                "weight": 0.8,
+                "enabled": True,
+            },
+            "structure": {
+                "weight": 0.2,
+                "enabled": True,
+            },
         },
-        "structure": {
-            "weight": 0.2,
-            "enabled": True,
+        "lightrosetta": {
+            "distogram": {"weight": 0.3, "enabled": True},
+            "omega": {"weight": 0.5, "enabled": True},
+            "theta": {"weight": 0.5, "enabled": True},
+            "phi": {"weight": 0.5, "enabled": True},
+            "coor": {"weight": 0.5, "enabled": True},
+            "plddt_loss": {"weight": 0.01, "enabled": True},
+            "bond": {"weight": 1.0, "epoch_scale": 0.005, "enabled": True},
+            "angle": {"weight": 1.0, "epoch_scale": 0.005, "enabled": True},
+            "dihedral": {"weight": 1.0, "epoch_scale": 0.005, "enabled": True},
         },
         "tda": {
             "weight": 1.0,
             "enabled": True,
+            "atom": "CB",
             "pd": {
                 "max_dimension": 3,
                 "hom_dim": 3,
@@ -163,11 +193,11 @@ LOSS_CONFIG = mlc.ConfigDict(
                 },
                 "vpd_h0": {
                     "weight": 0.001,
-                    "enabled": True,
+                    "enabled": False,
                 },
                 "vpd_h1": {
                     "weight": 0.00001,
-                    "enabled": True,
+                    "enabled": False,
                 },
                 "vpd_h2": {
                     "weight": 0.00001,

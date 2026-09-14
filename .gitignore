@@ -19,3 +19,4 @@ vpd/*.egg-info
 /src/proteintda.egg-info
 /.minifold_extract
 /tda
+/third_party/
