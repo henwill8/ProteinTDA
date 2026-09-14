@@ -11,6 +11,17 @@ from torch.optim.lr_scheduler import LRScheduler, StepLR
 from tqdm import tqdm
 
 from proteintda.config import LOSS_CONFIG, RUN_CONFIG
+from proteintda.shared.checkpoint import (
+    clear_fold_checkpoint,
+    fold_checkpoint_path,
+    fold_curves_path,
+    fold_history_path,
+    history_row,
+    load_fold_checkpoint,
+    save_fold_checkpoint,
+    write_history_csv,
+    write_metric_curves,
+)
 from proteintda.utils.conversions import SideChainAtom
 from proteintda.utils.dataset import make_loader, set_seed
 
@@ -219,17 +230,17 @@ def run_fold(
     trainable, total = runner.trainable_parameter_count
     print(f"Trainable parameters: {trainable:,} / {total:,}")
 
-    train_idx, val_idx = train_test_split(train_idx, test_size=0.25)
+    backbone_key = str(RUN_CONFIG.runtime.get("backbone", "minifold")).lower()
+    ckpt_path = fold_checkpoint_path(backbone_key, fold)
+    history_path = fold_history_path(backbone_key, fold)
+    curves_path = fold_curves_path(backbone_key, fold)
+
+    train_idx, val_idx = train_test_split(
+        train_idx, test_size=0.25, random_state=training.seed + fold
+    )
     train_proteins = [proteins[i] for i in train_idx]
     val_proteins = [proteins[i] for i in val_idx]
     fold_rng = np.random.default_rng(training.seed + fold)
-    val_loader = make_loader(
-        val_proteins,
-        training.batch_size,
-        shuffle=False,
-        max_proteins=training.val_proteins_per_epoch,
-        rng=fold_rng,
-    )
 
     optimizer = torch.optim.AdamW(
         [p for p in runner.model.parameters() if p.requires_grad],
@@ -243,8 +254,59 @@ def run_fold(
     best_model_weights = None
     max_val_tm = 0.0
     patience = 0
+    history: list[dict[str, Any]] = []
+    start_epoch = 0
+    val_subset_idx: list[int] | None = None
 
-    for epoch in range(training.epochs):
+    if ckpt_path.is_file():
+        ckpt = load_fold_checkpoint(ckpt_path, map_location="cpu")
+        runner.load_state_dict(ckpt["model_state"])
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+        if scheduler is not None and ckpt.get("scheduler_state") is not None:
+            scheduler.load_state_dict(ckpt["scheduler_state"])
+        if ckpt.get("scaler_state") is not None:
+            scaler.load_state_dict(ckpt["scaler_state"])
+        best_model_weights = ckpt.get("best_model_state")
+        max_val_tm = float(ckpt.get("max_val_tm", 0.0))
+        patience = int(ckpt.get("patience", 0))
+        history = list(ckpt.get("history", []))
+        start_epoch = int(ckpt["epoch"])
+        if ckpt.get("val_subset_idx") is not None:
+            val_subset_idx = [int(i) for i in ckpt["val_subset_idx"]]
+        if ckpt.get("rng_state") is not None:
+            fold_rng.bit_generator.state = ckpt["rng_state"]
+        print(
+            f"Resuming fold {fold + 1}/{n_splits} from epoch {start_epoch + 1} "
+            f"({ckpt_path})",
+            flush=True,
+        )
+
+    if training.val_proteins_per_epoch is not None:
+        if val_subset_idx is None:
+            n = min(int(training.val_proteins_per_epoch), len(val_proteins))
+            val_subset_idx = fold_rng.choice(
+                len(val_proteins), size=n, replace=False
+            ).tolist()
+        val_for_loader = [val_proteins[i] for i in val_subset_idx]
+    else:
+        val_for_loader = val_proteins
+
+    val_loader = make_loader(
+        val_for_loader,
+        training.batch_size,
+        shuffle=False,
+    )
+
+    training_done = start_epoch >= training.epochs or patience > training.patience
+    if training_done and start_epoch > 0:
+        print(
+            f"Fold {fold + 1}/{n_splits}: training already finished; running test eval.",
+            flush=True,
+        )
+
+    for epoch in range(start_epoch, training.epochs):
+        if patience > training.patience:
+            break
         train_loader = make_loader(
             train_proteins,
             training.batch_size,
@@ -277,6 +339,7 @@ def run_fold(
         else:
             patience += 1
 
+        lr = _current_lr(optimizer)
         print(
             format_epoch_metrics(
                 epoch=epoch + 1,
@@ -285,8 +348,29 @@ def run_fold(
                 n_splits=n_splits,
                 train=metrics,
                 val=val_metrics,
-                lr=_current_lr(optimizer),
+                lr=lr,
             )
+        )
+
+        history.append(
+            history_row(epoch=epoch + 1, lr=lr, train=metrics, val=val_metrics)
+        )
+        write_history_csv(history_path, history)
+        write_metric_curves(curves_path, history, fold=fold)
+        save_fold_checkpoint(
+            ckpt_path,
+            fold=fold,
+            epoch=epoch + 1,
+            model_state=runner.snapshot_state_dict(),
+            best_model_state=best_model_weights,
+            optimizer_state=optimizer.state_dict(),
+            scheduler_state=scheduler.state_dict() if scheduler is not None else None,
+            scaler_state=scaler.state_dict(),
+            max_val_tm=max_val_tm,
+            patience=patience,
+            history=history,
+            rng_state=fold_rng.bit_generator.state,
+            val_subset_idx=val_subset_idx,
         )
 
         if scheduler is not None:
@@ -310,4 +394,5 @@ def run_fold(
         f"fold {fold + 1}/{n_splits}  "
         f"mean_plddt={test_metrics['plddt']:.4f}  mean_tm={test_metrics['tm_score']:.4f}"
     )
+    clear_fold_checkpoint(ckpt_path)
     return test_metrics["plddt"], test_metrics["tm_score"]

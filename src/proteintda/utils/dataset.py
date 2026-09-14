@@ -33,17 +33,8 @@ def select_backbone(name: str | None = None):
     )
 
 
-def _baseline_tm_cache_path(scores_dir: Path, backbone: str) -> Path:
-    if backbone == "minifold":
-        return scores_dir / f"{backbone}_{RUN_CONFIG.minifold.model_size}.json"
-    return scores_dir / f"{backbone}.json"
-
-
-def _baseline_tm_expected(backbone: str) -> dict:
-    expected = {
-        "backbone": backbone,
-        "tda": False,
-    }
+def _baseline_tm_fingerprint(backbone: str) -> dict:
+    expected = {"backbone": backbone, "tda": False}
     if backbone == "minifold":
         expected["model_size"] = RUN_CONFIG.minifold.model_size
         expected["infer_recycles"] = RUN_CONFIG.runtime.infer_recycles or 0
@@ -59,7 +50,7 @@ def _load_baseline_tm_scores(path: Path, expected: dict) -> dict[str, float]:
     with path.open(encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload, dict) or "scores" not in payload:
-        return {}
+        raise ValueError(f"Baseline TM cache at {path} is missing a 'scores' object")
     for key, value in expected.items():
         if payload.get(key) != value:
             print(
@@ -76,13 +67,14 @@ def _save_baseline_tm_scores(path: Path, scores: dict[str, float], expected: dic
         **expected,
         "scores": {protein_id: float(tm) for protein_id, tm in sorted(scores.items())},
     }
-    with path.open("w", encoding="utf-8") as handle:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
+    tmp.replace(path)
     print(f"Wrote baseline TM scores for {len(scores)} proteins to {path}")
 
 
 def _build_baseline_tm_runner(backbone_name: str, backbone):
-    """Original non-TDA model used only to find proteins it is weak on."""
     runner = backbone.build_runner(_resolve_device(), train=False)
     checkpoint = RUN_CONFIG.data.get("baseline_checkpoint")
     if backbone_name == "lightrosetta":
@@ -95,6 +87,8 @@ def _build_baseline_tm_runner(backbone_name: str, backbone):
         state = torch.load(Path(checkpoint), map_location="cpu")
         if isinstance(state, dict) and "state_dict" in state:
             state = state["state_dict"]
+        elif isinstance(state, dict) and "model_state" in state:
+            state = state["model_state"]
         runner.load_state_dict(state)
         print(f"Loaded non-TDA LightRoseTTA checkpoint for TM filter: {checkpoint}")
     elif checkpoint:
@@ -105,116 +99,84 @@ def _build_baseline_tm_runner(backbone_name: str, backbone):
     return runner
 
 
-def _compute_baseline_tm_scores(
-    proteins: list,
-    *,
-    runner,
-    backbone_name: str,
-    eval_kwargs: dict,
-) -> dict[str, float]:
-    scores: dict[str, float] = {}
-    print(
-        f"Computing non-TDA baseline TM for {len(proteins)} proteins "
-        f"(backbone={backbone_name}, batch_size=1)..."
-    )
-    for protein in proteins:
-        totals, n = runner.run_batch(
-            [protein],
-            None,
-            backward=False,
-            include_loss=False,
-            include_metrics=True,
-            **eval_kwargs,
-        )
-        if n == 0 or "tm_score" not in totals:
-            continue
-        scores[str(protein.id)] = float(totals["tm_score"]) / n
-    return scores
-
-
 def _select_with_tm_filter(
     dataset: list,
     *,
     max_proteins: int | None,
     max_baseline_tm: float,
-    scores_dir: Path,
 ) -> list:
     """Keep proteins where the original non-TDA model has TM <= threshold."""
     backbone_name, backbone = select_backbone()
-    expected = _baseline_tm_expected(backbone_name)
-    scores_path = _baseline_tm_cache_path(scores_dir, backbone_name)
+    expected = _baseline_tm_fingerprint(backbone_name)
+    scores_path = Path(RUN_CONFIG.data.baseline_tm_scores_dir) / f"{backbone_name}.json"
     scores = _load_baseline_tm_scores(scores_path, expected)
-    update_scores = False
+    eval_kwargs = dict(backbone.eval_kwargs)
     runner = None
-
+    updated = False
     kept: list = []
     removed = 0
-    next_idx = len(dataset) - 1
-
-    def ensure_scores(proteins: list) -> None:
-        nonlocal runner, update_scores
-        missing = [protein for protein in proteins if str(protein.id) not in scores]
-        if not missing:
-            return
-        if runner is None:
-            runner = _build_baseline_tm_runner(backbone_name, backbone)
-        scores.update(
-            _compute_baseline_tm_scores(
-                missing,
-                runner=runner,
-                backbone_name=backbone_name,
-                eval_kwargs=dict(backbone.eval_kwargs),
-            )
-        )
-        update_scores = True
+    skipped = 0
 
     try:
-        while next_idx >= 0 and (max_proteins is None or len(kept) < max_proteins):
-            if max_proteins is None:
-                take = min(max(1, int(RUN_CONFIG.training.batch_size)), next_idx + 1)
-            else:
-                take = min(max_proteins - len(kept), next_idx + 1)
-            chunk = dataset[next_idx - take + 1 : next_idx + 1]
-            next_idx -= take
-            ensure_scores(chunk)
+        for protein in reversed(dataset):
+            if max_proteins is not None and len(kept) >= max_proteins:
+                break
+            protein_id = str(protein.id)
+            if protein_id not in scores:
+                if runner is None:
+                    runner = _build_baseline_tm_runner(backbone_name, backbone)
+                    print(
+                        f"Computing non-TDA baseline TM "
+                        f"(backbone={backbone_name}, batch_size=1)..."
+                    )
+                totals, n = runner.run_batch(
+                    [protein],
+                    None,
+                    backward=False,
+                    include_loss=False,
+                    include_metrics=True,
+                    **eval_kwargs,
+                )
+                if n == 0 or "tm_score" not in totals:
+                    skipped += 1
+                    continue
+                scores[protein_id] = float(totals["tm_score"]) / n
+                updated = True
 
-            for protein in reversed(chunk):
-                if max_proteins is not None and len(kept) >= max_proteins:
-                    break
-                tm = scores.get(str(protein.id))
-                if tm is None or tm <= max_baseline_tm:
-                    kept.append(protein)
-                else:
-                    removed += 1
+            if scores[protein_id] <= max_baseline_tm:
+                kept.append(protein)
+            else:
+                removed += 1
     finally:
         if runner is not None:
             del runner
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-    if update_scores:
+    if updated:
         _save_baseline_tm_scores(scores_path, scores, expected)
 
-    kept = list(reversed(kept))
+    kept.reverse()
     if removed:
         print(
             f"Removed {removed} proteins with non-TDA {backbone_name} TM > {max_baseline_tm}."
         )
+    if skipped:
+        print(f"Skipped {skipped} proteins with no baseline TM score.")
     if max_proteins is not None and len(kept) < max_proteins:
         print(f"Only {len(kept)}/{max_proteins} proteins remain after baseline TM filter.")
     return kept
 
 
-def _load_sidechainnet_proteins(
+def load_proteins(
     *,
-    casp_version: str,
-    scn_dir: str,
-    casp_thinning: int,
-    max_proteins: int | None,
-    max_protein_length: int | None,
-    allow_incomplete: bool,
+    casp_version: str = "debug",
+    scn_dir: str = "./data/sidechainnet",
+    casp_thinning: int = 30,
+    max_proteins: int | None = None,
+    max_protein_length: int | None = None,
+    allow_incomplete: bool = False,
     max_baseline_tm: float | None = None,
-    baseline_tm_scores_dir: str | None = None,
 ) -> list:
     print(
         f"Loading SidechainNet casp={casp_version}, thinning={casp_thinning}, "
@@ -257,44 +219,16 @@ def _load_sidechainnet_proteins(
             print(f"Removed {removed} proteins longer than {max_protein_length} residues.")
 
     if max_baseline_tm is not None:
-        if baseline_tm_scores_dir is None:
-            raise ValueError(
-                "baseline_tm_scores_dir is required when max_baseline_tm is set"
-            )
         dataset = _select_with_tm_filter(
             dataset,
             max_proteins=max_proteins,
             max_baseline_tm=float(max_baseline_tm),
-            scores_dir=Path(baseline_tm_scores_dir),
         )
     elif max_proteins is not None and len(dataset) > max_proteins:
         dataset = dataset[-max_proteins :]
 
     print(f"Loaded {len(dataset)} proteins.")
     return dataset
-
-
-def load_proteins(
-    *,
-    casp_version: str = "debug",
-    scn_dir: str = "./data/sidechainnet",
-    casp_thinning: int = 30,
-    max_proteins: int | None = None,
-    max_protein_length: int | None = None,
-    allow_incomplete: bool = False,
-    max_baseline_tm: float | None = None,
-    baseline_tm_scores_dir: str | None = None,
-) -> list:
-    return _load_sidechainnet_proteins(
-        casp_version=casp_version,
-        scn_dir=scn_dir,
-        casp_thinning=casp_thinning,
-        max_proteins=max_proteins,
-        max_protein_length=max_protein_length,
-        allow_incomplete=allow_incomplete,
-        max_baseline_tm=max_baseline_tm,
-        baseline_tm_scores_dir=baseline_tm_scores_dir,
-    )
 
 
 def load_dataset() -> list:
@@ -307,7 +241,6 @@ def load_dataset() -> list:
         max_protein_length=data.max_protein_length,
         allow_incomplete=data.allow_incomplete,
         max_baseline_tm=data.max_baseline_tm,
-        baseline_tm_scores_dir=data.baseline_tm_scores_dir,
     )
 
 

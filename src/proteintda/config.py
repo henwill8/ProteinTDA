@@ -1,7 +1,9 @@
+import json
+from enum import Enum, auto
+from typing import Any
+
 import ml_collections as mlc
 from minifold.data.config import model_config
-
-from enum import Enum, auto
 
 from vpd import _cpp
 
@@ -39,13 +41,14 @@ class GraphRepresentation(Enum):
 RUN_CONFIG = mlc.ConfigDict(
     {
         "data": {
-            "casp_version": "debug",
+            "casp_version": "11",
             "casp_thinning": 30,
             "allow_incomplete": False,
             "scn_dir": "./data/sidechainnet",
             "max_proteins": 1000,
             "max_protein_length": None,
             # Keep proteins the original (non-TDA) model is weak on (TM <= threshold).
+            # LightRoseTTA needs data.baseline_checkpoint when this is set.
             "max_baseline_tm": None,
             "baseline_tm_scores_dir": "cache/baseline_tm_scores",
             # Non-TDA weights for LightRoseTTA TM filter (MiniFold uses its pretrained ckpt).
@@ -54,7 +57,7 @@ RUN_CONFIG = mlc.ConfigDict(
         "runtime": {
             "backbone": "lightrosetta",  # 'minifold' or 'lightrosetta'
             "baseline": False,  # True = eval only, False = train
-            "device": None,  # 'cuda', 'cpu', or None for auto-detection
+            "device": None,  # 'cuda', 'cpu', or None for auto-detection (also 'cuda:n' for GPU n)
             "infer_recycles": 3,
         },
         "kfold": {
@@ -208,3 +211,43 @@ LOSS_CONFIG = mlc.ConfigDict(
         "eps": _EPS,
     }
 )
+
+
+def _parse_override_value(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def apply_set_overrides(pairs: list[str]) -> None:
+    """Apply dotted overrides like runtime.device=cuda:1 or loss.tda.weight=0.5."""
+    for pair in pairs:
+        if "=" not in pair:
+            raise ValueError(f"Override must be key=value, got {pair!r}")
+        key, raw = pair.split("=", 1)
+        parts = key.split(".")
+        if not parts or any(not part for part in parts):
+            raise ValueError(f"Invalid override key {key!r}")
+        if parts[0] == "loss":
+            root = LOSS_CONFIG
+            parts = parts[1:]
+            if not parts:
+                raise ValueError("loss override needs a field path")
+        else:
+            root = RUN_CONFIG
+            if parts[0] == "run":
+                parts = parts[1:]
+                if not parts:
+                    raise ValueError("run override needs a field path")
+        value = _parse_override_value(raw)
+        with root.unlocked():
+            node = root
+            for part in parts[:-1]:
+                if part not in node or not isinstance(node[part], mlc.ConfigDict):
+                    raise KeyError(f"Unknown config path {key!r}")
+                node = node[part]
+            leaf = parts[-1]
+            if leaf not in node:
+                raise KeyError(f"Unknown config path {key!r}")
+            node[leaf] = value
