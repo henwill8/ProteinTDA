@@ -18,5 +18,9 @@ vpd/*.egg-info
 /.venv
 /src/proteintda.egg-info
 /.minifold_extract
+<<<<<<< HEAD
 /tda
 /third_party/
+=======
+/tda
+>>>>>>> d0164d234e70b327e9668ed9309b14b2c043039d
