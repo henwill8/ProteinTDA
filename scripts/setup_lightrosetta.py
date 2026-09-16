@@ -20,8 +20,19 @@ _SKIP_PIP_NAMES = {
     "torch",
     "torchvision",
     "torchaudio",
+    "pytorch",
     "openmm",  # their pin is a different PyPI package, not OpenMM
     "simtk",
+}
+
+# Conda package name (prefix) → PyPI name for Python deps that are not under pip:.
+_CONDA_TO_PIP = {
+    "pyg": "torch-geometric",
+    "dgl": "dgl",
+    "dgl-cuda": "dgl",
+    "yacs": "yacs",
+    "networkx": "networkx",
+    "googledrivedownloader": "googledrivedownloader",
 }
 
 
@@ -31,6 +42,9 @@ def _package_name(req: str) -> str:
         if sep in name:
             name = name.split(sep, 1)[0]
             break
+    # Conda build strings: name=version=build
+    if "=" in name:
+        name = name.split("=", 1)[0]
     return name.strip().lower().replace("_", "-")
 
 
@@ -40,17 +54,36 @@ def _pip_reqs_from_env_yml(env_yml: Path) -> list[str]:
     in_pip = False
     for raw in env_yml.read_text(encoding="utf-8").splitlines():
         line = raw.rstrip()
+        stripped = line.strip()
         if not in_pip:
-            if line.strip() == "pip:":
+            # Conda form is "  - pip:" not a bare "pip:" key.
+            if stripped in {"pip:", "- pip:"} or stripped.lstrip("- ").strip() == "pip:":
                 in_pip = True
             continue
-        stripped = line.strip()
         if stripped.startswith("- "):
             reqs.append(stripped[2:].strip())
             continue
-        if stripped.startswith("prefix:") or (stripped and not line.startswith((" ", "\t"))):
+        if stripped.startswith("prefix:") or (stripped and not line[:1].isspace()):
             break
     return reqs
+
+
+def _conda_python_pkgs_from_env_yml(env_yml: Path) -> list[str]:
+    """Map conda Python packages in the env file to PyPI names."""
+    found: list[str] = []
+    for raw in env_yml.read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if stripped.lstrip("- ").strip() == "pip:":
+            break
+        if not stripped.startswith("- "):
+            continue
+        name = _package_name(stripped[2:].strip())
+        for prefix, pip_name in _CONDA_TO_PIP.items():
+            if name == prefix or name.startswith(prefix + "-"):
+                if pip_name not in found:
+                    found.append(pip_name)
+                break
+    return found
 
 
 def _install_python_deps(clone_dir: Path) -> None:
@@ -59,16 +92,22 @@ def _install_python_deps(clone_dir: Path) -> None:
         raise FileNotFoundError(f"Missing {env_yml}; cannot install LightRoseTTA deps")
 
     # Drop pins so we resolve against the current Torch/Python instead of their 2021 freeze.
-    reqs = []
-    for req in _pip_reqs_from_env_yml(env_yml):
+    reqs: list[str] = []
+    seen: set[str] = set()
+    for req in _pip_reqs_from_env_yml(env_yml) + _conda_python_pkgs_from_env_yml(env_yml):
         name = _package_name(req)
-        if name in _SKIP_PIP_NAMES:
+        if name in _SKIP_PIP_NAMES or name in seen:
             continue
+        seen.add(name)
         reqs.append(name)
 
-    # Conda package `pyg` in their env file → PyPI torch-geometric.
-    if "torch-geometric" not in reqs:
-        reqs.append("torch-geometric")
+    # Current DGL imports torchdata.datapipes at import time.
+    if "dgl" in seen and "torchdata" not in seen:
+        reqs.append("torchdata")
+        seen.add("torchdata")
+
+    if not reqs:
+        raise RuntimeError(f"Parsed zero packages from {env_yml}; check YAML format")
 
     print(f"Installing {len(reqs)} packages from {env_yml.name} (unpinned, conflicts skipped)...")
     subprocess.run(
