@@ -4,8 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+# Keep in sync with root pyproject.toml (sidechainnet / pkg_resources).
 _SETUPTOOLS_PIN = "setuptools>=77,<82"
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:

@@ -92,9 +92,9 @@ class LightRoseTTARunner(BaseRunner):
         key = str(getattr(protein, "id", id(protein)))
         cached = self._data_cache.get(key)
         if cached is None:
-            cached = protein_to_lightrosetta_data(protein).to(self.device)
+            cached = protein_to_lightrosetta_data(protein)
             self._data_cache[key] = cached
-        return cached
+        return cached.clone().to(self.device)
 
     def run_batch(
         self,
@@ -137,26 +137,27 @@ class LightRoseTTARunner(BaseRunner):
                 print(f"Skipping {getattr(protein, 'id', '?')}: feature build failed ({exc})")
                 continue
 
+            xyz = lddt_pred = logits = result_total = None
+            result_log: dict[str, float] = {}
             try:
                 with grad_context, torch.autocast(
                     device_type=self.device.type, dtype=torch.float16, enabled=amp_enabled
                 ):
                     xyz, lddt_pred, logits = self.model(data, test_flag=not backward)
-                    result_total = None
-                    result_log: dict[str, float] = {}
                     if include_loss and loss_fn is not None:
                         result_total, result_log = loss_fn.compute(
                             xyz, lddt_pred, logits, data, device=self.device, epoch=epoch
                         )
+                if backward and result_total is not None:
+                    self.apply_gradients(result_total, optimizer, scaler, grad_clip_norm)
+                    optimizer.zero_grad(set_to_none=True)
             except torch.cuda.OutOfMemoryError:
+                if optimizer is not None:
+                    optimizer.zero_grad(set_to_none=True)
                 if self.device.type == "cuda":
                     torch.cuda.empty_cache()
                 print(f"OOM on {getattr(protein, 'id', '?')}; skipping.")
                 continue
-
-            if backward and result_total is not None:
-                self.apply_gradients(result_total, optimizer, scaler, grad_clip_norm)
-                optimizer.zero_grad(set_to_none=True)
 
             if include_loss:
                 for key, value in result_log.items():
@@ -168,6 +169,7 @@ class LightRoseTTARunner(BaseRunner):
                 true_ca = data.ca_coords.detach().cpu().numpy()
                 totals["tm_score"] += self.tm_score(pred_ca, true_ca, data.seq)
 
+            del data, xyz, lddt_pred, logits, result_total
             n += 1
 
         if not backward and was_training:

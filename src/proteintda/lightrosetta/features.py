@@ -113,9 +113,9 @@ def _dummy_templates(msa: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, tor
     for token in seq.tolist():
         key = token if token in _RIGID_BB else 0
         unfolded.append(_RIGID_BB[key])
-    xyz_t = torch.tensor([unfolded for _ in range(10)], dtype=torch.float32)
-    t0d = torch.ones(10, 3, dtype=torch.float32)
-    t1d = torch.ones(10, L, 3, dtype=torch.float32)
+    xyz_t = torch.tensor([unfolded], dtype=torch.float32)
+    t0d = torch.ones(1, 3, dtype=torch.float32)
+    t1d = torch.ones(1, L, 3, dtype=torch.float32)
     return xyz_t, t0d, t1d
 
 

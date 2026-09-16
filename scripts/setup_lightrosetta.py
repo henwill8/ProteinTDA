@@ -46,10 +46,7 @@ def _torchdata_pin() -> str:
     except ImportError as exc:
         raise SystemExit("Install torch before running this script.") from exc
     major, minor, *_ = torch.__version__.split("+", 1)[0].split(".")
-    key = (int(major), int(minor))
-    if key <= (2, 2):
-        return "torchdata==0.7.1"
-    if key == (2, 3):
+    if (int(major), int(minor)) == (2, 3):
         return "torchdata==0.8.0"
     return "torchdata==0.9.0"
 
@@ -84,16 +81,6 @@ def _install_python_deps() -> None:
         ],
         check=True,
     )
-    # Allow newer torch than the graphbolt libs shipped with PyPI dgl.
-    src = str(ROOT / "src")
-    if src not in sys.path:
-        sys.path.insert(0, src)
-    try:
-        from proteintda.lightrosetta.path import ensure_dgl_graphbolt_compat
-
-        ensure_dgl_graphbolt_compat()
-    except Exception as exc:  # noqa: BLE001 — setup should still finish
-        print(f"Warning: could not ensure DGL graphbolt compat: {exc}")
 
 
 def _patch_fcntl(cache_file: Path) -> None:
