@@ -17,8 +17,8 @@ TRAINING_ZIP_URL = (
 
 # Runtime packages needed to import/train LightRoseTTA (from their env.yml + model imports).
 # Not the full frozen workstation env (Jupyter/TensorBoard/etc.).
+# dgl is installed separately: PyPI's wheel is CPU-only and breaks CUDA graphs.
 _RUNTIME_PIP = [
-    "dgl",
     "torch-geometric",
     "performer-pytorch",
     "axial-positional-embedding",
@@ -38,22 +38,55 @@ _RUNTIME_PIP = [
     "pydantic",  # required by dgl.graphbolt
 ]
 
-# DGL imports torchdata.datapipes (removed after 0.9). Pin by torch minor so the
-# torchdata wheel's private torch imports still resolve.
-def _torchdata_pin() -> str:
+
+def _require_torch():
     try:
         import torch
     except ImportError as exc:
         raise SystemExit("Install torch before running this script.") from exc
+    return torch
+
+
+def _torch_minor(torch) -> tuple[int, int]:
     major, minor, *_ = torch.__version__.split("+", 1)[0].split(".")
-    if (int(major), int(minor)) == (2, 3):
-        return "torchdata==0.8.0"
-    return "torchdata==0.9.0"
+    return int(major), int(minor)
+
+
+def _install_dgl(torch) -> None:
+    """Force a CUDA-matched dgl wheel when torch was built with CUDA."""
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--force-reinstall",
+        "--no-deps",
+        "dgl",
+    ]
+    if not torch.version.cuda:
+        print("Installing DGL (CPU / PyPI)...")
+        subprocess.run(cmd, check=True)
+        return
+
+    major, minor = _torch_minor(torch)
+    cu = "".join(torch.version.cuda.split(".")[:2])
+    for url in (
+        f"https://data.dgl.ai/wheels/torch-{major}.{minor}/cu{cu}/repo.html",
+        f"https://data.dgl.ai/wheels/cu{cu}/repo.html",
+    ):
+        print(f"Installing DGL from {url}...")
+        try:
+            subprocess.run([*cmd, "-f", url], check=True)
+            return
+        except subprocess.CalledProcessError:
+            continue
+    raise SystemExit(f"Failed to install CUDA DGL for torch {torch.__version__} / CUDA {torch.version.cuda}")
 
 
 def _install_python_deps() -> None:
+    torch = _require_torch()
+    _install_dgl(torch)
     print(f"Installing LightRoseTTA runtime deps ({len(_RUNTIME_PIP)} packages)...")
-    # only-if-needed: do not upgrade an already-installed torch to a CUDA wheel.
     subprocess.run(
         [
             sys.executable,
@@ -66,8 +99,8 @@ def _install_python_deps() -> None:
         ],
         check=True,
     )
-    pin = _torchdata_pin()
-    # --no-deps: keep the already-installed torch (force-reinstall would pull CUDA wheels).
+    # DGL imports torchdata.datapipes (removed after 0.9).
+    pin = "torchdata==0.8.0" if _torch_minor(torch) == (2, 3) else "torchdata==0.9.0"
     print(f"Pinning {pin} for DGL datapipes...")
     subprocess.run(
         [
