@@ -40,6 +40,8 @@ def prepare_vpd_kernels():
     from proteintda.config import HEAT_RFF_CONFIG
     from proteintda.tda.vpd_kernels import create_vpd_kernels
 
+    if not LOSS_CONFIG.tda.enabled:
+        return None, None
     print("Preparing VPD kernels...", flush=True)
     return create_vpd_kernels(LOSS_CONFIG, HEAT_RFF_CONFIG)
 

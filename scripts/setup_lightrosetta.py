@@ -1,4 +1,4 @@
-"""Fetch LightRoseTTA training code into third_party/"""
+"""Fetch LightRoseTTA training code into third_party/ and install its runtime deps."""
 
 import shutil
 import subprocess
@@ -15,228 +15,85 @@ TRAINING_ZIP_URL = (
     "https://github.com/psp3dcg/LightRoseTTA/raw/master/LightRoseTTA_training_code.zip"
 )
 
-# Owned by ProteinTDA / would break the current env if taken from their frozen yml.
-_SKIP_PIP_NAMES = {
-    "torch",
-    "torchvision",
-    "torchaudio",
-    "pytorch",
-    "openmm",  # their pin is a different PyPI package, not OpenMM
-    "simtk",
-    "numpy",  # keep the env's numpy
-    "matplotlib",
-    "scikit-learn",
-    "scipy",
-    "pandas",
-    "pillow",
-    "pyyaml",
-    "tqdm",
-    "requests",
-    "urllib3",
-    "certifi",
-    "charset-normalizer",
-    "idna",
-    "typing-extensions",
-    "packaging",
-    "setuptools",
-    "wheel",
-    "pip",
-    "six",
-}
+# Runtime packages needed to import/train LightRoseTTA (from their env.yml + model imports).
+# Not the full frozen workstation env (Jupyter/TensorBoard/etc.).
+_RUNTIME_PIP = [
+    "dgl",
+    "torch-geometric",
+    "performer-pytorch",
+    "axial-positional-embedding",
+    "local-attention==1.9.14",  # newer pulls hyper-connections needing torch>=2.5
+    "einops",
+    "biopython",
+    "fire",
+    "yacs",
+    "networkx",
+    "dm-haiku",
+    "jmp",
+    "termcolor",
+    "tabulate",
+    "pygtrie",
+    "googledrivedownloader",
+    "pandas",  # required by dgl.graphbolt
+    "pydantic",  # required by dgl.graphbolt
+]
 
-# Conda package name (prefix) → PyPI name for Python deps that are not under pip:.
-_CONDA_TO_PIP = {
-    "pyg": "torch-geometric",
-    "dgl": "dgl",
-    "dgl-cuda": "dgl",
-    "yacs": "yacs",
-    "networkx": "networkx",
-    "googledrivedownloader": "googledrivedownloader",
-}
-
-# Their env.yml freezes a full Jupyter/TensorBoard workstation — not needed to train.
-_SKIP_PIP_PREFIXES = (
-    "jupyter",
-    "ipython",
-    "ipykernel",
-    "ipywidgets",
-    "nbclassic",
-    "nbclient",
-    "nbconvert",
-    "nbformat",
-    "notebook",
-    "tensorboard",
-    "widgetsnb",
-    "argon2",
-    "prometheus",
-    "debugpy",
-    "jedi",
-    "parso",
-    "pexpect",
-    "prompt-toolkit",
-    "stack-data",
-    "asttokens",
-    "executing",
-    "pure-eval",
-    "matplotlib-inline",
-    "terminado",
-    "send2trash",
-    "bleach",
-    "mistune",
-    "pandocfilters",
-    "testpath",
-    "nest-asyncio",
-    "supervisor",
-    "pynvml",
-    "nvidia-ml",
-    "backcall",
-    "pickleshare",
-    "wcwidth",
-    "traitlets",
-    "tornado",
-    "pyzmq",
-    "anyio",
-    "babel",
-    "defusedxml",
-    "entrypoints",
-    "webencodings",
-    "webcolors",
-    "websocket-client",
-    "tinycss2",
-    "beautifulsoup4",
-    "soupsieve",
-    "fqdn",
-    "isoduration",
-    "arrow",
-    "uri-template",
-    "rfc3339",
-    "rfc3986",
-    "rfc3987",
-    "json5",
-    "jsonschema",
-    "jupyterlab",
-    "ipython-genutils",
-    "ptyprocess",
-    "pygments",
-    "jinja2",
-    "markupsafe",
-    "lark",
-    "rpds-py",
-    "referencing",
-    "attrs",
-    "pyrsistent",
-    "fastjsonschema",
-    "platformdirs",
-    "overrides",
-    "httpx",
-    "httpcore",
-    "h11",
-    "sniffio",
-    "async-lru",
-    "jupyter-builder",
-    "jupyter-events",
-    "jupyter-lsp",
-    "jupyter-server",
-    "notebook-shim",
-    "python-json-logger",
-    "comm",
-)
+# DGL imports torchdata.datapipes (removed after 0.9). Pin by torch minor so the
+# torchdata wheel's private torch imports still resolve.
+def _torchdata_pin() -> str:
+    try:
+        import torch
+    except ImportError as exc:
+        raise SystemExit("Install torch before running this script.") from exc
+    major, minor, *_ = torch.__version__.split("+", 1)[0].split(".")
+    key = (int(major), int(minor))
+    if key <= (2, 2):
+        return "torchdata==0.7.1"
+    if key == (2, 3):
+        return "torchdata==0.8.0"
+    return "torchdata==0.9.0"
 
 
-def _skip_pip_name(name: str) -> bool:
-    if name in _SKIP_PIP_NAMES:
-        return True
-    return any(name == p or name.startswith(p + "-") for p in _SKIP_PIP_PREFIXES)
-
-
-def _package_name(req: str) -> str:
-    name = req.strip()
-    for sep in ("===", "==", ">=", "<=", "~=", "!=", ">", "<"):
-        if sep in name:
-            name = name.split(sep, 1)[0]
-            break
-    # Conda build strings: name=version=build
-    if "=" in name:
-        name = name.split("=", 1)[0]
-    return name.strip().lower().replace("_", "-")
-
-
-def _pip_reqs_from_env_yml(env_yml: Path) -> list[str]:
-    """Read the pip: list from LightRoseTTA-env.yml (their published dep list)."""
-    reqs: list[str] = []
-    in_pip = False
-    for raw in env_yml.read_text(encoding="utf-8").splitlines():
-        line = raw.rstrip()
-        stripped = line.strip()
-        if not in_pip:
-            # Conda form is "  - pip:" not a bare "pip:" key.
-            if stripped in {"pip:", "- pip:"} or stripped.lstrip("- ").strip() == "pip:":
-                in_pip = True
-            continue
-        if stripped.startswith("- "):
-            reqs.append(stripped[2:].strip())
-            continue
-        if stripped.startswith("prefix:") or (stripped and not line[:1].isspace()):
-            break
-    return reqs
-
-
-def _conda_python_pkgs_from_env_yml(env_yml: Path) -> list[str]:
-    """Map conda Python packages in the env file to PyPI names."""
-    found: list[str] = []
-    for raw in env_yml.read_text(encoding="utf-8").splitlines():
-        stripped = raw.strip()
-        if stripped.lstrip("- ").strip() == "pip:":
-            break
-        if not stripped.startswith("- "):
-            continue
-        name = _package_name(stripped[2:].strip())
-        for prefix, pip_name in _CONDA_TO_PIP.items():
-            if name == prefix or name.startswith(prefix + "-"):
-                if pip_name not in found:
-                    found.append(pip_name)
-                break
-    return found
-
-
-def _install_python_deps(clone_dir: Path) -> None:
-    env_yml = clone_dir / "LightRoseTTA-env.yml"
-    if not env_yml.is_file():
-        raise FileNotFoundError(f"Missing {env_yml}; cannot install LightRoseTTA deps")
-
-    # Drop pins so we resolve against the current Torch/Python instead of their 2021 freeze.
-    reqs: list[str] = []
-    seen: set[str] = set()
-    for req in _pip_reqs_from_env_yml(env_yml) + _conda_python_pkgs_from_env_yml(env_yml):
-        name = _package_name(req)
-        if _skip_pip_name(name) or name in seen:
-            continue
-        seen.add(name)
-        reqs.append(name)
-
-    if not reqs:
-        raise RuntimeError(f"Parsed zero packages from {env_yml}; check YAML format")
-
-    print(f"Installing {len(reqs)} packages from {env_yml.name} (unpinned, conflicts/tooling skipped)...")
+def _install_python_deps() -> None:
+    print(f"Installing LightRoseTTA runtime deps ({len(_RUNTIME_PIP)} packages)...")
+    # only-if-needed: do not upgrade an already-installed torch to a CUDA wheel.
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", *reqs],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--upgrade-strategy",
+            "only-if-needed",
+            *_RUNTIME_PIP,
+        ],
         check=True,
     )
+    pin = _torchdata_pin()
+    # --no-deps: keep the already-installed torch (force-reinstall would pull CUDA wheels).
+    print(f"Pinning {pin} for DGL datapipes...")
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--force-reinstall",
+            "--no-deps",
+            pin,
+        ],
+        check=True,
+    )
+    # Allow newer torch than the graphbolt libs shipped with PyPI dgl.
+    src = str(ROOT / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    try:
+        from proteintda.lightrosetta.path import ensure_dgl_graphbolt_compat
 
-    # Current DGL still imports torchdata.datapipes; that module was removed after 0.9.
-    if "dgl" in seen:
-        print("Pinning torchdata==0.9.0 for DGL (datapipes)...")
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--force-reinstall",
-                "torchdata==0.9.0",
-            ],
-            check=True,
-        )
+        ensure_dgl_graphbolt_compat()
+    except Exception as exc:  # noqa: BLE001 — setup should still finish
+        print(f"Warning: could not ensure DGL graphbolt compat: {exc}")
 
 
 def _patch_fcntl(cache_file: Path) -> None:
@@ -352,8 +209,7 @@ def main() -> int:
             zf.extractall(TRAINING_DIR)
 
     _apply_local_patches()
-    print("Installing LightRoseTTA Python dependencies from LightRoseTTA-env.yml...")
-    _install_python_deps(clone_dir)
+    _install_python_deps()
     print("Done. third_party/ is gitignored; re-run this script after a fresh clone.")
     return 0
 
