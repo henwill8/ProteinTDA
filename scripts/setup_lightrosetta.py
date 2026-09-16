@@ -23,6 +23,25 @@ _SKIP_PIP_NAMES = {
     "pytorch",
     "openmm",  # their pin is a different PyPI package, not OpenMM
     "simtk",
+    "numpy",  # keep the env's numpy
+    "matplotlib",
+    "scikit-learn",
+    "scipy",
+    "pandas",
+    "pillow",
+    "pyyaml",
+    "tqdm",
+    "requests",
+    "urllib3",
+    "certifi",
+    "charset-normalizer",
+    "idna",
+    "typing-extensions",
+    "packaging",
+    "setuptools",
+    "wheel",
+    "pip",
+    "six",
 }
 
 # Conda package name (prefix) → PyPI name for Python deps that are not under pip:.
@@ -34,6 +53,100 @@ _CONDA_TO_PIP = {
     "networkx": "networkx",
     "googledrivedownloader": "googledrivedownloader",
 }
+
+# Their env.yml freezes a full Jupyter/TensorBoard workstation — not needed to train.
+_SKIP_PIP_PREFIXES = (
+    "jupyter",
+    "ipython",
+    "ipykernel",
+    "ipywidgets",
+    "nbclassic",
+    "nbclient",
+    "nbconvert",
+    "nbformat",
+    "notebook",
+    "tensorboard",
+    "widgetsnb",
+    "argon2",
+    "prometheus",
+    "debugpy",
+    "jedi",
+    "parso",
+    "pexpect",
+    "prompt-toolkit",
+    "stack-data",
+    "asttokens",
+    "executing",
+    "pure-eval",
+    "matplotlib-inline",
+    "terminado",
+    "send2trash",
+    "bleach",
+    "mistune",
+    "pandocfilters",
+    "testpath",
+    "nest-asyncio",
+    "supervisor",
+    "pynvml",
+    "nvidia-ml",
+    "backcall",
+    "pickleshare",
+    "wcwidth",
+    "traitlets",
+    "tornado",
+    "pyzmq",
+    "anyio",
+    "babel",
+    "defusedxml",
+    "entrypoints",
+    "webencodings",
+    "webcolors",
+    "websocket-client",
+    "tinycss2",
+    "beautifulsoup4",
+    "soupsieve",
+    "fqdn",
+    "isoduration",
+    "arrow",
+    "uri-template",
+    "rfc3339",
+    "rfc3986",
+    "rfc3987",
+    "json5",
+    "jsonschema",
+    "jupyterlab",
+    "ipython-genutils",
+    "ptyprocess",
+    "pygments",
+    "jinja2",
+    "markupsafe",
+    "lark",
+    "rpds-py",
+    "referencing",
+    "attrs",
+    "pyrsistent",
+    "fastjsonschema",
+    "platformdirs",
+    "overrides",
+    "httpx",
+    "httpcore",
+    "h11",
+    "sniffio",
+    "async-lru",
+    "jupyter-builder",
+    "jupyter-events",
+    "jupyter-lsp",
+    "jupyter-server",
+    "notebook-shim",
+    "python-json-logger",
+    "comm",
+)
+
+
+def _skip_pip_name(name: str) -> bool:
+    if name in _SKIP_PIP_NAMES:
+        return True
+    return any(name == p or name.startswith(p + "-") for p in _SKIP_PIP_PREFIXES)
 
 
 def _package_name(req: str) -> str:
@@ -96,24 +209,34 @@ def _install_python_deps(clone_dir: Path) -> None:
     seen: set[str] = set()
     for req in _pip_reqs_from_env_yml(env_yml) + _conda_python_pkgs_from_env_yml(env_yml):
         name = _package_name(req)
-        if name in _SKIP_PIP_NAMES or name in seen:
+        if _skip_pip_name(name) or name in seen:
             continue
         seen.add(name)
         reqs.append(name)
 
-    # Current DGL imports torchdata.datapipes at import time.
-    if "dgl" in seen and "torchdata" not in seen:
-        reqs.append("torchdata")
-        seen.add("torchdata")
-
     if not reqs:
         raise RuntimeError(f"Parsed zero packages from {env_yml}; check YAML format")
 
-    print(f"Installing {len(reqs)} packages from {env_yml.name} (unpinned, conflicts skipped)...")
+    print(f"Installing {len(reqs)} packages from {env_yml.name} (unpinned, conflicts/tooling skipped)...")
     subprocess.run(
         [sys.executable, "-m", "pip", "install", *reqs],
         check=True,
     )
+
+    # Current DGL still imports torchdata.datapipes; that module was removed after 0.9.
+    if "dgl" in seen:
+        print("Pinning torchdata==0.9.0 for DGL (datapipes)...")
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--force-reinstall",
+                "torchdata==0.9.0",
+            ],
+            check=True,
+        )
 
 
 def _patch_fcntl(cache_file: Path) -> None:
