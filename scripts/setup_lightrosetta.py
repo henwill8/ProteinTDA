@@ -69,7 +69,21 @@ def _install_dgl(torch) -> None:
         return
 
     major, minor = _torch_minor(torch)
-    cu = "".join(torch.version.cuda.split(".")[:2])
+    cu_major, cu_minor, *_ = torch.version.cuda.split(".")
+    cu = f"{cu_major}{cu_minor}"
+    # Published DGL CUDA wheels stop around torch 2.4–2.6 / CUDA 12.x — not cu130.
+    if int(cu_major) >= 13 or (major, minor) > (2, 6):
+        raise SystemExit(
+            f"No CUDA DGL wheel for torch {torch.__version__} (CUDA {torch.version.cuda}).\n"
+            "DGL ships CUDA builds only through ~torch 2.4–2.6 / CUDA 12.x.\n"
+            "Downgrade torch, then reinstall dgl, e.g.:\n"
+            "  pip install --force-reinstall torch==2.4.1 "
+            "--index-url https://download.pytorch.org/whl/cu121\n"
+            "  pip install --force-reinstall --no-deps dgl "
+            "-f https://data.dgl.ai/wheels/torch-2.4/cu121/repo.html\n"
+            "  python scripts/install_vpd.py"
+        )
+
     for url in (
         f"https://data.dgl.ai/wheels/torch-{major}.{minor}/cu{cu}/repo.html",
         f"https://data.dgl.ai/wheels/cu{cu}/repo.html",
@@ -80,7 +94,9 @@ def _install_dgl(torch) -> None:
             return
         except subprocess.CalledProcessError:
             continue
-    raise SystemExit(f"Failed to install CUDA DGL for torch {torch.__version__} / CUDA {torch.version.cuda}")
+    raise SystemExit(
+        f"Failed to install CUDA DGL for torch {torch.__version__} / CUDA {torch.version.cuda}"
+    )
 
 
 def _install_python_deps() -> None:
