@@ -1,5 +1,6 @@
 from collections import defaultdict
 from contextlib import nullcontext
+import gc
 from types import SimpleNamespace
 
 import torch
@@ -15,6 +16,17 @@ from proteintda.shared.runner import BaseRunner
 ensure_lightrosetta_on_path()
 
 from model.LightRoseTTA import Predict_Network
+from model.refine_net import Refine_Network
+
+
+def _unwrap_forward(fn):
+    while hasattr(fn, "__wrapped__"):
+        fn = fn.__wrapped__
+    return fn
+
+
+# Forced AMP in Refine_Network mixes Half activations into float32 SE3 basis math.
+Refine_Network.forward = _unwrap_forward(Refine_Network.forward)
 
 
 def default_model_args(device: torch.device | str, overrides: dict | None = None) -> SimpleNamespace:
@@ -68,6 +80,10 @@ def default_model_args(device: torch.device | str, overrides: dict | None = None
     return args
 
 
+def _complete_length(protein: SCNProtein) -> int:
+    return sum(1 for m in str(protein.mask) if m == "+")
+
+
 class LightRoseTTARunner(BaseRunner):
     def __init__(
         self,
@@ -81,12 +97,21 @@ class LightRoseTTARunner(BaseRunner):
         overrides = dict(RUN_CONFIG.lightrosetta.model)
         if model_overrides:
             overrides.update(model_overrides)
+        self.max_seq_length = int(RUN_CONFIG.lightrosetta.get("max_seq_length", 256))
         self.model = Predict_Network(default_model_args(device, overrides)).to(device)
         self._data_cache: dict[str, Data] = {}
         if train:
             self.model.train()
         else:
             self.model.eval()
+
+    def _clear_cuda(self) -> None:
+        if self.device.type != "cuda":
+            return
+        gc.collect()
+        with torch.cuda.device(self.device):
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
 
     def _get_data(self, protein: SCNProtein) -> Data:
         key = str(getattr(protein, "id", id(protein)))
@@ -130,15 +155,16 @@ class LightRoseTTARunner(BaseRunner):
         grad_context = nullcontext() if backward else torch.no_grad()
 
         for protein in proteins:
-            try:
-                data = self._get_data(protein)
-            except ValueError as exc:
-                print(f"Skipping {getattr(protein, 'id', '?')}: feature build failed ({exc})")
+            pid = getattr(protein, "id", "?")
+            seq_len = _complete_length(protein)
+            if seq_len > self.max_seq_length:
+                print(f"Skipping {pid}: length {seq_len} > max_seq_length {self.max_seq_length}")
                 continue
 
-            xyz = lddt_pred = logits = result_total = None
+            data = xyz = lddt_pred = logits = result_total = None
             result_log: dict[str, float] = {}
             try:
+                data = self._get_data(protein)
                 with grad_context:
                     xyz, lddt_pred, logits = self.model(data, test_flag=not backward)
                     if include_loss and loss_fn is not None:
@@ -148,12 +174,17 @@ class LightRoseTTARunner(BaseRunner):
                 if backward and result_total is not None:
                     self.apply_gradients(result_total, optimizer, scaler, grad_clip_norm)
                     optimizer.zero_grad(set_to_none=True)
-            except torch.cuda.OutOfMemoryError:
+            except torch.cuda.OutOfMemoryError as exc:
                 if optimizer is not None:
                     optimizer.zero_grad(set_to_none=True)
-                if self.device.type == "cuda":
-                    torch.cuda.empty_cache()
-                print(f"OOM on {getattr(protein, 'id', '?')}; skipping.")
+                # Traceback frames keep mid-forward GPU tensors alive until cleared.
+                exc.__traceback__ = None
+                del data, xyz, lddt_pred, logits, result_total, exc
+                self._clear_cuda()
+                print(f"OOM on {pid} (L={seq_len}); skipping.")
+                continue
+            except ValueError as exc:
+                print(f"Skipping {pid}: feature build failed ({exc})")
                 continue
 
             if include_loss:

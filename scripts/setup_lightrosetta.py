@@ -211,6 +211,16 @@ def _patch_sym_cnn(sym_cnn: Path) -> None:
     sym_cnn.write_text(text, encoding="utf-8")
 
 
+def _patch_refine_amp(refine_net: Path) -> None:
+    text = refine_net.read_text(encoding="utf-8")
+    updated = text.replace(
+        "@torch.cuda.amp.autocast(enabled=True)\n",
+        "@torch.cuda.amp.autocast(enabled=False)\n",
+    )
+    if updated != text:
+        refine_net.write_text(updated, encoding="utf-8")
+
+
 def _strip_empty_cache(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     updated = text.replace("        torch.cuda.empty_cache()\n", "")
@@ -228,10 +238,13 @@ def _apply_local_patches() -> None:
         / "cache_file.py"
     )
     sym_cnn = TRAINING_DIR / "model" / "sym_cnn.py"
+    refine_net = TRAINING_DIR / "model" / "refine_net.py"
     if cache_file.is_file():
         _patch_fcntl(cache_file)
     if sym_cnn.is_file():
         _patch_sym_cnn(sym_cnn)
+    if refine_net.is_file():
+        _patch_refine_amp(refine_net)
 
     for rel in (
         "model/LightRoseTTA.py",

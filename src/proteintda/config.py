@@ -93,6 +93,8 @@ RUN_CONFIG = mlc.ConfigDict(
             "cache_dir": "cache/minifold",
         },
         "lightrosetta": {
+            # Pair/SE3 activations are O(L^2); 256 fits a 22GB L4 in float32.
+            "max_seq_length": 256,
             "model": {
                 "n_module": 4,
                 "n_module_str": 1,
