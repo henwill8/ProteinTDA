@@ -179,8 +179,8 @@ LOSS_CONFIG = mlc.ConfigDict(
             "enabled": True,
             "atom": "CB",
             "pd": {
-                "max_dimension": 3,
-                "hom_dim": 3,
+                "max_dimension": 2,
+                "hom_dim": 2,
                 "max_edge_length": 10,
             },
             "terms": {
@@ -194,15 +194,15 @@ LOSS_CONFIG = mlc.ConfigDict(
                 },
                 "wasserstein_h2": {
                     "weight": 0.4,
-                    "enabled": True,
+                    "enabled": False,
                 },
                 "vpd_h0": {
                     "weight": 0.001,
-                    "enabled": False,
+                    "enabled": True,
                 },
                 "vpd_h1": {
                     "weight": 0.00001,
-                    "enabled": False,
+                    "enabled": True,
                 },
                 "vpd_h2": {
                     "weight": 0.00001,
