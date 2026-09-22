@@ -54,18 +54,20 @@ def _torch_minor(torch) -> tuple[int, int]:
 
 def _install_dgl(torch) -> None:
     """Force a CUDA-matched dgl wheel when torch was built with CUDA."""
-    cmd = [
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--force-reinstall",
-        "--no-deps",
-        "dgl",
-    ]
     if not torch.version.cuda:
         print("Installing DGL (CPU / PyPI)...")
-        subprocess.run(cmd, check=True)
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--force-reinstall",
+                "--no-deps",
+                "dgl",
+            ],
+            check=True,
+        )
         return
 
     major, minor = _torch_minor(torch)
@@ -79,18 +81,46 @@ def _install_dgl(torch) -> None:
             "Downgrade torch, then reinstall dgl, e.g.:\n"
             "  pip install --force-reinstall torch==2.4.1 "
             "--index-url https://download.pytorch.org/whl/cu121\n"
-            "  pip install --force-reinstall --no-deps dgl "
+            "  pip install --force-reinstall --no-deps 'dgl==2.4.0+cu121' "
             "-f https://data.dgl.ai/wheels/torch-2.4/cu121/repo.html\n"
             "  python scripts/install_vpd.py"
         )
 
-    for url in (
-        f"https://data.dgl.ai/wheels/torch-{major}.{minor}/cu{cu}/repo.html",
-        f"https://data.dgl.ai/wheels/cu{cu}/repo.html",
-    ):
-        print(f"Installing DGL from {url}...")
+    # Pin a downloadable build: unpinned `dgl` on torch-2.4/cu121 tries 2.5.0 (often 403).
+    if (major, minor) == (2, 4) and cu == "121":
+        candidates = [
+            (
+                "dgl==2.4.0+cu121",
+                "https://data.dgl.ai/wheels/torch-2.4/cu121/repo.html",
+            ),
+            (
+                "dgl==2.1.0+cu121",
+                "https://data.dgl.ai/wheels/cu121/repo.html",
+            ),
+        ]
+    else:
+        candidates = [
+            ("dgl", f"https://data.dgl.ai/wheels/torch-{major}.{minor}/cu{cu}/repo.html"),
+            ("dgl", f"https://data.dgl.ai/wheels/cu{cu}/repo.html"),
+        ]
+
+    for pkg, url in candidates:
+        print(f"Installing {pkg} from {url}...")
         try:
-            subprocess.run([*cmd, "-f", url], check=True)
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--force-reinstall",
+                    "--no-deps",
+                    pkg,
+                    "-f",
+                    url,
+                ],
+                check=True,
+            )
             return
         except subprocess.CalledProcessError:
             continue
