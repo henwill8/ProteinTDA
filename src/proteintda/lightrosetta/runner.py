@@ -127,7 +127,6 @@ class LightRoseTTARunner(BaseRunner):
 
         totals = defaultdict(float)
         n = 0
-        amp_enabled = use_amp and self.device.type == "cuda"
         grad_context = nullcontext() if backward else torch.no_grad()
 
         for protein in proteins:
@@ -140,9 +139,7 @@ class LightRoseTTARunner(BaseRunner):
             xyz = lddt_pred = logits = result_total = None
             result_log: dict[str, float] = {}
             try:
-                with grad_context, torch.autocast(
-                    device_type=self.device.type, dtype=torch.float16, enabled=amp_enabled
-                ):
+                with grad_context:
                     xyz, lddt_pred, logits = self.model(data, test_flag=not backward)
                     if include_loss and loss_fn is not None:
                         result_total, result_log = loss_fn.compute(
