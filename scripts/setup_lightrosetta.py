@@ -229,6 +229,42 @@ def _strip_empty_cache(path: Path) -> None:
         path.write_text(updated, encoding="utf-8")
 
 
+def _ensure_test_big_dataset() -> None:
+    path = TRAINING_DIR / "test_bigDataset.py"
+    path.write_text(
+        "from torch_geometric.data import Data\n\n\nclass MyData(Data):\n    pass\n",
+        encoding="utf-8",
+    )
+
+
+def _patch_data_pipeline_my_num() -> None:
+    path = TRAINING_DIR / "data_pipeline.py"
+    if not path.is_file():
+        return
+    text = path.read_text(encoding="utf-8")
+    if "my_num_classes" in text:
+        return
+    needle = (
+        "    def get(self, idx):\n"
+        "        data = torch.load(os.path.join(self.processed_file_path, 'data_{}.pt'.format(idx)))\n"
+        "        return data"
+    )
+    insert = (
+        needle
+        + "\n\n"
+        + "    @property\n"
+        + "    def my_num_features(self):\n"
+        + "        return self.data_num_features\n\n"
+        + "    @property\n"
+        + "    def my_num_classes(self):\n"
+        + "        return self.data_num_classes"
+    )
+    if needle not in text:
+        print("Warning: could not patch my_num_* into data_pipeline.py")
+        return
+    path.write_text(text.replace(needle, insert, 1), encoding="utf-8")
+
+
 def _apply_local_patches() -> None:
     cache_file = (
         TRAINING_DIR
@@ -245,6 +281,9 @@ def _apply_local_patches() -> None:
         _patch_sym_cnn(sym_cnn)
     if refine_net.is_file():
         _patch_refine_amp(refine_net)
+
+    _ensure_test_big_dataset()
+    _patch_data_pipeline_my_num()
 
     for rel in (
         "model/LightRoseTTA.py",

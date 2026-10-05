@@ -233,6 +233,38 @@ def load_proteins(
 
 def load_dataset() -> list:
     data = RUN_CONFIG.data
+    backbone = str(RUN_CONFIG.runtime.get("backbone", "minifold")).lower()
+    if backbone == "lightrosetta":
+        root = RUN_CONFIG.lightrosetta.get("train_dataset_root")
+        if not root:
+            raise ValueError(
+                "runtime.backbone=lightrosetta requires "
+                "lightrosetta.train_dataset_root (folder with raw/ and processed/)."
+            )
+        from proteintda.lightrosetta.dataset import load_official_dataset
+
+        dataset = load_official_dataset(
+            root,
+            max_proteins=None if data.max_baseline_tm is not None else data.max_proteins,
+        )
+        max_len = data.max_protein_length
+        if max_len is not None:
+            before = len(dataset)
+            dataset = [p for p in dataset if len(p.seq) <= int(max_len)]
+            removed = before - len(dataset)
+            if removed:
+                print(f"Removed {removed} proteins longer than {max_len} residues.")
+        if data.max_baseline_tm is not None:
+            dataset = _select_with_tm_filter(
+                dataset,
+                max_proteins=data.max_proteins,
+                max_baseline_tm=float(data.max_baseline_tm),
+            )
+        elif data.max_proteins is not None and len(dataset) > data.max_proteins:
+            dataset = dataset[-data.max_proteins :]
+        print(f"Using {len(dataset)} official LightRoseTTA proteins.")
+        return dataset
+
     return load_proteins(
         casp_version=data.casp_version,
         scn_dir=data.scn_dir,

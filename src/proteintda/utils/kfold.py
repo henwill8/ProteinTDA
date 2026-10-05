@@ -21,6 +21,7 @@ def _run_config(*, num_proteins: int) -> dict[str, Any]:
     training = RUN_CONFIG.training
     kfold = RUN_CONFIG.kfold
     runtime = RUN_CONFIG.runtime
+    lr_cfg = RUN_CONFIG.lightrosetta
     sched = training.get("scheduler", {})
     return {
         "backbone": str(runtime.get("backbone", "minifold")).lower(),
@@ -31,6 +32,8 @@ def _run_config(*, num_proteins: int) -> dict[str, Any]:
         "casp_version": data.casp_version,
         "casp_thinning": data.casp_thinning,
         "max_proteins": data.max_proteins,
+        "max_protein_length": data.max_protein_length,
+        "train_dataset_root": lr_cfg.get("train_dataset_root"),
         "model_size": RUN_CONFIG.minifold.model_size,
         "infer_recycles": runtime.infer_recycles,
         "lr": training.lr,

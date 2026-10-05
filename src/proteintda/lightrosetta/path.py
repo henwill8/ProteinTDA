@@ -83,6 +83,17 @@ def ensure_dgl_graphbolt_compat() -> None:
     _GRAPHBOLT_PATCHED = True
 
 
+def _ensure_test_big_dataset_shim(root: Path) -> None:
+    """lightrosetta pickles reference test_bigDataset.MyData which for some reason are missing."""
+    shim = root / "test_bigDataset.py"
+    if shim.is_file():
+        return
+    shim.write_text(
+        "from torch_geometric.data import Data\n\n\nclass MyData(Data):\n    pass\n",
+        encoding="utf-8",
+    )
+
+
 def ensure_lightrosetta_on_path() -> Path:
     root = _LIGHTROSETTA_ROOT.resolve()
     if not root.is_dir():
@@ -91,6 +102,7 @@ def ensure_lightrosetta_on_path() -> Path:
             "Run: python scripts/setup_lightrosetta.py"
         )
     ensure_dgl_graphbolt_compat()
+    _ensure_test_big_dataset_shim(root)
     root_str = str(root)
     if root_str not in sys.path:
         sys.path.insert(0, root_str)

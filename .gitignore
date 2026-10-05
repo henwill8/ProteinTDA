@@ -20,3 +20,4 @@ vpd/*.egg-info
 /.minifold_extract
 /tda
 /third_party/
+/scratch/

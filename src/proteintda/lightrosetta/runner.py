@@ -4,11 +4,10 @@ import gc
 from types import SimpleNamespace
 
 import torch
-from sidechainnet.dataloaders.SCNProtein import SCNProtein
 from torch_geometric.data import Data
 
 from proteintda.config import RUN_CONFIG
-from proteintda.lightrosetta.features import protein_to_lightrosetta_data
+from proteintda.lightrosetta.dataset import OfficialSample
 from proteintda.lightrosetta.loss import LightRoseTTALoss
 from proteintda.lightrosetta.path import ensure_lightrosetta_on_path
 from proteintda.shared.runner import BaseRunner
@@ -80,8 +79,11 @@ def default_model_args(device: torch.device | str, overrides: dict | None = None
     return args
 
 
-def _complete_length(protein: SCNProtein) -> int:
-    return sum(1 for m in str(protein.mask) if m == "+")
+def _ensure_ca_coords(data: Data) -> Data:
+    if getattr(data, "ca_coords", None) is not None:
+        return data
+    data.ca_coords = torch.index_select(data.pos, 0, data.CA_atom_index.long())
+    return data
 
 
 class LightRoseTTARunner(BaseRunner):
@@ -97,7 +99,7 @@ class LightRoseTTARunner(BaseRunner):
         overrides = dict(RUN_CONFIG.lightrosetta.model)
         if model_overrides:
             overrides.update(model_overrides)
-        self.max_seq_length = int(RUN_CONFIG.lightrosetta.get("max_seq_length", 256))
+        self.max_protein_length = RUN_CONFIG.data.get("max_protein_length")
         self.model = Predict_Network(default_model_args(device, overrides)).to(device)
         self._data_cache: dict[str, Data] = {}
         if train:
@@ -113,17 +115,18 @@ class LightRoseTTARunner(BaseRunner):
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()
 
-    def _get_data(self, protein: SCNProtein) -> Data:
-        key = str(getattr(protein, "id", id(protein)))
-        cached = self._data_cache.get(key)
+    def _get_data(self, sample: OfficialSample) -> Data:
+        cached = self._data_cache.get(sample.id)
         if cached is None:
-            cached = protein_to_lightrosetta_data(protein)
-            self._data_cache[key] = cached
+            cached = sample.data.clone()
+            cached = _ensure_ca_coords(cached)
+            cached.seq = sample.seq
+            self._data_cache[sample.id] = cached
         return cached.clone().to(self.device)
 
     def run_batch(
         self,
-        batch: list[SCNProtein],
+        batch: list[OfficialSample],
         loss_fn: LightRoseTTALoss | None = None,
         *,
         optimizer: torch.optim.Optimizer | None = None,
@@ -137,8 +140,8 @@ class LightRoseTTARunner(BaseRunner):
         **_ignored,
     ) -> tuple[dict[str, float], int]:
         include_loss = include_loss and loss_fn is not None
-        proteins = list(batch)
-        if not proteins:
+        samples = list(batch)
+        if not samples:
             return {}, 0
 
         if backward:
@@ -154,23 +157,35 @@ class LightRoseTTARunner(BaseRunner):
         n = 0
         grad_context = nullcontext() if backward else torch.no_grad()
 
-        for protein in proteins:
-            pid = getattr(protein, "id", "?")
-            seq_len = _complete_length(protein)
-            if seq_len > self.max_seq_length:
-                print(f"Skipping {pid}: length {seq_len} > max_seq_length {self.max_seq_length}")
+        for sample in samples:
+            pid = sample.id
+            seq_len = len(sample.seq)
+            if (
+                self.max_protein_length is not None
+                and seq_len > int(self.max_protein_length)
+            ):
+                print(
+                    f"Skipping {pid}: length {seq_len} > max_protein_length "
+                    f"{self.max_protein_length}"
+                )
                 continue
 
             data = xyz = lddt_pred = logits = result_total = None
             result_log: dict[str, float] = {}
             try:
-                data = self._get_data(protein)
+                data = self._get_data(sample)
                 with grad_context:
                     xyz, lddt_pred, logits = self.model(data, test_flag=not backward)
                     if include_loss and loss_fn is not None:
-                        result_total, result_log = loss_fn.compute(
+                        result = loss_fn.compute(
                             xyz, lddt_pred, logits, data, device=self.device, epoch=epoch
                         )
+                        if result is None:
+                            del data, xyz, lddt_pred, logits
+                            self._clear_cuda()
+                            print(f"Skipping {pid}: loss returned None")
+                            continue
+                        result_total, result_log = result
                 if backward and result_total is not None:
                     self.apply_gradients(result_total, optimizer, scaler, grad_clip_norm)
                     optimizer.zero_grad(set_to_none=True)
@@ -184,7 +199,11 @@ class LightRoseTTARunner(BaseRunner):
                 print(f"OOM on {pid} (L={seq_len}); skipping.")
                 continue
             except ValueError as exc:
-                print(f"Skipping {pid}: feature build failed ({exc})")
+                if optimizer is not None:
+                    optimizer.zero_grad(set_to_none=True)
+                del data, xyz, lddt_pred, logits, result_total
+                self._clear_cuda()
+                print(f"Skipping {pid}: {exc}")
                 continue
 
             if include_loss:
@@ -195,7 +214,7 @@ class LightRoseTTARunner(BaseRunner):
                 totals["plddt"] += float(lddt_pred.detach().float().mean().cpu())
                 pred_ca = xyz.detach().float().cpu().numpy().reshape(-1, 3)[1::3]
                 true_ca = data.ca_coords.detach().cpu().numpy()
-                totals["tm_score"] += self.tm_score(pred_ca, true_ca, data.seq)
+                totals["tm_score"] += self.tm_score(pred_ca, true_ca, sample.seq)
 
             del data, xyz, lddt_pred, logits, result_total
             n += 1

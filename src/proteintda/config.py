@@ -46,7 +46,7 @@ RUN_CONFIG = mlc.ConfigDict(
             "allow_incomplete": False,
             "scn_dir": "./data/sidechainnet",
             "max_proteins": 1000,
-            "max_protein_length": None,
+            "max_protein_length": 200,
             # Keep proteins the original (non-TDA) model is weak on (TM <= threshold).
             # LightRoseTTA needs data.baseline_checkpoint when this is set.
             "max_baseline_tm": None,
@@ -93,8 +93,8 @@ RUN_CONFIG = mlc.ConfigDict(
             "cache_dir": "cache/minifold",
         },
         "lightrosetta": {
-            # Pair/SE3 activations are O(L^2); 256 fits a 22GB L4 in float32.
-            "max_seq_length": 256,
+            # Authors' Drive tar: folder containing raw/ + processed/*.pt.
+            "train_dataset_root": None,
             "model": {
                 "n_module": 4,
                 "n_module_str": 1,
@@ -177,7 +177,8 @@ LOSS_CONFIG = mlc.ConfigDict(
         "tda": {
             "weight": 1.0,
             "enabled": True,
-            "atom": "CB",
+            # LightRoseTTA uses CA
+            "atom": "CA",
             "pd": {
                 "max_dimension": 2,
                 "hom_dim": 2,
@@ -201,7 +202,7 @@ LOSS_CONFIG = mlc.ConfigDict(
                     "enabled": True,
                 },
                 "vpd_h1": {
-                    "weight": 0.00001,
+                    "weight": 0.008,
                     "enabled": True,
                 },
                 "vpd_h2": {
