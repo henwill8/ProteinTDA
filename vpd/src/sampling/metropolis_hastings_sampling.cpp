@@ -42,7 +42,7 @@ void MetropolisHastingsSampling::cpu_sample() {
                               + std::log1p(-std::exp(-kernel->s * next_lambda))
                               - std::log1p(-std::exp(-kernel->s * curr_lambda));
 
-            if (std::log(uniform_dist(gen) < log_diff)) {
+            if (std::log(uniform_dist(gen)) < log_diff) {
                 curr_thetas[k] = prop;
                 curr_lambda = next_lambda;
             }
@@ -54,10 +54,10 @@ void MetropolisHastingsSampling::cpu_sample() {
     for (int r = 0; r < kernel->R; ++r) {
         for (int step = 0; step < this->mcmc_thinning; ++step) mcmc_pass();
         std::copy(curr_thetas.begin(), curr_thetas.end(), total_thetas.begin() + r * kernel->dim);
-        double lambda = laplacian_symbol(curr_thetas.data());
-        double weight = std::exp(-kernel->t * lambda) * (1 - std::exp(-kernel->s * lambda));
-        weights[r] = weight;
-        weights_completed_.fetch_add(1, std::memory_order_relaxed);
+        //double lambda = laplacian_symbol(curr_thetas.data());
+        //double weight = std::exp(-kernel->t * lambda) * (1 - std::exp(-kernel->s * lambda));
+        //weights[r] = lambda;
+        //weights_completed_.fetch_add(1, std::memory_order_relaxed);
     }
 
     kernel->thetas = std::move(total_thetas);
