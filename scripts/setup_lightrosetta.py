@@ -36,6 +36,8 @@ _RUNTIME_PIP = [
     "googledrivedownloader",
     "pandas",  # required by dgl.graphbolt
     "pydantic",  # required by dgl.graphbolt
+    "scipy",  # required by dgl.heterograph_index
+    "packaging",
 ]
 
 

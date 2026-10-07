@@ -101,7 +101,6 @@ class LightRoseTTARunner(BaseRunner):
             overrides.update(model_overrides)
         self.max_protein_length = RUN_CONFIG.data.get("max_protein_length")
         self.model = Predict_Network(default_model_args(device, overrides)).to(device)
-        self._data_cache: dict[str, Data] = {}
         if train:
             self.model.train()
         else:
@@ -116,13 +115,10 @@ class LightRoseTTARunner(BaseRunner):
             torch.cuda.ipc_collect()
 
     def _get_data(self, sample: OfficialSample) -> Data:
-        cached = self._data_cache.get(sample.id)
-        if cached is None:
-            cached = sample.data.clone()
-            cached = _ensure_ca_coords(cached)
-            cached.seq = sample.seq
-            self._data_cache[sample.id] = cached
-        return cached.clone().to(self.device)
+        data = sample.load()
+        data = _ensure_ca_coords(data)
+        data.seq = sample.seq
+        return data.to(self.device)
 
     def run_batch(
         self,
