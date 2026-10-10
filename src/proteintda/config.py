@@ -107,6 +107,13 @@ RUN_CONFIG = mlc.ConfigDict(
                 "use_templ": True,
             },
         },
+        "optuna": {
+            "study_name": "optuna_study",
+            "storage": "sqlite:///optuna.db",
+            "log_file": "logs/optuna.txt",
+            "n_trials": 30,
+            "n_folds": 1,
+        },
     }
 )
 

@@ -15,6 +15,7 @@ dependencies = [
     "ml_collections",
     "numpy",
     "openmm",
+    "optuna",
     "POT",
     "scikit-learn",
     "setuptools>=77,<82",
@@ -36,4 +37,4 @@ proteintda = "main:main"
 where = ["src"]
 
 [tool.setuptools]
-py-modules = ["main"]
+py-modules = ["main", "optimize"]
