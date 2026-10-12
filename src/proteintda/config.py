@@ -113,6 +113,12 @@ RUN_CONFIG = mlc.ConfigDict(
             "log_file": "logs/optuna.txt",
             "n_trials": 30,
             "n_folds": 1,
+            # "none" | "successive_halving" | "median"
+            "pruner": "successive_halving",
+            # "tpe" | "random"
+            "sampler": "tpe",
+            # For categorical keys, repeats each combo this many times
+            "n_repeats": 1,
         },
     }
 )

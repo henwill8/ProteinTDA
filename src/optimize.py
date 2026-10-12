@@ -2,8 +2,10 @@
 
 import argparse
 import copy
+import itertools
 import json
 import sys
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,8 +14,9 @@ import ml_collections as mlc
 import numpy as np
 import optuna
 import torch
-from optuna.pruners import SuccessiveHalvingPruner
-from optuna.samplers import TPESampler
+from optuna.pruners import MedianPruner, NopPruner, SuccessiveHalvingPruner
+from optuna.samplers import RandomSampler, TPESampler
+from optuna.trial import TrialState
 from sklearn.model_selection import KFold, train_test_split
 
 from proteintda.config import HEAT_RFF_CONFIG, LOSS_CONFIG, RUN_CONFIG, apply_set_overrides
@@ -219,17 +222,18 @@ def run_optuna_fold(
     trial: optuna.Trial,
 ) -> float:
     training = RUN_CONFIG.training
-    set_seed(training.seed + fold)
+    trial_seed = int(training.seed) + 10007 * int(trial.number) + int(fold)
+    set_seed(trial_seed)
 
     runner = LightRoseTTARunner(device, train=True)
     train_idx, val_idx = train_test_split(
-        train_idx, test_size=0.25, random_state=training.seed + fold
+        train_idx, test_size=0.25, random_state=trial_seed
     )
     train_proteins = [proteins[i] for i in train_idx]
     val_proteins = [proteins[i] for i in val_idx]
     test_proteins = [proteins[i] for i in test_idx]
 
-    fold_rng = np.random.default_rng(training.seed + fold)
+    fold_rng = np.random.default_rng(trial_seed)
     if training.val_proteins_per_epoch is not None:
         n_val = min(int(training.val_proteins_per_epoch), len(val_proteins))
         val_proteins = [
@@ -294,11 +298,11 @@ def run_optuna_fold(
             flush=True,
         )
 
-        trial.report(max(max_val_tm, val_tm), epoch + 1)
+        trial.report(val_tm, epoch + 1)
         if trial.should_prune():
             print(
                 f"Pruned trial {trial.number} fold {fold + 1} "
-                f"at epoch {epoch + 1}  best_val_tm={max(max_val_tm, val_tm):.4f}",
+                f"at epoch {epoch + 1}  val_tm={val_tm:.4f}  best_val_tm={max_val_tm:.4f}",
                 flush=True,
             )
             del runner
@@ -351,7 +355,11 @@ def create_objective(device: torch.device, proteins: list, specs: list[TuneSpec]
         loss_cfg = apply_params(params)
         loss_fn = build_loss_fn(loss_cfg)
 
-        kf = KFold(n_splits=kfold.n_splits, shuffle=True, random_state=training.seed)
+        kf = KFold(
+            n_splits=kfold.n_splits,
+            shuffle=True,
+            random_state=int(training.seed) + 10007 * int(trial.number),
+        )
         fold_scores: list[float] = []
         for fold, (train_idx, test_idx) in enumerate(kf.split(proteins)):
             if fold >= int(optuna_cfg.n_folds):
@@ -403,35 +411,99 @@ def main(argv: list[str] | None = None) -> int:
     torch.backends.cuda.matmul.allow_tf32 = True
 
     proteins = load_dataset()
+    sampler_name = str(optuna_cfg.get("sampler", "tpe")).lower()
+    pruner_name = str(optuna_cfg.get("pruner", "successive_halving")).lower()
+    n_repeats = int(optuna_cfg.get("n_repeats", 1))
     print(
         f"Optuna study={optuna_cfg.study_name!r} device={device} "
         f"n_proteins={len(proteins)} n_trials={optuna_cfg.n_trials} "
+        f"sampler={sampler_name} pruner={pruner_name} n_repeats={n_repeats} "
         f"tuning={[s.key for s in specs]}",
         flush=True,
     )
 
+    if sampler_name == "random":
+        sampler = RandomSampler(seed=training.seed)
+    elif sampler_name == "tpe":
+        sampler = TPESampler(seed=training.seed)
+    else:
+        raise ValueError(f"Unknown optuna.sampler={sampler_name!r}; use tpe or random")
+
+    if pruner_name in {"none", "nop", "off"}:
+        pruner = NopPruner()
+    elif pruner_name in {"successive_halving", "sha"}:
+        pruner = SuccessiveHalvingPruner()
+    elif pruner_name == "median":
+        pruner = MedianPruner(n_startup_trials=2, n_warmup_steps=3)
+    else:
+        raise ValueError(
+            f"Unknown optuna.pruner={pruner_name!r}; use none, successive_halving, or median"
+        )
+
     study = optuna.create_study(
         study_name=str(optuna_cfg.study_name),
         storage=str(optuna_cfg.storage),
-        sampler=TPESampler(seed=training.seed),
-        pruner=SuccessiveHalvingPruner(),
+        sampler=sampler,
+        pruner=pruner,
         direction="maximize",
         load_if_exists=True,
     )
+
+    all_categorical = all(spec.kind == "categorical" for spec in specs)
+    if n_repeats > 1 and all_categorical and specs:
+        axes = [
+            [(spec.key, choice) for choice in (spec.choices or ())]
+            for spec in specs
+        ]
+        enqueued = 0
+        for combo in itertools.product(*axes):
+            params = dict(combo)
+            for _ in range(n_repeats):
+                study.enqueue_trial(params)
+                enqueued += 1
+        n_trials = max(int(optuna_cfg.n_trials), enqueued)
+        print(f"Enqueued {enqueued} balanced categorical trials", flush=True)
+    else:
+        n_trials = int(optuna_cfg.n_trials)
+
     study.optimize(
         create_objective(device, proteins, specs),
-        n_trials=int(optuna_cfg.n_trials),
+        n_trials=n_trials,
         show_progress_bar=True,
+        catch=(RuntimeError, torch.cuda.OutOfMemoryError),
     )
+
+    complete = [t for t in study.trials if t.state == TrialState.COMPLETE and t.value is not None]
+    by_params: dict[str, list[float]] = defaultdict(list)
+    for trial in complete:
+        label = ", ".join(f"{k}={v}" for k, v in sorted(trial.params.items()))
+        by_params[label].append(float(trial.value))
+
+    print("===== Complete trials by params =====", flush=True)
+    for label, values in sorted(by_params.items()):
+        arr = np.asarray(values, dtype=float)
+        print(
+            f"{label}: n={len(arr)} mean={arr.mean():.4f} std={arr.std(ddof=0):.4f} "
+            f"values={[round(v, 4) for v in values]}",
+            flush=True,
+        )
 
     log_file = Path(str(optuna_cfg.log_file))
     log_file.parent.mkdir(parents=True, exist_ok=True)
     with log_file.open("a", encoding="utf-8") as handle:
         handle.write("==================== New Study Results ====================\n")
         handle.write(f"tuned={','.join(s.key for s in specs)}\n")
-        handle.write(f"best_mean_test_tm={study.best_value:.6f}\n")
-        for key, value in study.best_params.items():
-            handle.write(f"{key}={value}\n")
+        handle.write(f"sampler={sampler_name} pruner={pruner_name} n_repeats={n_repeats}\n")
+        if complete:
+            handle.write(f"best_mean_test_tm={study.best_value:.6f}\n")
+            for key, value in study.best_params.items():
+                handle.write(f"{key}={value}\n")
+        for label, values in sorted(by_params.items()):
+            arr = np.asarray(values, dtype=float)
+            handle.write(
+                f"arm[{label}] n={len(arr)} mean={arr.mean():.6f} "
+                f"std={arr.std(ddof=0):.6f} values={values}\n"
+            )
         try:
             handle.write(
                 "importances="
@@ -442,7 +514,8 @@ def main(argv: list[str] | None = None) -> int:
             handle.write(f"importances_unavailable={exc}\n")
 
     print(f"Wrote results to {log_file}", flush=True)
-    print(f"Best value={study.best_value:.6f} params={study.best_params}", flush=True)
+    if complete:
+        print(f"Best value={study.best_value:.6f} params={study.best_params}", flush=True)
     return 0
 
 
