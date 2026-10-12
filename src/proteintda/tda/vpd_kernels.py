@@ -215,15 +215,17 @@ def create_vpd_kernels(loss_config, heat_rff_config):
         for name in terms
         if name.startswith("vpd_") and terms[name].enabled
     }
-    h0rff = None
+    h0rff = h1rff = h2rff = None
     if 0 in vpd_dims:
         print("Preparing VPD h0 kernel...", flush=True)
         h0rff = create_heat_random_fourier_features(**heat_rff_config["h0rff"])
-    h1rff = None
-    if any(dim > 0 for dim in vpd_dims):
+    if 1 in vpd_dims:
         print("Preparing VPD h1 kernel...", flush=True)
         h1rff = create_heat_random_fourier_features(**heat_rff_config["h1rff"])
-    return h0rff, h1rff
+    if 2 in vpd_dims:
+        print("Preparing VPD h2 kernel...", flush=True)
+        h2rff = create_heat_random_fourier_features(**heat_rff_config["h2rff"])
+    return h0rff, h1rff, h2rff
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ class MiniFoldLoss:
         loss_config,
         h0rff=None,
         h1rff=None,
+        h2rff=None,
         tda_atom: SideChainAtom = SideChainAtom.CB,
     ) -> None:
         self.config_of = config_of
@@ -31,7 +32,13 @@ class MiniFoldLoss:
         self.tda_atom = tda_atom
         self.structure_loss = AlphaFoldLoss(config_of.loss)
         self._tda = (
-            TDALoss(loss_config, h0rff=h0rff, h1rff=h1rff, tda_atom=tda_atom)
+            TDALoss(
+                loss_config,
+                h0rff=h0rff,
+                h1rff=h1rff,
+                h2rff=h2rff,
+                tda_atom=tda_atom,
+            )
             if loss_config.tda.enabled
             else None
         )

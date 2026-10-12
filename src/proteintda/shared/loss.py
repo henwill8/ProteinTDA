@@ -48,12 +48,14 @@ class TDALoss:
         config,
         h0rff=None,
         h1rff=None,
+        h2rff=None,
         *,
         tda_atom: SideChainAtom = SideChainAtom.CB,
     ):
         self.config = config
         self.h0rff = h0rff
         self.h1rff = h1rff
+        self.h2rff = h2rff
         self.tda_atom = tda_atom
         self._atom37 = Atom37.CB if tda_atom is SideChainAtom.CB else Atom37.CA
         terms = config.tda.terms
@@ -65,8 +67,11 @@ class TDALoss:
         ]
         if 0 in vpd_dims and h0rff is None:
             raise ValueError("vpd_h0 loss is enabled but h0rff was not provided")
-        if any(dim > 0 for dim in vpd_dims) and h1rff is None:
-            raise ValueError("vpd_h1+ loss is enabled but h1rff was not provided")
+        if 1 in vpd_dims and h1rff is None:
+            raise ValueError("vpd_h1 loss is enabled but h1rff was not provided")
+        if 2 in vpd_dims and h2rff is None:
+            raise ValueError("vpd_h2 loss is enabled but h2rff was not provided")
+        self._rff_by_dim = {0: h0rff, 1: h1rff, 2: h2rff}
 
     def _create_adjs(
         self,
@@ -102,7 +107,15 @@ class TDALoss:
                 terms[name] = wasserstein[f"h{dim}"]
             elif name.startswith("vpd_"):
                 dim = int(name.rsplit("_h", 1)[1])
-                rff = self.h0rff if dim == 0 else self.h1rff
+                rff = self._rff_by_dim.get(dim)
+                if rff is None:
+                    raise ValueError(f"{name} is enabled but no VPD kernel was provided")
+                if dim >= len(pred_diags) or dim >= len(target_diags):
+                    raise IndexError(
+                        f"{name} needs diagram dim {dim}, but pd only has "
+                        f"{min(len(pred_diags), len(target_diags))} dims; "
+                        f"raise loss.tda.pd.hom_dim / max_dimension"
+                    )
                 terms[name] = rff.vpd_loss(pred_diags[dim], target_diags[dim])
             else:
                 raise ValueError(f"Unknown TDA term: {name}")

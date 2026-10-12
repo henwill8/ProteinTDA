@@ -5,9 +5,13 @@ from proteintda.shared.pipeline import Backbone, prepare_vpd_kernels, tda_atom_f
 
 
 def build_loss_fn() -> LightRoseTTALoss:
-    h0rff, h1rff = prepare_vpd_kernels()
+    h0rff, h1rff, h2rff = prepare_vpd_kernels()
     return LightRoseTTALoss(
-        LOSS_CONFIG, h0rff=h0rff, h1rff=h1rff, tda_atom=tda_atom_from_config()
+        LOSS_CONFIG,
+        h0rff=h0rff,
+        h1rff=h1rff,
+        h2rff=h2rff,
+        tda_atom=tda_atom_from_config(),
     )
 
 

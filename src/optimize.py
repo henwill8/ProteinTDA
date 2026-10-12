@@ -169,18 +169,21 @@ def apply_params(params: dict[str, Any]) -> mlc.ConfigDict:
 
 
 def build_loss_fn(loss_cfg) -> LightRoseTTALoss:
-    h0rff = h1rff = None
+    h0rff = h1rff = h2rff = None
     if loss_cfg.tda.enabled:
         terms = loss_cfg.tda.terms
         needs_vpd = any(
             terms[name].enabled for name in terms if str(name).startswith("vpd_")
         )
         if needs_vpd:
-            h0rff, h1rff = create_vpd_kernels(loss_cfg, copy.deepcopy(HEAT_RFF_CONFIG))
+            h0rff, h1rff, h2rff = create_vpd_kernels(
+                loss_cfg, copy.deepcopy(HEAT_RFF_CONFIG)
+            )
     return LightRoseTTALoss(
         loss_cfg,
         h0rff=h0rff,
         h1rff=h1rff,
+        h2rff=h2rff,
         tda_atom=tda_atom_from_config(loss_cfg),
     )
 

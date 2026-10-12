@@ -82,13 +82,20 @@ class LightRoseTTALoss:
         loss_config,
         h0rff=None,
         h1rff=None,
+        h2rff=None,
         *,
         tda_atom: SideChainAtom = SideChainAtom.CA,
     ):
         self.loss_config = loss_config
         self.native = loss_config.lightrosetta
         self._tda = (
-            TDALoss(loss_config, h0rff=h0rff, h1rff=h1rff, tda_atom=tda_atom)
+            TDALoss(
+                loss_config,
+                h0rff=h0rff,
+                h1rff=h1rff,
+                h2rff=h2rff,
+                tda_atom=tda_atom,
+            )
             if loss_config.tda.enabled
             else None
         )

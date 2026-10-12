@@ -116,7 +116,7 @@ def _profile_tda_terms(tda_loss, pred_adj, target_adj, timer: _BatchTimer):
         with timer.section("vpd"):
             for name in vpd_names:
                 dim = int(name.rsplit("_h", 1)[1])
-                rff = tda_loss.h0rff if dim == 0 else tda_loss.h1rff
+                rff = {0: tda_loss.h0rff, 1: tda_loss.h1rff, 2: tda_loss.h2rff}[dim]
                 terms[name] = rff.vpd_loss(pred_diags[dim], target_diags[dim])
 
     return terms
