@@ -119,6 +119,7 @@ RUN_CONFIG = mlc.ConfigDict(
             "sampler": "tpe",
             # For categorical keys, repeats each combo this many times
             "n_repeats": 1,
+            "vary_trial_seed": False,
         },
     }
 )

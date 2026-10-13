@@ -225,18 +225,20 @@ def run_optuna_fold(
     trial: optuna.Trial,
 ) -> float:
     training = RUN_CONFIG.training
-    trial_seed = int(training.seed) + 10007 * int(trial.number) + int(fold)
-    set_seed(trial_seed)
+    base_seed = int(training.seed) + int(fold)
+    if bool(RUN_CONFIG.optuna.get("vary_trial_seed", False)):
+        base_seed += 10007 * int(trial.number)
+    set_seed(base_seed)
 
     runner = LightRoseTTARunner(device, train=True)
     train_idx, val_idx = train_test_split(
-        train_idx, test_size=0.25, random_state=trial_seed
+        train_idx, test_size=0.25, random_state=base_seed
     )
     train_proteins = [proteins[i] for i in train_idx]
     val_proteins = [proteins[i] for i in val_idx]
     test_proteins = [proteins[i] for i in test_idx]
 
-    fold_rng = np.random.default_rng(trial_seed)
+    fold_rng = np.random.default_rng(base_seed)
     if training.val_proteins_per_epoch is not None:
         n_val = min(int(training.val_proteins_per_epoch), len(val_proteins))
         val_proteins = [
@@ -358,10 +360,13 @@ def create_objective(device: torch.device, proteins: list, specs: list[TuneSpec]
         loss_cfg = apply_params(params)
         loss_fn = build_loss_fn(loss_cfg)
 
+        fold_seed = int(training.seed)
+        if bool(optuna_cfg.get("vary_trial_seed", False)):
+            fold_seed += 10007 * int(trial.number)
         kf = KFold(
             n_splits=kfold.n_splits,
             shuffle=True,
-            random_state=int(training.seed) + 10007 * int(trial.number),
+            random_state=fold_seed,
         )
         fold_scores: list[float] = []
         for fold, (train_idx, test_idx) in enumerate(kf.split(proteins)):
@@ -417,10 +422,12 @@ def main(argv: list[str] | None = None) -> int:
     sampler_name = str(optuna_cfg.get("sampler", "tpe")).lower()
     pruner_name = str(optuna_cfg.get("pruner", "successive_halving")).lower()
     n_repeats = int(optuna_cfg.get("n_repeats", 1))
+    vary_trial_seed = bool(optuna_cfg.get("vary_trial_seed", False))
     print(
         f"Optuna study={optuna_cfg.study_name!r} device={device} "
         f"n_proteins={len(proteins)} n_trials={optuna_cfg.n_trials} "
         f"sampler={sampler_name} pruner={pruner_name} n_repeats={n_repeats} "
+        f"vary_trial_seed={vary_trial_seed} "
         f"tuning={[s.key for s in specs]}",
         flush=True,
     )
@@ -437,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
     elif pruner_name in {"successive_halving", "sha"}:
         pruner = SuccessiveHalvingPruner()
     elif pruner_name == "median":
-        pruner = MedianPruner(n_startup_trials=2, n_warmup_steps=3)
+        pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=5)
     else:
         raise ValueError(
             f"Unknown optuna.pruner={pruner_name!r}; use none, successive_halving, or median"
@@ -496,7 +503,10 @@ def main(argv: list[str] | None = None) -> int:
     with log_file.open("a", encoding="utf-8") as handle:
         handle.write("==================== New Study Results ====================\n")
         handle.write(f"tuned={','.join(s.key for s in specs)}\n")
-        handle.write(f"sampler={sampler_name} pruner={pruner_name} n_repeats={n_repeats}\n")
+        handle.write(
+            f"sampler={sampler_name} pruner={pruner_name} n_repeats={n_repeats} "
+            f"vary_trial_seed={vary_trial_seed}\n"
+        )
         if complete:
             handle.write(f"best_mean_test_tm={study.best_value:.6f}\n")
             for key, value in study.best_params.items():
