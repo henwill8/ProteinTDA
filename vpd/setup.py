@@ -11,10 +11,14 @@ cwd = os.getcwd()
 include_dir = os.path.join(cwd, "src", "include")
 sampling_dir = os.path.join(cwd, "src", "sampling")
 cuda_dir = os.path.join(cwd, "src", "cuda")
+graph_representations_dir = os.path.join(cwd, "src", "graph_representations")
 
 sources = [
     os.path.join("src", "straight_through.cpp"),
     os.path.join("src", "heat_kernel.cpp"),
+    os.path.join("src", "graph_representations", "graph_representation.cpp"),
+    os.path.join("src", "graph_representations", "complete_graph.cpp"),
+    os.path.join("src", "graph_representations", "lattice_graph.cpp"),
     os.path.join("src", "sampling", "sampling_method.cpp"),
     os.path.join("src", "sampling", "metropolis_hastings_sampling.cpp"),
     os.path.join("src", "sampling", "mala_sampling.cpp"),
@@ -32,7 +36,7 @@ cuda_sources = [
     os.path.join("src", "cuda", "rejection_sampling_cuda.cu"),
 ]
 
-include_dirs = [include_dir, sampling_dir]
+include_dirs = [include_dir, sampling_dir, graph_representations_dir]
 if USE_CUDA:
     sources += cuda_sources
     include_dirs.append(cuda_dir)
@@ -41,8 +45,14 @@ abi_flag = "1" if torch._C._GLIBCXX_USE_CXX11_ABI else "0"
 
 if os.name == "nt":
     cxx_args = ["/O2", "/std:c++20"]
-    nvcc_args = ["-O3", "-std=c++20", "-Xcompiler", "/O2"]
-    extra_link_args = []
+    nvcc_args = [
+        "-O3",
+        "-std=c++20",
+        "-allow-unsupported-compiler",
+        "--expt-relaxed-constexpr",
+        "-Xcompiler",
+        "/O2",
+    ]
 else:
     cxx_args = ["-O3", "-std=c++20", f"-D_GLIBCXX_USE_CXX11_ABI={abi_flag}"]
     nvcc_args = [
@@ -51,8 +61,8 @@ else:
         f"-D_GLIBCXX_USE_CXX11_ABI={abi_flag}",
         "--expt-relaxed-constexpr",
     ]
-    extra_link_args = []
 
+extra_link_args = []
 if USE_OPENMP:
     if os.name == "nt":
         cxx_args += ["/openmp", "/openmp:experimental"]
@@ -75,6 +85,8 @@ ext_kwargs = dict(
     extra_link_args=extra_link_args,
     define_macros=define_macros,
 )
+if USE_CUDA:
+    ext_kwargs["libraries"] = ["curand"]
 
 if USE_CUDA:
     ext_module = CUDAExtension(

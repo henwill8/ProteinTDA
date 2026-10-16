@@ -21,6 +21,11 @@ class SamplingMethod(Enum):
     MCMC = auto()
     MALA = auto()
 
+
+class GraphRepresentation(Enum):
+    COMPLETE = auto()
+    LATTICE = auto()
+
 with CONFIG_OF.unlocked():
     # CONFIG_OF.model.heads.tm.enabled = True
     # CONFIG_OF.loss.tm.enabled = True
@@ -38,7 +43,7 @@ RUN_CONFIG = mlc.ConfigDict(
             "scn_dir": "./data/sidechainnet",
             "max_proteins": 1000,
             "max_protein_length": None,
-            "max_baseline_tm": 0.7,  # filter proteins with a high baseline tm score
+            "max_baseline_tm": None,  # filter proteins with a high baseline tm score
             "baseline_tm_scores_path": "cache/baseline_tm_scores.json",
         },
         "runtime": {
@@ -89,25 +94,39 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
         "h0rff": {
             "n": 1,
             "axis_dim": 10,
-            "resolution": 5,
+            "resolution": 5 * 3,
             "R": 1000,
             "t": 2,
             "s": 0.4,
             "seed": 42,
             "device": _cpp.Device.CUDA,
-            "sampling_method": SamplingMethod.MALA 
+            "sampling_method": SamplingMethod.RANDOM,
+            "graph_representation_type": GraphRepresentation.LATTICE,
         },
         "h1rff": {
             "n": 2,
             "axis_dim": 10,
-            "resolution": 3,
+            "resolution": 2 * 3,
             "R": 1000,
             "t": 2,
             "s": 0.4,
             "seed": 42,
             "device": _cpp.Device.CUDA,
-            "sampling_method": SamplingMethod.MALA
-        }
+            "sampling_method": SamplingMethod.RANDOM,
+            "graph_representation_type": GraphRepresentation.LATTICE,
+        },
+        "h2rff": {
+            "n": 2,
+            "axis_dim": 10,
+            "resolution": 1 * 3,
+            "R": 1000,
+            "t": 2,
+            "s": 0.4,
+            "seed": 42,
+            "device": _cpp.Device.CUDA,
+            "sampling_method": SamplingMethod.RANDOM,
+            "graph_representation_type": GraphRepresentation.LATTICE,
+        },
     }
 )
 
@@ -124,35 +143,37 @@ LOSS_CONFIG = mlc.ConfigDict(
         "tda": {
             "weight": 1.0,
             "enabled": True,
-        },
-        "pd": {
-            "max_dimension": 3,
-            "hom_dim": 3,
-            "max_edge_length": 10,
-        },
-        "wasserstein_h0": {
-            "weight": 0.1,
-            "enabled": True,
-        },
-        "wasserstein_h1": {
-            "weight": 0.8,
-            "enabled": True,
-        },
-        "wasserstein_h2": {
-            "weight": 0.1,
-            "enabled": True,
-        },
-        "vpd_h0": {
-            "weight": 0.001,
-            "enabled": True,
-        },
-        "vpd_h1": {
-            "weight": 0.008,
-            "enabled": True,
-        },
-        "vpd_h2": {
-            "weight": 0.001,
-            "enabled": True,
+            "pd": {
+                "max_dimension": 3,
+                "hom_dim": 3,
+                "max_edge_length": 10,
+            },
+            "terms": {
+                "wasserstein_h0": {
+                    "weight": 0.1,
+                    "enabled": True,
+                },
+                "wasserstein_h1": {
+                    "weight": 0.8,
+                    "enabled": True,
+                },
+                "wasserstein_h2": {
+                    "weight": 0.4,
+                    "enabled": True,
+                },
+                "vpd_h0": {
+                    "weight": 0.001,
+                    "enabled": True,
+                },
+                "vpd_h1": {
+                    "weight": 0.00001,
+                    "enabled": True,
+                },
+                "vpd_h2": {
+                    "weight": 0.00001,
+                    "enabled": False,
+                },
+            }
         },
         "eps": _EPS,
     }

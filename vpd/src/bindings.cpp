@@ -1,10 +1,15 @@
 #include <torch/extension.h>
 #include "heat_kernel.hpp"
+#include "include/graph_representation.hpp"
+#include "include/sampling_method.hpp"
 #include "sampling_method.hpp"
 #include "random_sampling.hpp"
 #include "rejection_sampling.hpp"
 #include "metropolis_hastings_sampling.hpp"
 #include "mala_sampling.hpp"
+#include "graph_representation.hpp"
+#include "complete_graph.hpp"
+#include "lattice_graph.hpp"
 #include "vpd.hpp"
 
 namespace py = pybind11;
@@ -13,6 +18,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   py::enum_<Device>(m, "Device")
     .value("CPU", Device::CPU)
     .value("CUDA", Device::CUDA);
+  py::enum_<Graph_Representation_Type>(m, "Graph_Representation")
+    .value("COMPLETE", Graph_Representation_Type::COMPLETE)
+    .value("LATTICE", Graph_Representation_Type::LATTICE);
   py::class_<Heat_Kernel, std::shared_ptr<Heat_Kernel>>(m, "Heat_Kernel")
 
     .def(py::init<int, int, double, int, double, double>(),
@@ -31,6 +39,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("t"),
         py::arg("thetas"),
         py::arg("weights"))
+    .def_readonly("dim", &Heat_Kernel::dim)
+    .def_readonly("n", &Heat_Kernel::n)
+    .def_readonly("axis_dim", &Heat_Kernel::axis_dim)
+    .def_readonly("resolution", &Heat_Kernel::resolution)
     .def_readonly("thetas", &Heat_Kernel::thetas)
     .def_readonly("weights", &Heat_Kernel::weights);
 
@@ -39,6 +51,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("kernel"),
         py::arg("normalized_lambdas") = true,
         py::arg("seed") = 42,
+        py::arg("graph_representation_type") = Graph_Representation_Type::LATTICE,
         py::arg("device") = Device::CPU)
     .def("build", &SamplingMethod::build, py::call_guard<py::gil_scoped_release>())
     .def_property_readonly("completed_ops", &SamplingMethod::completed_ops)
@@ -80,5 +93,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def("get_vpd", &VPD::get_vpd,
         py::arg("pd"))
     .def_property_readonly("thetas", &VPD::get_thetas)
-    .def_property_readonly("weights", &VPD::get_weights);
+    .def_property_readonly("weights", &VPD::get_weights)
+    .def_property_readonly("kernel", &VPD::get_kernel);
 }

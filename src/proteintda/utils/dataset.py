@@ -59,17 +59,16 @@ def _resolve_device() -> torch.device:
 
 def _compute_baseline_tm_scores(proteins: list, *, runner) -> dict[str, float]:
     runtime = RUN_CONFIG.runtime
-    batch_size = max(1, int(RUN_CONFIG.training.batch_size))
+    # Score one protein at a time: training batch_size can pad mixed lengths and OOM.
     scores: dict[str, float] = {}
 
     print(
         f"Computing baseline TM for {len(proteins)} proteins "
-        f"(model={runtime.model_size}, batch_size={batch_size})..."
+        f"(model={runtime.model_size}, batch_size=1)..."
     )
-    for start in range(0, len(proteins), batch_size):
-        batch = proteins[start : start + batch_size]
+    for i, protein in enumerate(proteins):
         outputs = runner._forward_batch(
-            batch,
+            [protein],
             None,
             runtime.infer_recycles,
             include_metrics=True,
@@ -79,16 +78,17 @@ def _compute_baseline_tm_scores(proteins: list, *, runner) -> dict[str, float]:
         pred_ca = outputs.get("pred_ca")
         if pred_ca is None:
             continue
-        for i, protein in enumerate(batch):
-            length = len(str(protein.seq))
-            exp_ca = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).cpu().numpy()
-            alignment = tm_align(
-                pred_ca[i, :length].numpy(),
-                exp_ca,
-                str(protein.seq),
-                str(protein.seq),
-            )
-            scores[str(protein.id)] = float(alignment.tm_norm_chain2)
+        length = len(str(protein.seq))
+        exp_ca = atom_positions_from_sidechainnet(protein, SideChainAtom.CA).cpu().numpy()
+        alignment = tm_align(
+            pred_ca[0, :length].numpy(),
+            exp_ca,
+            str(protein.seq),
+            str(protein.seq),
+        )
+        scores[str(protein.id)] = float(alignment.tm_norm_chain2)
+        if runner.device.type == "cuda" and (i + 1) % 10 == 0:
+            torch.cuda.empty_cache()
     return scores
 
 
@@ -127,27 +127,33 @@ def _select_with_tm_filter(
         scores.update(_compute_baseline_tm_scores(missing, runner=runner))
         update_scores = True
 
-    while next_idx >= 0 and (max_proteins is None or len(kept) < max_proteins):
-        if max_proteins is None:
-            take = min(batch_size, next_idx + 1)
-        else:
-            need = max_proteins - len(kept)
-            take = min(max(need, batch_size), next_idx + 1)
-        chunk = dataset[next_idx - take + 1 : next_idx + 1]
-        next_idx -= take
-
-        ensure_scores(chunk)
-
-        for protein in reversed(chunk):
-            if max_proteins is not None and len(kept) >= max_proteins:
-                break
-            tm = scores.get(str(protein.id))
-            if tm is None or tm <= max_baseline_tm:
-                kept.append(protein)
+    try:
+        while next_idx >= 0 and (max_proteins is None or len(kept) < max_proteins):
+            if max_proteins is None:
+                take = min(batch_size, next_idx + 1)
             else:
-                removed += 1
-                if len(removed_examples) < 5:
-                    removed_examples.append((str(protein.id), tm))
+                need = max_proteins - len(kept)
+                take = min(max(need, batch_size), next_idx + 1)
+            chunk = dataset[next_idx - take + 1 : next_idx + 1]
+            next_idx -= take
+
+            ensure_scores(chunk)
+
+            for protein in reversed(chunk):
+                if max_proteins is not None and len(kept) >= max_proteins:
+                    break
+                tm = scores.get(str(protein.id))
+                if tm is None or tm <= max_baseline_tm:
+                    kept.append(protein)
+                else:
+                    removed += 1
+                    if len(removed_examples) < 5:
+                        removed_examples.append((str(protein.id), tm))
+    finally:
+        if runner is not None:
+            del runner
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     if update_scores:
         _save_baseline_tm_scores(scores_path, scores)
