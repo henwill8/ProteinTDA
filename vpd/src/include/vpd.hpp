@@ -11,13 +11,14 @@
 class VPD {
 private:
     std::shared_ptr<Heat_Kernel> kernel;
+    bool normalize;
 
     torch::Tensor align_pd_to_grid(torch::Tensor pd) const;
     torch::Tensor pd_diff(torch::Tensor pd1, torch::Tensor pd2) const;
     torch::Tensor pd_to_vpd(torch::Tensor pd) const;
 
 public:
-    explicit VPD(std::shared_ptr<Heat_Kernel> kernel);
+    explicit VPD(std::shared_ptr<Heat_Kernel> kernel, bool normalize = false);
 
     /**
      * @brief Computes the loss between two persistence diagrams

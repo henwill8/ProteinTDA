@@ -82,7 +82,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("tune_sigma"));
 
   py::class_<VPD>(m, "VPD")
-    .def(py::init<std::shared_ptr<Heat_Kernel>>(), py::arg("kernel"))
+    .def(py::init<std::shared_ptr<Heat_Kernel>, bool>(), py::arg("kernel"), py::arg("normalize") = false)
     .def("vpd_loss_vector", &VPD::vpd_loss_vector_,
         py::arg("pd1"),
         py::arg("pd2"),

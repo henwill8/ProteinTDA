@@ -4,7 +4,7 @@
 #include <iostream>
 #include <tuple>
 
-VPD::VPD(std::shared_ptr<Heat_Kernel> kernel) : kernel(std::move(kernel)) {}
+VPD::VPD(std::shared_ptr<Heat_Kernel> kernel, bool normalize) : kernel(std::move(kernel)), normalize(normalize) {}
 
 torch::Tensor VPD::align_pd_to_grid(torch::Tensor pd) const {
     return straight_through_round(pd * this->kernel->resolution);
@@ -66,6 +66,10 @@ torch::Tensor VPD::pd_to_vpd(torch::Tensor pd) const {
     TORCH_INTERNAL_ASSERT(
         std::abs(vpd.sum().item<double>() - static_cast<double>(pd.size(0))) < 1e-6,
         "mass leak: partition of unity violated");
+
+    if (this->normalize) {
+        vpd = vpd / static_cast<double>(pd.size(0));
+    }
 
     return vpd;
 }

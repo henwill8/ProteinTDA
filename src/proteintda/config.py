@@ -102,6 +102,7 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "device": _cpp.Device.CUDA,
             "sampling_method": SamplingMethod.RANDOM,
             "graph_representation_type": GraphRepresentation.LATTICE,
+            "normalize": False,
         },
         "h1rff": {
             "n": 2,
@@ -114,6 +115,7 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "device": _cpp.Device.CUDA,
             "sampling_method": SamplingMethod.RANDOM,
             "graph_representation_type": GraphRepresentation.LATTICE,
+            "normalize": False,
         },
         "h2rff": {
             "n": 2,
@@ -126,6 +128,7 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "device": _cpp.Device.CUDA,
             "sampling_method": SamplingMethod.RANDOM,
             "graph_representation_type": GraphRepresentation.LATTICE,
+            "normalize": False,
         },
     }
 )

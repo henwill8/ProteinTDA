@@ -153,6 +153,7 @@ def create_heat_random_fourier_features(
     device=_cpp.Device.CPU,
     sampling_method: SamplingMethod = SamplingMethod.MALA,
     graph_representation_type: GraphRepresentation = GraphRepresentation.LATTICE,
+    normalize=False,
     show_progress=True,
 ):
     cpp_graph = _to_cpp_graph(graph_representation_type)
@@ -170,7 +171,7 @@ def create_heat_random_fourier_features(
             n, axis_dim, resolution, R, s, t, cached["thetas"], cached["weights"],
         )
         print(f"Loaded heat kernel cache: {cache_path.name}", flush=True)
-        return _cpp.VPD(kernel)
+        return _cpp.VPD(kernel, normalize)
 
     kernel = _cpp.Heat_Kernel(n, axis_dim, resolution, R, s, t)
     sampler = _make_sampler(sampling_method)
@@ -189,7 +190,7 @@ def create_heat_random_fourier_features(
     else:
         sampler.build()
 
-    vpd = _cpp.VPD(kernel)
+    vpd = _cpp.VPD(kernel, normalize)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
