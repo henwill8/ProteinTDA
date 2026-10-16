@@ -97,7 +97,8 @@ def main(make_histogram = False) -> None:
     else: 
         ia, ib = np.unravel_index(np.nanargmax(rm), rm.shape)
         peak, r = float(out["peaks"][ia]), float(out["r_values"][ib])
-        t, s = convert_for_weight(peak, r)
+        t, tau2 = convert_for_weight(peak, r)
+        s = tau2 - t
         print(f"best: lambda*={peak:.4g} r={r:.3g} t={t:.4g} s={s:.4g} "
               f"rho={rm[ia,ib]:.3f} Z_band={out['zband'][ia,ib]:.3g} ")
 
