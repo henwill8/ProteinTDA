@@ -422,20 +422,28 @@ def main(argv: list[str] | None = None) -> int:
     sampler_name = str(optuna_cfg.get("sampler", "tpe")).lower()
     pruner_name = str(optuna_cfg.get("pruner", "successive_halving")).lower()
     n_repeats = int(optuna_cfg.get("n_repeats", 1))
+    n_startup_trials = int(optuna_cfg.get("n_startup_trials", 10))
+    sampler_seed = optuna_cfg.get("sampler_seed", None)
+    sampler_seed = int(training.seed) if sampler_seed is None else int(sampler_seed)
     vary_trial_seed = bool(optuna_cfg.get("vary_trial_seed", False))
     print(
         f"Optuna study={optuna_cfg.study_name!r} device={device} "
         f"n_proteins={len(proteins)} n_trials={optuna_cfg.n_trials} "
         f"sampler={sampler_name} pruner={pruner_name} n_repeats={n_repeats} "
+        f"n_startup_trials={n_startup_trials} sampler_seed={sampler_seed} "
         f"vary_trial_seed={vary_trial_seed} "
         f"tuning={[s.key for s in specs]}",
         flush=True,
     )
 
     if sampler_name == "random":
-        sampler = RandomSampler(seed=training.seed)
+        sampler = RandomSampler(seed=sampler_seed)
     elif sampler_name == "tpe":
-        sampler = TPESampler(seed=training.seed)
+        sampler = TPESampler(
+            seed=sampler_seed,
+            n_startup_trials=n_startup_trials,
+            constant_liar=True,
+        )
     else:
         raise ValueError(f"Unknown optuna.sampler={sampler_name!r}; use tpe or random")
 
@@ -505,6 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         handle.write(f"tuned={','.join(s.key for s in specs)}\n")
         handle.write(
             f"sampler={sampler_name} pruner={pruner_name} n_repeats={n_repeats} "
+            f"n_startup_trials={n_startup_trials} sampler_seed={sampler_seed} "
             f"vary_trial_seed={vary_trial_seed}\n"
         )
         if complete:

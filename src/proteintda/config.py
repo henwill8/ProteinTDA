@@ -117,6 +117,10 @@ RUN_CONFIG = mlc.ConfigDict(
             "pruner": "successive_halving",
             # "tpe" | "random"
             "sampler": "tpe",
+            # number of random trials before model-based search
+            "n_startup_trials": 10,
+            # seed for sampler rng
+            "sampler_seed": None,
             # For categorical keys, repeats each combo this many times
             "n_repeats": 1,
             "vary_trial_seed": False,
