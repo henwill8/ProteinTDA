@@ -193,6 +193,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             "enabled": True,
             # LightRoseTTA uses CA
             "atom": "CA",
+            "normalized_vpd": False,
             "pd": {
                 "max_dimension": 3,
                 "hom_dim": 3,

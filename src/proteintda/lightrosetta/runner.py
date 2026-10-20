@@ -23,8 +23,6 @@ def _unwrap_forward(fn):
         fn = fn.__wrapped__
     return fn
 
-
-# Forced AMP in Refine_Network mixes Half activations into float32 SE3 basis math.
 Refine_Network.forward = _unwrap_forward(Refine_Network.forward)
 
 

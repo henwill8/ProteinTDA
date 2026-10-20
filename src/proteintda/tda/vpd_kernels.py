@@ -3,6 +3,7 @@ import threading
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 from tqdm import tqdm
 from vpd import _cpp
@@ -207,6 +208,21 @@ def create_heat_random_fourier_features(
     return vpd
 
 
+class NormalizedVPD:
+    def __init__(self, rff):
+        self.rff = rff
+        self.kernel = rff.kernel
+        thetas = np.asarray(rff.thetas, dtype=np.float64).reshape(-1, int(self.kernel.dim))
+        self.th = torch.from_numpy(np.ascontiguousarray(thetas))
+
+    def vpd_loss(self, pred_pd, target_pd):
+        pred = self.rff.get_vpd(pred_pd) / max(int(pred_pd.shape[0]), 1)
+        target = self.rff.get_vpd(target_pd) / max(int(target_pd.shape[0]), 1)
+        diff = pred - target
+        dots = self.th.to(device=diff.device, dtype=diff.dtype) @ diff
+        return (2 * (1 - torch.cos(dots))).mean()
+
+
 def create_vpd_kernels(loss_config, heat_rff_config):
     """Create VPD heat kernels only when the corresponding loss term is enabled."""
     terms = loss_config.tda.terms
@@ -215,16 +231,16 @@ def create_vpd_kernels(loss_config, heat_rff_config):
         for name in terms
         if name.startswith("vpd_") and terms[name].enabled
     }
-    h0rff = h1rff = h2rff = None
-    if 0 in vpd_dims:
-        print("Preparing VPD h0 kernel...", flush=True)
-        h0rff = create_heat_random_fourier_features(**heat_rff_config["h0rff"])
-    if 1 in vpd_dims:
-        print("Preparing VPD h1 kernel...", flush=True)
-        h1rff = create_heat_random_fourier_features(**heat_rff_config["h1rff"])
-    if 2 in vpd_dims:
-        print("Preparing VPD h2 kernel...", flush=True)
-        h2rff = create_heat_random_fourier_features(**heat_rff_config["h2rff"])
+    normalize = bool(loss_config.tda.get("normalized_vpd", False))
+
+    def _kernel(name, cfg_key):
+        print(f"Preparing VPD {name} kernel...", flush=True)
+        rff = create_heat_random_fourier_features(**heat_rff_config[cfg_key])
+        return NormalizedVPD(rff) if normalize else rff
+
+    h0rff = _kernel("h0", "h0rff") if 0 in vpd_dims else None
+    h1rff = _kernel("h1", "h1rff") if 1 in vpd_dims else None
+    h2rff = _kernel("h2", "h2rff") if 2 in vpd_dims else None
     return h0rff, h1rff, h2rff
 
 
