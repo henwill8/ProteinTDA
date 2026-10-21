@@ -2,9 +2,17 @@
 
 import gudhi as gd
 import gudhi.wasserstein
+import numpy as np
 import torch
 
 from proteintda.config import LOSS_CONFIG
+
+
+def _radius_of_gyration(dist: np.ndarray) -> float:
+    n = dist.shape[0]
+    if n == 0:
+        return 0.0
+    return float(np.sqrt(np.square(dist).sum() / (2.0 * n * n)))
 
 
 def pd_from_graph(
@@ -12,6 +20,7 @@ def pd_from_graph(
     max_dimension: int | None = None,
     hom_dim: int | None = None,
     max_edge_length: float | None = None,
+    normalize_edge_length: bool | None = None,
 ) -> list[torch.Tensor]:
     """
     Persistence diagrams whose birth/death values remain attached to ``adj_tensor`` for autograd.
@@ -28,9 +37,13 @@ def pd_from_graph(
         hom_dim = pd.hom_dim
     if max_edge_length is None:
         max_edge_length = pd.max_edge_length
+    if normalize_edge_length is None:
+        normalize_edge_length = bool(pd.get("normalize_edge_length", False))
 
     diagrams: list[torch.Tensor] = []
     adj_matrix = adj_tensor.detach().cpu().numpy()
+    if normalize_edge_length and max_edge_length is not None:
+        max_edge_length = float(max_edge_length) * _radius_of_gyration(adj_matrix)
 
     rips_kwargs: dict = {"distance_matrix": adj_matrix}
     if max_edge_length is not None:

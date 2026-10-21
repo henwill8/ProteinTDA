@@ -202,6 +202,7 @@ LOSS_CONFIG = mlc.ConfigDict(
                 "max_dimension": 3,
                 "hom_dim": 3,
                 "max_edge_length": 10,
+                "normalize_edge_length": False,
             },
             "terms": {
                 "wasserstein_h0": {
