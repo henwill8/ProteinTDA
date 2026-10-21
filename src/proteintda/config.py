@@ -201,7 +201,7 @@ LOSS_CONFIG = mlc.ConfigDict(
             "pd": {
                 "max_dimension": 3,
                 "hom_dim": 3,
-                "max_edge_length": 10,
+                "max_edge_length": 10.0,
                 "normalize_edge_length": False,
             },
             "terms": {
