@@ -423,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
     pruner_name = str(optuna_cfg.get("pruner", "successive_halving")).lower()
     n_repeats = int(optuna_cfg.get("n_repeats", 1))
     n_startup_trials = int(optuna_cfg.get("n_startup_trials", 10))
+    pruner_warmup_steps = int(optuna_cfg.get("pruner_warmup_steps", 5))
     sampler_seed = optuna_cfg.get("sampler_seed", None)
     sampler_seed = int(training.seed) if sampler_seed is None else int(sampler_seed)
     vary_trial_seed = bool(optuna_cfg.get("vary_trial_seed", False))
@@ -431,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
         f"n_proteins={len(proteins)} n_trials={optuna_cfg.n_trials} "
         f"sampler={sampler_name} pruner={pruner_name} n_repeats={n_repeats} "
         f"n_startup_trials={n_startup_trials} sampler_seed={sampler_seed} "
+        f"pruner_warmup_steps={pruner_warmup_steps} "
         f"vary_trial_seed={vary_trial_seed} "
         f"tuning={[s.key for s in specs]}",
         flush=True,
@@ -452,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
     elif pruner_name in {"successive_halving", "sha"}:
         pruner = SuccessiveHalvingPruner()
     elif pruner_name == "median":
-        pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=5)
+        pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=pruner_warmup_steps)
     else:
         raise ValueError(
             f"Unknown optuna.pruner={pruner_name!r}; use none, successive_halving, or median"

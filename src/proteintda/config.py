@@ -121,6 +121,8 @@ RUN_CONFIG = mlc.ConfigDict(
             "n_startup_trials": 10,
             # seed for sampler rng
             "sampler_seed": None,
+            # median pruner ignores this many epochs before it can stop a trial
+            "pruner_warmup_steps": 5,
             # For categorical keys, repeats each combo this many times
             "n_repeats": 1,
             "vary_trial_seed": False,
