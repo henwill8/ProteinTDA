@@ -14,7 +14,7 @@ import ml_collections as mlc
 import numpy as np
 import optuna
 import torch
-from optuna.pruners import MedianPruner, NopPruner, SuccessiveHalvingPruner
+from optuna.pruners import MedianPruner, NopPruner, PercentilePruner, SuccessiveHalvingPruner
 from optuna.samplers import RandomSampler, TPESampler
 from optuna.trial import TrialState
 from sklearn.model_selection import KFold, train_test_split
@@ -471,9 +471,15 @@ def main(argv: list[str] | None = None) -> int:
         pruner = SuccessiveHalvingPruner()
     elif pruner_name == "median":
         pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=pruner_warmup_steps)
+    elif pruner_name == "percentile":
+        pruner = PercentilePruner(
+            percentile=float(optuna_cfg.get("pruner_percentile", 25.0)),
+            n_startup_trials=n_startup_trials,
+            n_warmup_steps=pruner_warmup_steps,
+        )
     else:
         raise ValueError(
-            f"Unknown optuna.pruner={pruner_name!r}; use none, successive_halving, or median"
+            f"Unknown optuna.pruner={pruner_name!r}; use none, successive_halving, median, or percentile"
         )
 
     study = optuna.create_study(

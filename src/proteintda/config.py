@@ -113,7 +113,7 @@ RUN_CONFIG = mlc.ConfigDict(
             "log_file": "logs/optuna.txt",
             "n_trials": 30,
             "n_folds": 1,
-            # "none" | "successive_halving" | "median"
+            # "none" | "successive_halving" | "median" | "percentile"
             "pruner": "successive_halving",
             # "tpe" | "random"
             "sampler": "tpe",
@@ -126,6 +126,8 @@ RUN_CONFIG = mlc.ConfigDict(
             "metric": "tm_score",
             # median pruner ignores this many epochs before it can stop a trial
             "pruner_warmup_steps": 5,
+            # percentile pruner drops a trial only when it is below this percentile
+            "pruner_percentile": 25.0,
             # For categorical keys, repeats each combo this many times
             "n_repeats": 1,
             "vary_trial_seed": False,
