@@ -121,6 +121,9 @@ RUN_CONFIG = mlc.ConfigDict(
             "n_startup_trials": 10,
             # seed for sampler rng
             "sampler_seed": None,
+            # Score maximized by Optuna, and used for pruning and early stopping.
+            # "tm_score" | "lddt"
+            "metric": "tm_score",
             # median pruner ignores this many epochs before it can stop a trial
             "pruner_warmup_steps": 5,
             # For categorical keys, repeats each combo this many times

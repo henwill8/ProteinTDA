@@ -209,6 +209,7 @@ class LightRoseTTARunner(BaseRunner):
                 pred_ca = xyz.detach().float().cpu().numpy().reshape(-1, 3)[1::3]
                 true_ca = data.ca_coords.detach().cpu().numpy()
                 totals["tm_score"] += self.tm_score(pred_ca, true_ca, sample.seq)
+                totals["lddt"] += self.lddt_score(pred_ca, true_ca)
 
             del data, xyz, lddt_pred, logits, result_total
             n += 1

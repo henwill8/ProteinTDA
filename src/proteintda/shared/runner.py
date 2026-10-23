@@ -61,6 +61,33 @@ class BaseRunner(ABC):
         )
         return float(alignment.tm_norm_chain2)
 
+    @staticmethod
+    def lddt_score(
+        pred_ca: np.ndarray,
+        true_ca: np.ndarray,
+        *,
+        cutoff: float = 15.0,
+    ) -> float:
+        length = min(len(pred_ca), len(true_ca))
+        if length < 2:
+            return 0.0
+        pred = np.asarray(pred_ca[:length], dtype=np.float64)
+        true = np.asarray(true_ca[:length], dtype=np.float64)
+        d_true = np.linalg.norm(true[:, None, :] - true[None, :, :], axis=-1)
+        d_pred = np.linalg.norm(pred[:, None, :] - pred[None, :, :], axis=-1)
+        mask = (d_true < cutoff) & ~np.eye(length, dtype=bool)
+        pair_counts = mask.sum(axis=1)
+        included = pair_counts > 0
+        if not np.any(included):
+            return 0.0
+        error = np.abs(d_true - d_pred)
+        thresholds = (0.5, 1.0, 2.0, 4.0)
+        per_residue = np.zeros(length, dtype=np.float64)
+        for threshold in thresholds:
+            per_residue += ((error < threshold) & mask).sum(axis=1) / np.maximum(pair_counts, 1)
+        per_residue /= len(thresholds)
+        return float(per_residue[included].mean())
+
     @abstractmethod
     def run_batch(
         self,

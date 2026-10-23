@@ -563,3 +563,4 @@ class MiniFoldRunner(BaseRunner):
                     exp_ca,
                     str(protein.seq),
                 )
+                totals["lddt"] += self.lddt_score(pred_ca[i, :length].numpy(), exp_ca)

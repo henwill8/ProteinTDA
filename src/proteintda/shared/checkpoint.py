@@ -12,7 +12,7 @@ import torch
 
 from proteintda.config import RUN_CONFIG
 
-_METRIC_PLOT_KEYS = ("total", "tm_score", "plddt")
+_METRIC_PLOT_KEYS = ("total", "tm_score", "lddt", "plddt")
 
 
 def fold_work_dir(backbone: str, fold: int, *, baseline: bool | None = None) -> Path:

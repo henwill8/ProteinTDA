@@ -259,7 +259,8 @@ def run_optuna_fold(
     )
 
     best_model_weights = None
-    max_val_tm = 0.0
+    metric_name = str(RUN_CONFIG.optuna.get("metric", "tm_score"))
+    max_val_score = 0.0
     patience = 0
     n_splits = RUN_CONFIG.kfold.n_splits
     print(f"trial {trial.number}  fold {fold + 1}/{n_splits}", flush=True)
@@ -288,7 +289,9 @@ def run_optuna_fold(
             loss_fn,
             include_loss=True,
         )
+        val_score = float(val_metrics.get(metric_name, 0.0))
         val_tm = float(val_metrics.get("tm_score", 0.0))
+        val_lddt = float(val_metrics.get("lddt", 0.0))
         lr = float(optimizer.param_groups[0]["lr"])
         print(
             format_epoch_metrics(
@@ -303,11 +306,13 @@ def run_optuna_fold(
             flush=True,
         )
 
-        trial.report(val_tm, epoch + 1)
+        trial.report(val_score, epoch + 1)
         if trial.should_prune():
             print(
                 f"Pruned trial {trial.number} fold {fold + 1} "
-                f"at epoch {epoch + 1}  val_tm={val_tm:.4f}  best_val_tm={max_val_tm:.4f}",
+                f"at epoch {epoch + 1}  val_{metric_name}={val_score:.4f}  "
+                f"best_val_{metric_name}={max_val_score:.4f}  "
+                f"val_tm={val_tm:.4f}  val_lddt={val_lddt:.4f}",
                 flush=True,
             )
             del runner
@@ -315,8 +320,8 @@ def run_optuna_fold(
                 torch.cuda.empty_cache()
             raise optuna.TrialPruned()
 
-        if val_tm > max_val_tm:
-            max_val_tm = val_tm
+        if val_score > max_val_score:
+            max_val_score = val_score
             patience = 0
             best_model_weights = runner.snapshot_state_dict()
         else:
@@ -338,15 +343,18 @@ def run_optuna_fold(
         include_loss=False,
     )
     tm_score = float(test_metrics.get("tm_score", 0.0))
+    lddt_score = float(test_metrics.get("lddt", 0.0))
+    test_score = float(test_metrics.get(metric_name, 0.0))
     print(
         f"trial {trial.number}  fold {fold + 1}/{n_splits}  "
-        f"test tm={tm_score:.4f}  best_val_tm={max_val_tm:.4f}",
+        f"test tm={tm_score:.4f}  test lddt={lddt_score:.4f}  "
+        f"best_val_{metric_name}={max_val_score:.4f}",
         flush=True,
     )
     del runner
     if device.type == "cuda":
         torch.cuda.empty_cache()
-    return tm_score
+    return test_score
 
 
 def create_objective(device: torch.device, proteins: list, specs: list[TuneSpec]):
@@ -389,9 +397,13 @@ def create_objective(device: torch.device, proteins: list, specs: list[TuneSpec]
                 flush=True,
             )
 
-        mean_tm = float(np.mean(fold_scores)) if fold_scores else 0.0
-        print(f"trial {trial.number}: mean test tm={mean_tm:.4f}", flush=True)
-        return mean_tm
+        mean_score = float(np.mean(fold_scores)) if fold_scores else 0.0
+        metric_name = str(optuna_cfg.get("metric", "tm_score"))
+        print(
+            f"trial {trial.number}: mean test {metric_name}={mean_score:.4f}",
+            flush=True,
+        )
+        return mean_score
 
     return objective
 
@@ -427,12 +439,16 @@ def main(argv: list[str] | None = None) -> int:
     sampler_seed = optuna_cfg.get("sampler_seed", None)
     sampler_seed = int(training.seed) if sampler_seed is None else int(sampler_seed)
     vary_trial_seed = bool(optuna_cfg.get("vary_trial_seed", False))
+    metric_name = str(optuna_cfg.get("metric", "tm_score"))
+    if metric_name not in {"tm_score", "lddt"}:
+        raise ValueError(f"Unknown optuna.metric={metric_name!r}; use tm_score or lddt")
     print(
         f"Optuna study={optuna_cfg.study_name!r} device={device} "
         f"n_proteins={len(proteins)} n_trials={optuna_cfg.n_trials} "
         f"sampler={sampler_name} pruner={pruner_name} n_repeats={n_repeats} "
         f"n_startup_trials={n_startup_trials} sampler_seed={sampler_seed} "
         f"pruner_warmup_steps={pruner_warmup_steps} "
+        f"metric={metric_name} "
         f"vary_trial_seed={vary_trial_seed} "
         f"tuning={[s.key for s in specs]}",
         flush=True,
@@ -516,10 +532,10 @@ def main(argv: list[str] | None = None) -> int:
         handle.write(
             f"sampler={sampler_name} pruner={pruner_name} n_repeats={n_repeats} "
             f"n_startup_trials={n_startup_trials} sampler_seed={sampler_seed} "
-            f"vary_trial_seed={vary_trial_seed}\n"
+            f"metric={metric_name} vary_trial_seed={vary_trial_seed}\n"
         )
         if complete:
-            handle.write(f"best_mean_test_tm={study.best_value:.6f}\n")
+            handle.write(f"best_mean_test_{metric_name}={study.best_value:.6f}\n")
             for key, value in study.best_params.items():
                 handle.write(f"{key}={value}\n")
         for label, values in sorted(by_params.items()):

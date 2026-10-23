@@ -69,7 +69,7 @@ def _current_lr(optimizer: torch.optim.Optimizer) -> float:
     return float(optimizer.param_groups[0]["lr"])
 
 
-_METRIC_KEYS = ("plddt", "tm_score")
+_METRIC_KEYS = ("plddt", "tm_score", "lddt")
 
 
 def _format_metrics_line(name: str, metrics: dict[str, float]) -> str:
@@ -225,7 +225,8 @@ def run_fold(
         )
         print(
             f"fold {fold + 1}/{n_splits}  "
-            f"mean_plddt={metrics['plddt']:.4f}  mean_tm={metrics['tm_score']:.4f}"
+            f"mean_plddt={metrics['plddt']:.4f}  mean_tm={metrics['tm_score']:.4f}  "
+            f"mean_lddt={metrics.get('lddt', 0.0):.4f}"
         )
         return metrics["plddt"], metrics["tm_score"]
 
@@ -394,7 +395,8 @@ def run_fold(
     )
     print(
         f"fold {fold + 1}/{n_splits}  "
-        f"mean_plddt={test_metrics['plddt']:.4f}  mean_tm={test_metrics['tm_score']:.4f}"
+        f"mean_plddt={test_metrics['plddt']:.4f}  mean_tm={test_metrics['tm_score']:.4f}  "
+        f"mean_lddt={test_metrics.get('lddt', 0.0):.4f}"
     )
     clear_fold_checkpoint(ckpt_path)
     return test_metrics["plddt"], test_metrics["tm_score"]
