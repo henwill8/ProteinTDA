@@ -154,8 +154,8 @@ HEAT_RFF_CONFIG = mlc.ConfigDict(
             "axis_dim": 10,
             "resolution": 2,
             "R": 1000,
-            "t": 2,
-            "s": 0.4,
+            "t": 3e2,
+            "s": 3e6,
             "seed": 42,
             "device": _cpp.Device.CUDA,
             "sampling_method": SamplingMethod.MALA,
@@ -206,8 +206,8 @@ LOSS_CONFIG = mlc.ConfigDict(
             "atom": "CA",
             "normalized_vpd": False,
             "pd": {
-                "max_dimension": 3,
-                "hom_dim": 3,
+                "max_dimension": 2,
+                "hom_dim": 2,
                 "max_edge_length": 10.0,
                 "normalize_edge_length": False,
             },
@@ -226,7 +226,7 @@ LOSS_CONFIG = mlc.ConfigDict(
                 },
                 "vpd_h0": {
                     "weight": 0.001,
-                    "enabled": True,
+                    "enabled": False,
                 },
                 "vpd_h1": {
                     "weight": 0.008,
